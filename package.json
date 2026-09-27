@@ -27,7 +27,8 @@
   "files": [
     "airo.config.example.json",
     "README.md",
-    "dist/*.js"
+    "dist/*.js",
+    "docs/routing-and-learning.md"
   ],
   "type": "module",
   "publishConfig": {

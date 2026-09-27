@@ -129,6 +129,8 @@ airo --dry-run --explain "migrate this legacy module"
 
 AIRO scores each request for provider and complexity signals, applies matching configuration rules, and can incorporate feedback from similar prior work. It then maps the work to a `fast`, `balanced`, or `deep` tier. A tier is a default choice, not a restriction.
 
+See [Routing rules and learning](docs/routing-and-learning.md) for the complete decision precedence, custom-rule behavior, history format, and learning algorithm.
+
 Out of the box, the automatic defaults are:
 
 | Provider | Tier | Model | Effort |
