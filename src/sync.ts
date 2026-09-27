@@ -256,6 +256,7 @@ export function safeSyncSettings(config: RouterConfig): Record<string, unknown> 
   return {
     policy: config.policy,
     defaultAgent: config.defaultAgent,
+    modelRouting: config.modelRouting,
     history: {
       learningEnabled: config.history.learningEnabled,
       similarityThreshold: config.history.similarityThreshold,
@@ -282,6 +283,11 @@ function applySafeSettings(config: RouterConfig, value: Record<string, unknown>)
     ...(typeof value.defaultAgent === "string"
       ? { defaultAgent: value.defaultAgent as RouterConfig["defaultAgent"] }
       : {}),
+    modelRouting: ["dynamic", "manual"].includes(
+      String((value.modelRouting as { mode?: unknown } | undefined)?.mode),
+    )
+      ? (value.modelRouting as RouterConfig["modelRouting"])
+      : config.modelRouting,
     history: {
       ...config.history,
       ...history,

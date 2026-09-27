@@ -1,14 +1,17 @@
-import { AGENTS, catalogAge, discoverCatalog } from "./catalog.js";
+import { AGENTS, catalogAge, discoverCatalogs, resolveDynamicModels } from "./catalog.js";
 import { loadConfig } from "./config.js";
 import { agentColor, divider, statusIcon, ui } from "./ui.js";
 
 export async function printModels() {
   const { config, path } = loadConfig();
+  const catalogs = await discoverCatalogs(config);
+  const resolved = resolveDynamicModels(config, catalogs);
   console.log("");
   console.log(divider("Active model configuration"));
   console.log(`${ui.gray("config")} ${path ? ui.cyan(path) : ui.yellow("built-in defaults")}`);
+  console.log(`${ui.gray("mode  ")} ${ui.cyan(config.modelRouting.mode)}`);
   for (const agent of AGENTS) {
-    const catalog = await discoverCatalog(agent, config);
+    const catalog = catalogs[agent];
     console.log("");
     console.log(`${statusIcon("info")} ${ui.bold(agentColor(agent, agent.toUpperCase()))}`);
     console.log(`  ${ui.gray("access ")} ${ui.bold("all provider models")}`);
@@ -16,12 +19,12 @@ export async function printModels() {
       `  ${ui.gray("detected")} ${
         catalog.source === "builtin"
           ? ui.yellow(`none · using configured ids${catalog.note ? ` (${catalog.note})` : ""}`)
-          : ui.cyan(`${catalog.models.length} via ${catalog.via ?? catalog.source}`) +
+          : ui.cyan(`${catalog.detectedModels.length} via ${catalog.via ?? catalog.source}`) +
             ui.gray(` · ${catalogAge(catalog)}`)
       }`,
     );
     for (const tier of ["fast", "balanced", "deep"] as const) {
-      const p = config[agent].models[tier];
+      const p = resolved[agent].models[tier];
       const label =
         tier === "fast"
           ? ui.green(tier.padEnd(18))
@@ -38,6 +41,6 @@ export async function printModels() {
   }
   console.log("");
   console.log(
-    `${ui.yellow("NOTE")} ${ui.dim("These three tiers are automatic defaults. Use `--model` or name a model in your task to override them.")}`,
+    `${ui.yellow("NOTE")} ${ui.dim('Dynamic mappings refresh from provider catalogs. Use `--model`, name a model in your task, or set modelRouting.mode to "manual" to override them.')}`,
   );
 }

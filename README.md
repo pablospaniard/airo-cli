@@ -1,9 +1,5 @@
 <h1 align="center">AIRO</h1>
 
-<p align="center">
-  <img src="docs/airo-setup.png" alt="AIRO's first-run model setup" width="760">
-</p>
-
 <p align="center">Adaptive Intelligence Routing &amp; Orchestration for coding-agent CLIs.</p>
 
 <p align="center">
@@ -66,7 +62,7 @@ That means one job can be served by multiple models and providers, and another r
    airo doctor
    ```
 
-3. Launch AIRO. On the first interactive launch, choose models for the `fast`, `balanced`, and `deep` tiers (press Enter to keep the suggested defaults).
+3. Launch AIRO. On the first interactive launch, review the provider execution permissions. AIRO discovers available models and maps them onto the `fast`, `balanced`, and `deep` tiers automatically.
 
    ```bash
    airo
@@ -86,7 +82,7 @@ The extension invokes the AIRO CLI, so `airo-ai-router` must be installed (or th
 
 Automatic fallback considers every registered provider. AIRO ranks alternatives by their score for the current task, then uses the registry's stable Claude → Codex → Gemini → Copilot priority to break ties. Missing-provider fallback checks command availability. After an authentication or usage-limit failure, AIRO also skips a candidate when its adapter can confirm that its account is signed out; Gemini and Copilot currently have no account probe, so their authentication state remains unknown until execution.
 
-A handover is announced the moment it happens: the CLI prints the new provider, and the VS Code sidebar repaints its header chip, phase chip, and activity accent and adds a short note explaining the change. An explicit choice is never substituted: if you pin a provider with `--agent`, `--model`, `/agent`, the VS Code provider setting, or by naming it in the prompt, AIRO uses that provider only and fails with a clear error instead of switching. Run `airo setup` at any time to revisit the model choices.
+A handover is announced the moment it happens: the CLI prints the new provider, and the VS Code sidebar repaints its header chip, phase chip, and activity accent and adds a short note explaining the change. An explicit choice is never substituted: if you pin a provider with `--agent`, `--model`, `/agent`, the VS Code provider setting, or by naming it in the prompt, AIRO uses that provider only and fails with a clear error instead of switching. Run `airo models` to inspect the current dynamic mapping and `airo setup` to revisit provider execution permissions.
 
 ## Common workflows
 
@@ -156,31 +152,32 @@ airo --no-jev "sensitive task" # one-run opt-out
 
 Use `airo feedback jev status|inspect|disable` to control it and `airo feedback jev reset --yes` to remove its separate local evidence. The consent screen lists the bounded fields sent to TypeSafe. Task text leaves the machine; AIRO does not add source, diffs, provider output, repository metadata, paths, credentials, environment variables, notes, or transcripts as separate fields. Because task text may itself contain sensitive values, use `--no-jev` whenever the task must remain entirely local. Jev failure never changes the completed run's exit status, and accepted feedback can only add a confidence-gated, decayed, bounded hint to future unpinned routes.
 
-Out of the box, the automatic defaults are:
+When discovery is unavailable, AIRO uses these reviewed fallback profiles:
 
-| Provider | Tier | Model | Effort |
-| --- | --- | --- | --- |
-| Claude Code | `fast` | `haiku` | `low` |
-| Claude Code | `balanced` | `sonnet` | `medium` |
-| Claude Code | `deep` | `opus` | `high` |
-| Codex CLI | `fast` | `gpt-5.6-luna` | `low` |
-| Codex CLI | `balanced` | `gpt-5.6-terra` | `medium` |
-| Codex CLI | `deep` | `gpt-5.6-sol` | `xhigh` |
-| Gemini CLI | `fast` | `gemini-2.5-flash` | `auto` |
-| Gemini CLI | `balanced` | `auto` | `auto` |
-| Gemini CLI | `deep` | `gemini-2.5-pro` | `auto` |
-| GitHub Copilot CLI | `fast` | `claude-haiku-4.5` | `auto` |
-| GitHub Copilot CLI | `balanced` | `claude-sonnet-4.6` | `auto` |
-| GitHub Copilot CLI | `deep` | `gpt-5.3-codex` | `auto` |
+| Provider           | Tier       | Model               | Effort   |
+| ------------------ | ---------- | ------------------- | -------- |
+| Claude Code        | `fast`     | `haiku`             | `low`    |
+| Claude Code        | `balanced` | `sonnet`            | `medium` |
+| Claude Code        | `deep`     | `opus`              | `high`   |
+| Codex CLI          | `fast`     | `gpt-5.6-luna`      | `low`    |
+| Codex CLI          | `balanced` | `gpt-5.6-terra`     | `medium` |
+| Codex CLI          | `deep`     | `gpt-5.6-sol`       | `xhigh`  |
+| Gemini CLI         | `fast`     | `gemini-2.5-flash`  | `auto`   |
+| Gemini CLI         | `balanced` | `auto`              | `auto`   |
+| Gemini CLI         | `deep`     | `gemini-2.5-pro`    | `auto`   |
+| GitHub Copilot CLI | `fast`     | `claude-haiku-4.5`  | `auto`   |
+| GitHub Copilot CLI | `balanced` | `claude-sonnet-4.6` | `auto`   |
+| GitHub Copilot CLI | `deep`     | `gpt-5.3-codex`     | `auto`   |
 
 AIRO currently forwards effort settings only to Claude Code and Codex CLI. Gemini and Copilot tiers differ by model selection; their configured effort value remains `auto` until their provider adapters implement and test a stable effort interface.
 
-You can use any model your provider CLI subscription makes available. AIRO does not maintain an allowlist. The setup wizard asks which models you have access to and lets you assign three of them to the automatic tiers; use it again whenever your access changes:
+You can use any model your provider CLI subscription makes available. AIRO does not maintain an allowlist. Normal routing reuses the fresh local catalog cache so startup stays fast; relevant configuration or project-context changes invalidate it, while `airo models`, `airo setup`, and `airo doctor` deliberately re-check provider executables. `airo models` shows the resolved mapping:
 
 ```bash
-airo setup
 airo models
 ```
+
+To pin the configured fallback profiles instead of using discovery, set `modelRouting.mode` to `"manual"` in AIRO configuration. One-off `--agent`, `--tier`, and `--model` choices remain authoritative in either mode.
 
 For a one-off request, name a model explicitly. AIRO recognizes configured model IDs and common Claude, Codex, and Gemini naming patterns. You can also pin the provider yourself:
 
@@ -235,7 +232,7 @@ airo doctor
 airo account
 ```
 
-`airo doctor` reports two separate kinds of readiness: whether each provider satisfies AIRO's versioned source integration contract, and whether its configured command is available on the current machine. `airo account` lists every registered provider. It reports verified sign-in status for Claude and Codex and an explicit unknown state for Gemini and Copilot. For comparison defaults, AIRO checks its own configuration first, then `ANTHROPIC_MODEL` or Claude settings for Claude Code and Codex's `config.toml` for Codex. Gemini and Copilot defaults come only from their configured `defaultModel`. A comparison default does not limit which model you can run; set it with `airo setup` or `defaultModel` in that provider's AIRO configuration.
+`airo doctor` reports two separate kinds of readiness: whether each provider satisfies AIRO's versioned source integration contract, and whether its configured command is available on the current machine. `airo account` lists every registered provider. It reports verified sign-in status for Claude and Codex and an explicit unknown state for Gemini and Copilot. For comparison defaults, AIRO checks its own configuration first, then `ANTHROPIC_MODEL` or Claude settings for Claude Code and Codex's `config.toml` for Codex. Gemini and Copilot defaults come only from their configured `defaultModel`. A comparison default does not limit which model you can run; set `defaultModel` in that provider's AIRO configuration when automatic detection is unavailable.
 
 ## Sessions and interactive chat
 
@@ -260,7 +257,7 @@ airo session clear                            # clear the active repository sess
 
 ### Use the interactive workspace
 
-Run `airo` (or `airo chat`) to stay in a terminal workspace and send several tasks without retyping the command. The choices below last for that running workspace; use `airo setup` or configuration to make persistent model changes.
+Run `airo` (or `airo chat`) to stay in a terminal workspace and send several tasks without retyping the command. The choices below last for that running workspace; use configuration or explicit command flags for persistent or one-off routing overrides.
 
 ```text
 /mode auto|adaptive|single
@@ -420,55 +417,55 @@ Claude runs use `permissionMode: "acceptEdits"` inside prompt mode so headless i
 
 ## Troubleshooting
 
-| Problem | What to do |
-| --- | --- |
-| AIRO says a provider is unavailable | Run `airo doctor`. Install the selected provider CLI, put it on `PATH`, or set that provider's `command` to its absolute path in AIRO configuration, then sign in with the provider CLI. |
-| The VS Code sidebar cannot start AIRO | Install or link `airo-ai-router`, then set **AIRO: Command** to the absolute `airo` executable path if `airo` is not on VS Code’s `PATH`. |
-| A dev server cannot bind to localhost | Approve AIRO's permission prompt with `yes`, `approve`, or the sidebar's **Approve** button. AIRO retries that continuation with elevated access and requires the agent to verify the local URL before reporting it. |
-| A generated image is missing | Ask the agent to generate it again. AIRO requires generated files to be persisted and verified, and the VS Code sidebar previews existing image artifacts inline. |
-| AIRO cannot tell whether I am signed in | `airo account` verifies Claude and Codex but reports Gemini and Copilot as `not inspected`; check those with the provider's own CLI. Provider CLIs may not reveal an email address or subscription name; that is expected. |
-| My model is rejected | Confirm the model is available to the selected provider subscription, then include `--agent <provider>` with `--model <model>`. Use `airo setup` to update automatic tier defaults. |
-| The comparison default is missing | Run `airo setup` and enter the provider's usual model when prompted, or set that provider's `defaultModel` in AIRO configuration. This only affects `airo usage` comparisons. |
-| Node will not run AIRO | Check `node --version`; AIRO requires Node.js 22 or newer. Upgrade Node, reinstall AIRO, and run `airo doctor` again. |
-| Claude asks for permission or cannot edit | Review the Claude `permissionMode` in AIRO configuration. The default is `acceptEdits`; choose `manual` or `plan` when you want stricter control. |
+| Problem                                                    | What to do                                                                                                                                                                                                                              |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AIRO says a provider is unavailable                        | Run `airo doctor`. Install the selected provider CLI, put it on `PATH`, or set that provider's `command` to its absolute path in AIRO configuration, then sign in with the provider CLI.                                                |
+| The VS Code sidebar cannot start AIRO                      | Install or link `airo-ai-router`, then set **AIRO: Command** to the absolute `airo` executable path if `airo` is not on VS Code’s `PATH`.                                                                                               |
+| A dev server cannot bind to localhost                      | Approve AIRO's permission prompt with `yes`, `approve`, or the sidebar's **Approve** button. AIRO retries that continuation with elevated access and requires the agent to verify the local URL before reporting it.                    |
+| A generated image is missing                               | Ask the agent to generate it again. AIRO requires generated files to be persisted and verified, and the VS Code sidebar previews existing image artifacts inline.                                                                       |
+| AIRO cannot tell whether I am signed in                    | `airo account` verifies Claude and Codex but reports Gemini and Copilot as `not inspected`; check those with the provider's own CLI. Provider CLIs may not reveal an email address or subscription name; that is expected.              |
+| My model is rejected                                       | Run `airo models` to refresh and inspect discovery. Confirm the model is available to the selected provider subscription, then include `--agent <provider>` with `--model <model>`.                                                     |
+| The comparison default is missing                          | Set that provider's `defaultModel` in AIRO configuration. This only affects `airo usage` comparisons.                                                                                                                                   |
+| Node will not run AIRO                                     | Check `node --version`; AIRO requires Node.js 22 or newer. Upgrade Node, reinstall AIRO, and run `airo doctor` again.                                                                                                                   |
+| Claude asks for permission or cannot edit                  | Review the Claude `permissionMode` in AIRO configuration. The default is `acceptEdits`; choose `manual` or `plan` when you want stricter control.                                                                                       |
 | A provider cannot access GitHub or another network service | Run `airo setup` and enable command network access in prompt mode, or set `permissions.networkAccess` to `true`. Use `permissions.mode: "fullAccess"` only when you intend to remove provider sandboxing and approval prompts globally. |
 
 ## CLI command reference
 
-| Command | What it does |
-| --- | --- |
-| `airo` / `airo chat` | Open the interactive workspace. |
-| `airo "task"` | Create a session and route a task automatically. |
-| `airo --continue "task"` | Route a follow-up using the active repository session. |
-| `airo --session <id> "task"` | Run a task in a specific saved session. |
-| `airo --single "task"` | Run one selected or automatically routed agent. |
-| `airo --adaptive "task"` | Force the multi-phase workflow. |
-| `airo --dry-run --explain "task"` | Show the routing decision without running an agent. |
-| `airo --agent <claude\|codex\|gemini\|copilot> --tier <fast\|balanced\|deep> "task"` | Pin a provider and model tier. |
-| `airo --model <model> --effort <level> "task"` | Override the model and, for Claude or Codex, reasoning effort. |
-| `airo --log <compact\|live\|verbose> "task"` | Control terminal progress detail. |
-| `airo setup` | Configure automatic model tiers. |
-| `airo models` | Print the active provider/model mapping. |
-| `airo account` | List every provider; verify Claude/Codex login status and mark other authentication states as unknown. |
-| `airo doctor` | Check the provider integration contract, local commands, model discovery, and storage locations. |
-| `airo config init` | Create a project-local `.airo.json`. |
-| `airo session` / `airo sessions` | Show the active session or list repository sessions. |
-| `airo session new ["task"]` | Start and activate a fresh session. |
-| `airo session clear` | Clear the active repository session. |
-| `airo logs [run-id]` / `airo logs --follow <run-id>` | List, print, or follow persisted run logs. |
-| `airo history [limit]` | Show recent routing history. |
-| `airo history export --encrypted <file>` | Export versioned history and feedback as an encrypted archive. |
-| `airo history import <file>` | Idempotently merge an encrypted learning archive. |
-| `airo sync login [--server <url>]` | Authenticate a device with the optional sync service. |
-| `airo sync enable --passphrase <string>` | Create or recover the local end-to-end encryption key. Environment-variable and file inputs remain supported. |
-| `airo sync now` | Explicitly push and pull encrypted evidence and safe settings. |
-| `airo sync status\|devices\|logout` | Inspect or manage the local sync account and devices. |
-| `airo sync export <file>` | Export the encrypted server-side account representation. |
-| `airo sync delete-cloud-data --yes` | Permanently delete the cloud sync account and data. |
-| `airo repository id` / `airo repository link <id>` | Inspect or link the stable repository learning scope. |
-| `airo usage [limit]` | Show provider-reported tokens and the historical default-model comparison. |
-| `airo feedback <good\|bad> [note]` | Teach the router from the latest completed run. |
-| `airo --help` / `airo --version` | Show help or the installed version. |
+| Command                                                                              | What it does                                                                                                  |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| `airo` / `airo chat`                                                                 | Open the interactive workspace.                                                                               |
+| `airo "task"`                                                                        | Create a session and route a task automatically.                                                              |
+| `airo --continue "task"`                                                             | Route a follow-up using the active repository session.                                                        |
+| `airo --session <id> "task"`                                                         | Run a task in a specific saved session.                                                                       |
+| `airo --single "task"`                                                               | Run one selected or automatically routed agent.                                                               |
+| `airo --adaptive "task"`                                                             | Force the multi-phase workflow.                                                                               |
+| `airo --dry-run --explain "task"`                                                    | Show the routing decision without running an agent.                                                           |
+| `airo --agent <claude\|codex\|gemini\|copilot> --tier <fast\|balanced\|deep> "task"` | Pin a provider and model tier.                                                                                |
+| `airo --model <model> --effort <level> "task"`                                       | Override the model and, for Claude or Codex, reasoning effort.                                                |
+| `airo --log <compact\|live\|verbose> "task"`                                         | Control terminal progress detail.                                                                             |
+| `airo setup`                                                                         | Review provider execution permissions and the detected automatic mapping.                                     |
+| `airo models`                                                                        | Print the active provider/model mapping.                                                                      |
+| `airo account`                                                                       | List every provider; verify Claude/Codex login status and mark other authentication states as unknown.        |
+| `airo doctor`                                                                        | Check the provider integration contract, local commands, model discovery, and storage locations.              |
+| `airo config init`                                                                   | Create a project-local `.airo.json`.                                                                          |
+| `airo session` / `airo sessions`                                                     | Show the active session or list repository sessions.                                                          |
+| `airo session new ["task"]`                                                          | Start and activate a fresh session.                                                                           |
+| `airo session clear`                                                                 | Clear the active repository session.                                                                          |
+| `airo logs [run-id]` / `airo logs --follow <run-id>`                                 | List, print, or follow persisted run logs.                                                                    |
+| `airo history [limit]`                                                               | Show recent routing history.                                                                                  |
+| `airo history export --encrypted <file>`                                             | Export versioned history and feedback as an encrypted archive.                                                |
+| `airo history import <file>`                                                         | Idempotently merge an encrypted learning archive.                                                             |
+| `airo sync login [--server <url>]`                                                   | Authenticate a device with the optional sync service.                                                         |
+| `airo sync enable --passphrase <string>`                                             | Create or recover the local end-to-end encryption key. Environment-variable and file inputs remain supported. |
+| `airo sync now`                                                                      | Explicitly push and pull encrypted evidence and safe settings.                                                |
+| `airo sync status\|devices\|logout`                                                  | Inspect or manage the local sync account and devices.                                                         |
+| `airo sync export <file>`                                                            | Export the encrypted server-side account representation.                                                      |
+| `airo sync delete-cloud-data --yes`                                                  | Permanently delete the cloud sync account and data.                                                           |
+| `airo repository id` / `airo repository link <id>`                                   | Inspect or link the stable repository learning scope.                                                         |
+| `airo usage [limit]`                                                                 | Show provider-reported tokens and the historical default-model comparison.                                    |
+| `airo feedback <good\|bad> [note]`                                                   | Teach the router from the latest completed run.                                                               |
+| `airo --help` / `airo --version`                                                     | Show help or the installed version.                                                                           |
 
 Set `NO_COLOR=1` to disable ANSI colors.
 

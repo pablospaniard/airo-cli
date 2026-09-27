@@ -18,6 +18,7 @@ test("sync settings exclude secrets and machine-specific configuration", () => {
   const serialized = JSON.stringify(settings);
   assert.doesNotMatch(serialized, /private\/bin|--secret|private\/history|fullAccess/);
   assert.equal((settings as { policy: string }).policy, config.policy);
+  assert.deepEqual(settings.modelRouting, { mode: "dynamic" });
   assert.deepEqual(
     (settings.providers as { codex: { models: unknown } }).codex.models,
     config.codex.models,

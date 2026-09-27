@@ -16,7 +16,7 @@ import fs from "node:fs";
 import { loadConfig, writeProjectConfig } from "./config.js";
 import { runSetup } from "./setup.js";
 import { printModels } from "./models.js";
-import { catalogAge, discoverCatalog } from "./catalog.js";
+import { catalogAge, discoverCatalog, discoverCatalogs, resolveDynamicModels } from "./catalog.js";
 import {
   appendHistory,
   explainLearning,
@@ -109,6 +109,11 @@ function requireText(file: string): string {
   return fs.readFileSync(file, "utf8");
 }
 
+async function runtimeRoutingConfig(config: ReturnType<typeof loadConfig>["config"]) {
+  if (config.modelRouting.mode === "manual") return config;
+  return resolveDynamicModels(config, await discoverCatalogs(config, { verifyExecutable: false }));
+}
+
 function help() {
   console.log("");
   console.log(divider(`AIRO v${VERSION}`));
@@ -136,7 +141,7 @@ function help() {
   console.log("");
   console.log(ui.bold("Models & setup"));
   console.log(
-    `  ${commandColor("airo setup")}                              ${ui.gray("configure the three automatic model tiers")}`,
+    `  ${commandColor("airo setup")}                              ${ui.gray("review provider execution permissions")}`,
   );
   console.log(
     `  ${commandColor("airo models")}                             ${ui.gray("show active model mapping")}`,
@@ -913,8 +918,8 @@ async function main() {
     console.error(`${statusIcon("error")} ${ui.yellow(`legacy data migration skipped: ${error}`)}`);
   let { config, path } = loadConfig();
 
-  if (shouldShowWelcome(raw, Boolean(process.stdin.isTTY))) {
-    console.log(firstRunWelcome(config));
+  if (shouldShowWelcome(raw, Boolean(process.stdin.isTTY), Boolean(path))) {
+    console.log(firstRunWelcome());
   }
 
   if (shouldRunInitialSetup(raw, Boolean(process.stdin.isTTY), Boolean(path))) {
@@ -932,6 +937,7 @@ async function main() {
   }
 
   if (raw[0] === "account") {
+    config = await runtimeRoutingConfig(config);
     console.log(divider("Provider accounts"));
     for (const account of inspectAccounts(config)) {
       const icon =
@@ -1348,6 +1354,7 @@ async function main() {
     return;
   }
   if (raw[0] === "chat" || (raw.length === 0 && process.stdin.isTTY)) {
+    config = await runtimeRoutingConfig(config);
     await chatLoop(config, path);
     return;
   }
@@ -1392,6 +1399,7 @@ async function main() {
         `${statusIcon("ok")} ${ui.green("Created and activated session")} ${ui.bold(s.sessionId)}`,
       );
       if (raw.length > 2) {
+        config = await runtimeRoutingConfig(config);
         const args = parseArgs(raw.slice(2));
         process.exitCode = await execute(args, s, config, path);
       }
@@ -1438,6 +1446,7 @@ async function main() {
     session = getActiveSession();
     if (!session) throw new Error('No active session. Start with: airo session new "task"');
   } else if (!args.dryRun) session = createSession(args.task);
+  config = await runtimeRoutingConfig(config);
   process.exitCode = await execute(args, session, config, path);
 }
 

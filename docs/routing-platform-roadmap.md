@@ -47,7 +47,8 @@ Support should not be announced until execution, permissions, authentication, mo
 For a registered provider, AIRO should dynamically:
 
 - Discover available models from the provider CLI or API when supported
-- Retain configured tier defaults when discovery is unavailable
+- Map discovered catalogs onto the generic fast, balanced, and deep tiers at runtime
+- Retain reviewed configured tier defaults when discovery is unavailable or manual mode is selected
 - Resolve an explicit command path, the inherited `PATH`, and only reliable provider-specific locations
 - Generate eligible provider/tier candidates from the registry
 - Apply the same generic scoring and local-learning policy to every provider
