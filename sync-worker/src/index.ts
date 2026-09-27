@@ -33,8 +33,14 @@ interface GithubUser {
   login?: unknown;
 }
 
+interface GithubAuthorization {
+  app?: { client_id?: unknown };
+  user?: GithubUser;
+}
+
 interface EventInput {
   id: string;
+  version: string;
   kind: "history" | "feedback" | "jev-feedback" | "tombstone";
   repositoryId?: string;
   createdAt: number;
@@ -193,10 +199,10 @@ async function issueTokens(
   env: Env,
   userId: string,
   deviceId: string,
+  familyId: string = crypto.randomUUID(),
 ): Promise<{ accessToken: string; refreshToken: string; expiresIn: number }> {
   const accessToken = randomToken();
   const refreshToken = randomToken();
-  const familyId = crypto.randomUUID();
   const createdAt = now();
   await env.DB.batch([
     env.DB.prepare(
@@ -261,7 +267,7 @@ async function refreshSession(request: Request, env: Env): Promise<Response> {
   await env.DB.prepare("UPDATE sessions SET revoked_at = ? WHERE family_id = ?")
     .bind(now(), row.family_id)
     .run();
-  return json(await issueTokens(env, row.user_id, row.device_id));
+  return json(await issueTokens(env, row.user_id, row.device_id, row.family_id));
 }
 
 async function exchangeGithubToken(request: Request, env: Env): Promise<Response> {
@@ -275,23 +281,34 @@ async function exchangeGithubToken(request: Request, env: Env): Promise<Response
     body.githubAccessToken.length > 512
   )
     return error(400, "invalid_request", "A valid device and GitHub access token are required.");
+  if (!env.GITHUB_CLIENT_SECRET)
+    return error(503, "auth_not_configured", "GitHub identity verification is unavailable.");
   const deviceName = body.deviceName.trim().slice(0, 80);
   if (!deviceName) return error(400, "invalid_request", "deviceName cannot be empty.");
   const limited = await rateLimit(env.AUTH_RATE_LIMITER, `github-exchange:${body.deviceId}`);
   if (limited) return limited;
-  const profileResponse = await fetch("https://api.github.com/user", {
-    redirect: "error",
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${body.githubAccessToken}`,
-      "User-Agent": "airo-sync-worker",
-      "X-GitHub-Api-Version": "2022-11-28",
+  const profileResponse = await fetch(
+    `https://api.github.com/applications/${encodeURIComponent(env.GITHUB_CLIENT_ID)}/token`,
+    {
+      method: "POST",
+      body: JSON.stringify({ access_token: body.githubAccessToken }),
+      redirect: "error",
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Basic ${btoa(`${env.GITHUB_CLIENT_ID}:${env.GITHUB_CLIENT_SECRET}`)}`,
+        "Content-Type": "application/json",
+        "User-Agent": "airo-sync-worker",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
     },
-  });
+  );
   if (!profileResponse.ok)
     return error(401, "github_token_invalid", "GitHub identity verification failed.");
-  const profile: GithubUser = await profileResponse.json();
+  const authorization: GithubAuthorization = await profileResponse.json();
+  const profile = authorization.user;
   if (
+    authorization.app?.client_id !== env.GITHUB_CLIENT_ID ||
+    !profile ||
     (typeof profile.id !== "number" && typeof profile.id !== "string") ||
     typeof profile.login !== "string"
   )
@@ -341,6 +358,8 @@ function eventInput(value: unknown): EventInput | undefined {
   if (
     !item ||
     !validId(item.id) ||
+    typeof item.version !== "string" ||
+    !/^[a-zA-Z0-9_-]{43}$/.test(item.version) ||
     !["history", "feedback", "jev-feedback", "tombstone"].includes(String(item.kind)) ||
     (item.repositoryId !== undefined && !validId(item.repositoryId)) ||
     typeof item.createdAt !== "number" ||
@@ -353,6 +372,7 @@ function eventInput(value: unknown): EventInput | undefined {
     return undefined;
   return {
     id: item.id,
+    version: item.version,
     kind,
     repositoryId: typeof item.repositoryId === "string" ? item.repositoryId : undefined,
     createdAt: item.createdAt,
@@ -369,11 +389,12 @@ async function pushEvents(request: Request, env: Env, auth: AuthContext): Promis
   if (!events.length) return json({ accepted: 0, total: 0 });
   const statements = events.map((event) =>
     env.DB.prepare(
-      `INSERT OR IGNORE INTO sync_events(user_id, event_id, device_id, kind, repository_id, created_at, envelope)
-       VALUES(?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO sync_events(user_id, event_id, version, device_id, kind, repository_id, created_at, envelope)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(
       auth.userId,
       event!.id,
+      event!.version,
       auth.deviceId,
       event!.kind,
       event!.repositoryId ?? null,
@@ -392,13 +413,14 @@ async function pullEvents(url: URL, env: Env, auth: AuthContext): Promise<Respon
   if (!Number.isInteger(cursor) || !Number.isInteger(limit))
     return error(400, "invalid_cursor", "cursor and limit must be integers.");
   const result = await env.DB.prepare(
-    `SELECT cursor, event_id, device_id, kind, repository_id, created_at, envelope
+    `SELECT cursor, event_id, version, device_id, kind, repository_id, created_at, envelope
        FROM sync_events WHERE user_id = ? AND cursor > ? ORDER BY cursor LIMIT ?`,
   )
     .bind(auth.userId, cursor, limit)
     .all<{
       cursor: number;
       event_id: string;
+      version: string;
       device_id: string;
       kind: EventInput["kind"];
       repository_id: string | null;
@@ -408,6 +430,7 @@ async function pullEvents(url: URL, env: Env, auth: AuthContext): Promise<Respon
   const events = result.results.map((row) => ({
     cursor: row.cursor,
     id: row.event_id,
+    version: row.version,
     deviceId: row.device_id,
     kind: row.kind,
     repositoryId: row.repository_id ?? undefined,
@@ -564,7 +587,7 @@ async function exportAccount(env: Env, auth: AuthContext): Promise<Response> {
       .bind(auth.userId)
       .all(),
     env.DB.prepare(
-      "SELECT cursor, event_id, device_id, kind, repository_id, created_at, envelope FROM sync_events WHERE user_id = ? ORDER BY cursor",
+      "SELECT cursor, event_id, version, device_id, kind, repository_id, created_at, envelope FROM sync_events WHERE user_id = ? ORDER BY cursor",
     )
       .bind(auth.userId)
       .all(),

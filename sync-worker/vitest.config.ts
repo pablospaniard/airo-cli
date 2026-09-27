@@ -7,7 +7,12 @@ export default defineConfig({
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./sync-worker/wrangler.jsonc" },
-      miniflare: { bindings: { TEST_MIGRATIONS: migrations } },
+      miniflare: {
+        bindings: {
+          TEST_MIGRATIONS: migrations,
+          GITHUB_CLIENT_SECRET: "github-client-secret-test",
+        },
+      },
     }),
   ],
   test: {

@@ -1,5 +1,5 @@
 import { env, SELF } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupExpiredAuth } from "../src/index";
 
 const accessToken = "a".repeat(43);
@@ -49,6 +49,49 @@ function authorized(path: string, init: RequestInit = {}): Promise<Response> {
 }
 
 describe("sync Worker", () => {
+  it("accepts only tokens issued to the configured GitHub OAuth app", async () => {
+    const github = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementationOnce(async () =>
+        Response.json({
+          app: { client_id: "different-client" },
+          user: { id: 42, login: "tester" },
+        }),
+      )
+      .mockImplementationOnce(async () =>
+        Response.json({
+          app: { client_id: env.GITHUB_CLIENT_ID },
+          user: { id: 42, login: "tester" },
+        }),
+      );
+    const rejected = await SELF.fetch("https://example.com/v1/auth/github", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        deviceId: "device-oauth-test",
+        deviceName: "test",
+        githubAccessToken: "github-token-from-another-app",
+      }),
+    });
+    expect(rejected.status).toBe(502);
+
+    const accepted = await SELF.fetch("https://example.com/v1/auth/github", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        deviceId: "device-oauth-test",
+        deviceName: "test",
+        githubAccessToken: "github-token-for-this-application",
+      }),
+    });
+    expect(accepted.status).toBe(200);
+    expect(github).toHaveBeenCalledTimes(2);
+    expect(github.mock.calls[0][0]).toBe(
+      `https://api.github.com/applications/${env.GITHUB_CLIENT_ID}/token`,
+    );
+    github.mockRestore();
+  });
+
   it("reports health and rejects unauthenticated sync", async () => {
     const health = await SELF.fetch("https://example.com/health");
     expect(health.headers.get("cache-control")).toBe("no-store");
@@ -81,6 +124,7 @@ describe("sync Worker", () => {
   it("stores opaque events idempotently and advances a cursor", async () => {
     const event = {
       id: "event-test",
+      version: "v".repeat(43),
       kind: "history",
       repositoryId: "sync-v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       createdAt: 1,
@@ -102,9 +146,21 @@ describe("sync Worker", () => {
       body: JSON.stringify({ events: [event] }),
     });
     expect(await duplicate.json()).toEqual({ accepted: 0, total: 1 });
+    const changed = await authorized("/v1/sync/push", {
+      method: "POST",
+      body: JSON.stringify({ events: [{ ...event, version: "w".repeat(43) }] }),
+    });
+    expect(await changed.json()).toEqual({ accepted: 1, total: 1 });
+    const otherKind = await authorized("/v1/sync/push", {
+      method: "POST",
+      body: JSON.stringify({
+        events: [{ ...event, kind: "feedback", version: "x".repeat(43) }],
+      }),
+    });
+    expect(await otherKind.json()).toEqual({ accepted: 1, total: 1 });
     const pulled = await authorized("/v1/sync/pull?cursor=0");
     const body = await pulled.json<{ events: unknown[]; cursor: number }>();
-    expect(body.events).toHaveLength(1);
+    expect(body.events).toHaveLength(3);
     expect(body.cursor).toBeGreaterThan(0);
   });
 
@@ -174,9 +230,23 @@ describe("sync Worker", () => {
         await hash(refreshToken),
         timestamp + 3600,
         timestamp,
-        timestamp,
+        null,
       )
       .run();
+    const rotated = await SELF.fetch("https://example.com/v1/auth/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refreshToken }),
+    });
+    expect(rotated.status).toBe(200);
+    const replacements = await rotated.json<{ accessToken: string }>();
+    expect(
+      (
+        await SELF.fetch("https://example.com/v1/sync/status", {
+          headers: { Authorization: `Bearer ${replacements.accessToken}` },
+        })
+      ).status,
+    ).toBe(200);
     const response = await SELF.fetch("https://example.com/v1/auth/refresh", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -184,7 +254,13 @@ describe("sync Worker", () => {
     });
     expect(response.status).toBe(401);
     expect(await response.json()).toMatchObject({ error: { code: "refresh_reused" } });
-    expect((await authorized("/v1/sync/status")).status).toBe(401);
+    expect(
+      (
+        await SELF.fetch("https://example.com/v1/sync/status", {
+          headers: { Authorization: `Bearer ${replacements.accessToken}` },
+        })
+      ).status,
+    ).toBe(401);
   });
 
   it("retains revoked devices for an auditable device list", async () => {

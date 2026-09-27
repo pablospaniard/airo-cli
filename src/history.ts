@@ -54,7 +54,7 @@ export function historyPath(config: HistoryConfig): string {
 }
 
 export function newHistoryId(): string {
-  return crypto.randomBytes(4).toString("hex");
+  return crypto.randomBytes(16).toString("hex");
 }
 
 export function newRunId(): string {

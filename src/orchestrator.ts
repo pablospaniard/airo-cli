@@ -403,51 +403,42 @@ export async function orchestrate(
       logger,
       logMeta,
     });
+    let usage = result.usage;
     // A question means the provider is asking for input, not reporting that it
     // cannot serve the run, so it must not trigger a provider switch.
-    const failure = result.question
-      ? undefined
-      : providerFailureReason(route.agent, result.output, result.exitCode);
-    if (failure) {
-      // Never spend another phase on a provider that cannot serve this run —
-      // unless the user pinned it, in which case later phases keep using it.
-      if (!route.agentPinned) ruledOut.add(route.agent);
-      const fallback = fallbackProvider(route, config, failure, ruledOut);
-      if (fallback) {
-        const message = `${route.agent} ${failure} failure detected → falling back to ${fallback.agent}/${fallback.model}`;
-        route = fallback;
-        Object.assign(logMeta, { agent: route.agent, model: route.model, effort: route.effort });
-        logger.providerSwitch(logMeta, message);
-        result = await runAgent(route, effectivePrompt, config, {
-          headless: true,
-          capture: true,
-          logger,
-          logMeta,
-        });
-        const fallbackFailure = result.question
-          ? undefined
-          : providerFailureReason(route.agent, result.output, result.exitCode);
-        if (fallbackFailure) {
-          ruledOut.add(route.agent);
-          providersExhausted = true;
-          result = { ...result, exitCode: result.exitCode || 1 };
-          logger.status(
-            `${route.agent} ${fallbackFailure} failure detected → no provider remains available`,
-          );
-        }
-      } else if (route.agentPinned) {
+    while (!result.question) {
+      const failure = providerFailureReason(route.agent, result.output, result.exitCode);
+      if (!failure) break;
+      if (route.agentPinned) {
         logger.status(
           `${route.agent} ${failure} failure detected → keeping the explicitly selected provider (no fallback)`,
         );
-      } else {
+        break;
+      }
+      // Continue through every eligible provider. A failed fallback is ruled
+      // out exactly like the initial provider instead of ending the run early.
+      ruledOut.add(route.agent);
+      const fallback = fallbackProvider(route, config, failure, ruledOut);
+      if (!fallback) {
         providersExhausted = true;
         result = { ...result, exitCode: result.exitCode || 1 };
         logger.status(
           `${route.agent} ${failure} failure detected → no other provider is available to take over`,
         );
+        break;
       }
+      const message = `${route.agent} ${failure} failure detected → falling back to ${fallback.agent}/${fallback.model}`;
+      route = fallback;
+      Object.assign(logMeta, { agent: route.agent, model: route.model, effort: route.effort });
+      logger.providerSwitch(logMeta, message);
+      result = await runAgent(route, effectivePrompt, config, {
+        headless: true,
+        capture: true,
+        logger,
+        logMeta,
+      });
+      usage = addTokenUsage(usage, result.usage);
     }
-    let usage = result.usage;
     let clarificationCount = 0;
     while (result.question && options.askUser && clarificationCount < 4) {
       clarificationCount++;

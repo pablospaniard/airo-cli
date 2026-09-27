@@ -184,7 +184,7 @@ Secrets never sync. Provider credentials, provider API keys, the user's Jev API 
 
 ### Append-only synchronization
 
-History sync exchanges immutable, globally identified events rather than whole JSONL files. Duplicate IDs are ignored, corrections create new events, deletions create tombstones, and every server insertion advances a pull cursor. Settings use per-key revisions instead of replacing an entire configuration document.
+History sync exchanges versioned, globally identified records rather than whole JSONL files. A keyed content version makes unchanged retries idempotent without exposing a plaintext content digest. Corrections create new cursor entries, clients apply the latest received version, deletions create tombstones, and uniqueness is scoped by account, record kind, record ID, and content version. Settings use per-key revisions instead of replacing an entire configuration document; only the global configuration participates, never repository overrides.
 
 After a pull, each client deterministically rebuilds local learning from the merged evidence. This prevents one machine from silently overwriting another machine's history or policy.
 
@@ -352,7 +352,7 @@ Cloud sync consent never implies research consent. Local Jev consent never impli
 
 #### Milestone 5 acceptance record
 
-- **Versioning:** encrypted event envelopes, wrapped account keys, local sync state, account exports, and the D1 schema start at version 1. The Worker uses a pinned compatibility date and generated runtime types.
+- **Versioning:** encrypted event envelopes, wrapped account keys, local sync state, and account exports start at version 1. D1 migration `0002_versioned_events.sql` adds keyed content versions while preserving version-1 rows as legacy cursor entries. The Worker uses a pinned compatibility date and generated runtime types; its GitHub client secret is a separately declared secret binding because secret names are not committed to Wrangler configuration.
 - **Verification:** package tests cover authenticated encryption, recovery wrapping, account-key-separated repository indexes, and setting exclusions. Workers-runtime integration tests apply real D1 migrations and cover authentication, idempotent events, cursors, immutable account-key setup, and optimistic revisions. Wrangler's dry-run build and the full `pnpm validate` gate are required.
 - **Authentication and devices:** the CLI completes GitHub's browser-assisted device flow directly. It sends the resulting short-lived GitHub token once to the Worker, which verifies the account through GitHub and never persists the token. AIRO then issues short access tokens and rotating refresh-token families; only their hashes reach D1. Login retries revoke earlier token families for the same device before issuing replacements. A detected refresh-token replay revokes its family, and users can list or revoke devices independently.
 - **Security and privacy:** AES-256-GCM payload encryption and scrypt recovery wrapping happen locally. D1 receives ciphertext, a wrapped account key, keyed repository indexes, and operational metadata. Provider credentials, API keys, executable paths, permission settings, Jev consent, and recovery passphrases never sync. `airo sync enable` accepts `--passphrase <string>` with an explicit shell-history/process-list warning; environment-variable and permission-restricted file inputs remain available. Existing local history uploads only when the user explicitly runs `airo sync now`.

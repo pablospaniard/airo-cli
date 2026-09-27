@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { writeGlobalConfig } from "./config.js";
+import { loadGlobalConfig, writeGlobalConfig } from "./config.js";
 import { dataRootDir } from "./paths.js";
 import { feedbackPath, historyPath, readFeedback, readHistory } from "./history.js";
 import { jevFeedbackPath, readJevFeedback } from "./jev-feedback.js";
@@ -42,6 +42,7 @@ interface SyncState {
 interface SyncEvent {
   cursor?: number;
   id: string;
+  version: string;
   kind: "history" | "feedback" | "jev-feedback" | "tombstone";
   repositoryId?: string;
   createdAt: number;
@@ -144,31 +145,32 @@ class MacCredentialStore implements CredentialStore {
   constructor(private account: string) {}
   load(): Credentials | undefined {
     try {
-      return JSON.parse(
-        execFileSync(
-          "security",
-          ["find-generic-password", "-s", "airo-sync", "-a", this.account, "-w"],
-          {
-            encoding: "utf8",
-            stdio: ["ignore", "pipe", "ignore"],
-          },
-        ),
-      ) as Credentials;
+      const stored = execFileSync(
+        "security",
+        ["find-generic-password", "-s", "airo-sync", "-a", this.account, "-w"],
+        {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        },
+      ).trim();
+      try {
+        // Compatibility with credentials written before stdin-safe storage.
+        return JSON.parse(stored) as Credentials;
+      } catch {
+        return JSON.parse(Buffer.from(stored, "base64url").toString("utf8")) as Credentials;
+      }
     } catch {
       return undefined;
     }
   }
   save(value: Credentials): void {
-    execFileSync("security", [
-      "add-generic-password",
-      "-U",
-      "-s",
-      "airo-sync",
-      "-a",
-      this.account,
-      "-w",
-      JSON.stringify(value),
-    ]);
+    if (!/^[a-zA-Z0-9_.@+-]{1,128}$/.test(this.account))
+      throw new Error("The macOS account name cannot be passed safely to Keychain.");
+    const encoded = Buffer.from(JSON.stringify(value)).toString("base64url");
+    execFileSync("security", ["-i"], {
+      input: `add-generic-password -U -s airo-sync -a ${this.account} -w ${encoded}\n`,
+      stdio: ["pipe", "ignore", "ignore"],
+    });
   }
   clear(): void {
     try {
@@ -511,7 +513,12 @@ export async function enableSync(passphrase: string, allowFile = false): Promise
       body: JSON.stringify({ envelope: wrapAccountKey(key, passphrase) }),
     });
   }
-  store.save({ ...credentials, accountKey: encodeAccountKey(key) });
+  // authenticated() may have rotated and persisted the tokens while fetching
+  // the account key. Never overwrite those replacements with the stale copy.
+  const currentCredentials = store.load();
+  if (!currentCredentials)
+    throw new Error("Sync credentials disappeared while encrypted sync was being enabled.");
+  store.save({ ...currentCredentials, accountKey: encodeAccountKey(key) });
   state.enabled = true;
   writeState(state);
 }
@@ -524,13 +531,19 @@ function localEvents(config: RouterConfig, key: Buffer): SyncEvent[] {
   const make = (
     kind: SyncEvent["kind"],
     record: { id: string; timestamp?: string; repositoryId?: string },
-  ): SyncEvent => ({
-    id: record.id,
-    kind,
-    repositoryId: record.repositoryId ? syncRepositoryId(key, record.repositoryId) : undefined,
-    createdAt: Math.floor(new Date(record.timestamp ?? 0).getTime() / 1000) || 0,
-    envelope: encryptSyncPayload(key, record, `event:${kind}:${record.id}`),
-  });
+  ): SyncEvent => {
+    const serialized = JSON.stringify(record);
+    return {
+      id: record.id,
+      // A keyed content version keeps retries idempotent without exposing a
+      // guessable plaintext digest. Changed records become new cursor entries.
+      version: crypto.createHmac("sha256", key).update(serialized).digest("base64url"),
+      kind,
+      repositoryId: record.repositoryId ? syncRepositoryId(key, record.repositoryId) : undefined,
+      createdAt: Math.floor(new Date(record.timestamp ?? 0).getTime() / 1000) || 0,
+      envelope: encryptSyncPayload(key, record, `event:${kind}:${record.id}`),
+    };
+  };
   return [
     ...readHistory(config.history).map((record) => make("history", record)),
     ...readFeedback(config.history).map((record) => make("feedback", record)),
@@ -553,17 +566,15 @@ function mergeJsonLines<T extends { id: string }>(file: string, incoming: T[]): 
         })
     : [];
   const byId = new Map(current.map((record) => [record.id, record]));
-  let added = 0;
+  let changed = 0;
   for (const record of incoming) {
     const existing = byId.get(record.id);
-    if (existing && JSON.stringify(existing) !== JSON.stringify(record))
-      throw new Error(`Sync conflict: immutable record ${record.id} has different content.`);
-    if (!existing) {
+    if (!existing || JSON.stringify(existing) !== JSON.stringify(record)) {
       byId.set(record.id, record);
-      added++;
+      changed++;
     }
   }
-  if (added) {
+  if (changed) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const temporary = `${file}.${process.pid}.tmp`;
     fs.writeFileSync(
@@ -573,7 +584,7 @@ function mergeJsonLines<T extends { id: string }>(file: string, incoming: T[]): 
     );
     fs.renameSync(temporary, file);
   }
-  return added;
+  return changed;
 }
 
 export async function syncNow(
@@ -587,6 +598,7 @@ export async function syncNow(
   if (!credentials?.accountKey)
     throw new Error("The local account key is missing. Run `airo sync enable`.");
   const key = Buffer.from(credentials.accountKey, "base64url");
+  const globalConfig = loadGlobalConfig().config;
   const events = localEvents(config, key);
   let pushed = 0;
   for (let index = 0; index < events.length; index += 100) {
@@ -624,7 +636,9 @@ export async function syncNow(
   pulled += mergeJsonLines(feedbackPath(config.history), incoming.feedback as FeedbackRecord[]);
   pulled += mergeJsonLines(jevFeedbackPath(config.history), incoming["jev-feedback"]);
 
-  const localSettings = safeSyncSettings(config);
+  // Repository overrides affect the current run and its local history, but
+  // account-wide cloud settings always originate from the global config.
+  const localSettings = safeSyncSettings(globalConfig);
   const localDigest = digest(localSettings);
   const remote = await authenticated<{
     settings: Array<{ key: string; revision: number; envelope: SyncEnvelope }>;
@@ -668,7 +682,7 @@ export async function syncNow(
       state.settingsDigest = localDigest;
     } else {
       if (localDigest !== remoteDigest)
-        writeGlobalConfig(applySafeSettings(config, remoteSettings));
+        writeGlobalConfig(applySafeSettings(globalConfig, remoteSettings));
       state.settingsRevision = routing.revision;
       state.settingsDigest = remoteDigest;
     }

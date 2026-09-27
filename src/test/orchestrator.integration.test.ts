@@ -257,10 +257,11 @@ console.log(JSON.stringify({type:"result", subtype:"success", result:"done"}));`
   }
 });
 
-test("rules out a fallback that also becomes unavailable", async () => {
+test("continues to another installed provider when the first fallback fails", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-orchestrate-fallback-failure-"));
   const codexRuns = path.join(dir, "codex-runs");
   const claudeRuns = path.join(dir, "claude-runs");
+  const geminiRuns = path.join(dir, "gemini-runs");
   const codex = executable(
     path.join(dir, "codex"),
     `const fs = require("node:fs");
@@ -275,16 +276,28 @@ if (process.argv.includes("auth")) { console.log(JSON.stringify({loggedIn:true})
 fs.appendFileSync(${JSON.stringify(claudeRuns)}, "run\\n");
 console.log(JSON.stringify({type:"result", subtype:"success", result:"Claude usage limit reached."}));`,
   );
+  const gemini = executable(
+    path.join(dir, "gemini"),
+    `const fs = require("node:fs");
+fs.appendFileSync(${JSON.stringify(geminiRuns)}, "run\\n");
+console.log(JSON.stringify({type:"message",role:"assistant",content:"done"}));`,
+  );
   try {
     const config = testConfig(claude, codex);
+    config.gemini.command = gemini;
+    config.copilot.command = "definitely-missing-copilot";
     config.orchestration.maxPhases = 4;
     const result = await orchestrate("Rename a type in one file", config);
 
-    assert.equal(result.exitCode, 1);
-    assert.equal(result.phases.length, 1, "no later phase should retry an unavailable provider");
-    assert.equal(result.phases[0].route.agent, "claude");
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.phases.length, 2);
+    assert.deepEqual(
+      result.phases.map((phase) => phase.route.agent),
+      ["gemini", "gemini"],
+    );
     assert.equal(fs.readFileSync(codexRuns, "utf8").trim().split("\n").length, 1);
     assert.equal(fs.readFileSync(claudeRuns, "utf8").trim().split("\n").length, 1);
+    assert.equal(fs.readFileSync(geminiRuns, "utf8").trim().split("\n").length, 2);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
