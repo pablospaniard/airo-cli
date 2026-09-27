@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PROVIDER_ACCOUNT_ADAPTERS, providerAccountAdapter } from "../account.js";
+import { PROVIDER_CATALOG_ADAPTERS, providerCatalogAdapter } from "../catalog.js";
 import { DEFAULT_CONFIG } from "../config.js";
 import {
   AGENTS,
@@ -37,14 +38,16 @@ test("records provider capabilities used by generic policy", () => {
   assert.equal(effectiveEffort("copilot", "high"), "auto");
 });
 
-test("requires every registered provider to have config, runtime, and account adapters", () => {
+test("requires every registered provider to have complete adapter coverage", () => {
   assert.deepEqual(Object.keys(PROVIDER_RUNTIME_ADAPTERS), [...AGENTS]);
   assert.deepEqual(Object.keys(PROVIDER_ACCOUNT_ADAPTERS), [...AGENTS]);
+  assert.deepEqual(Object.keys(PROVIDER_CATALOG_ADAPTERS), [...AGENTS]);
 
   for (const provider of PROVIDERS) {
     const configured = DEFAULT_CONFIG[provider.id];
     const runtimeAdapter = providerRuntimeAdapter(provider.id);
     const accountAdapter = providerAccountAdapter(provider.id);
+    const catalogAdapter = providerCatalogAdapter(provider.id);
     assert.ok(configured.command);
     assert.deepEqual(Object.keys(configured.models), ["fast", "balanced", "deep"]);
     assert.equal(typeof runtimeAdapter.buildInvocation, "function");
@@ -52,6 +55,9 @@ test("requires every registered provider to have config, runtime, and account ad
     assert.equal(typeof accountAdapter.detectDefaultModel, "function");
     assert.equal(typeof accountAdapter.inspect, "function");
     assert.equal(accountAdapter.authInspection, provider.capabilities.accountInspection);
+    assert.equal(typeof catalogAdapter.probeLocal, "function");
+    assert.equal(typeof catalogAdapter.contextInputs, "function");
+    assert.equal(provider.capabilities.modelDiscovery, true);
   }
 });
 

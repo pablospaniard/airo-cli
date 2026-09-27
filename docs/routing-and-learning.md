@@ -92,6 +92,8 @@ Account inspection is defined by an exhaustive provider adapter contract. Gemini
 
 Every registered provider has an explicit runtime adapter for command construction and progress parsing. The adapter identifies the task-prompt argument so command diagnostics can redact task text instead of assuming that every provider places the prompt last.
 
+Model discovery is also exhaustive across the provider registry. Each provider adapter owns its local discovery strategy, cache-invalidation inputs, and optional gateway lookup. Failed or unavailable probes retain configured and built-in model IDs instead of shrinking the selectable catalog.
+
 ## Complexity and model tier
 
 Complexity begins at `2` and is clamped to the range `1` through `5`.

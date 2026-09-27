@@ -47,6 +47,18 @@ export interface CatalogOptions {
   cwd?: string;
 }
 
+export interface CatalogContextInputs {
+  cwd?: string;
+  files: string[];
+  environment: string[];
+}
+
+export interface ProviderCatalogAdapter {
+  probeLocal: (command: string, cwd: string) => Partial<ProviderCatalog>;
+  contextInputs: (config: RouterConfig, cwd: string) => CatalogContextInputs;
+  gateway?: () => { base: string; token?: string } | undefined;
+}
+
 const CACHE_VERSION = 2;
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 export { AGENTS } from "./providers.js";
@@ -106,43 +118,13 @@ function fileFingerprint(file: string): string {
 }
 
 function contextFingerprintFor(agent: Agent, config: RouterConfig, cwd: string): string {
-  const home = os.homedir();
-  const codexConfig = path.join(codexHome(), "config.toml");
-  const codexProvider =
-    agent === "codex" ? readTomlValue(codexConfig, "model_provider") : undefined;
-  const codexEnvKey = codexProvider
-    ? readTomlTableValue(codexConfig, ["model_providers", codexProvider], "env_key")
-    : undefined;
-  const files =
-    agent === "claude"
-      ? [
-          path.join(home, ".claude", "settings.json"),
-          path.join(home, ".claude.json"),
-          path.join(cwd, ".claude", "settings.json"),
-          path.join(cwd, ".claude", "settings.local.json"),
-        ]
-      : agent === "codex"
-        ? [path.join(codexHome(), "config.toml"), path.join(codexHome(), "models_cache.json")]
-        : [];
-  const environment =
-    agent === "claude"
-      ? [
-          "ANTHROPIC_BASE_URL",
-          "ANTHROPIC_API_KEY",
-          "ANTHROPIC_AUTH_TOKEN",
-          "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-          "ANTHROPIC_DEFAULT_SONNET_MODEL",
-          "ANTHROPIC_DEFAULT_OPUS_MODEL",
-        ]
-      : agent === "codex"
-        ? ["CODEX_HOME", "OPENAI_API_KEY", ...(codexEnvKey ? [codexEnvKey] : [])]
-        : [];
+  const context = providerCatalogAdapter(agent).contextInputs(config, cwd);
   const input = {
     agent,
     provider: config[agent],
-    cwd: agent === "claude" ? path.resolve(cwd) : undefined,
-    files: files.map((file) => [file, fileFingerprint(file)]),
-    environment: environment.map((key) => [key, process.env[key] ?? null]),
+    cwd: context.cwd,
+    files: context.files.map((file) => [file, fileFingerprint(file)]),
+    environment: context.environment.map((key) => [key, process.env[key] ?? null]),
   };
   // Hashing keeps credentials and provider configuration out of the cache file.
   return createHash("sha256").update(JSON.stringify(input)).digest("hex");
@@ -306,27 +288,82 @@ function probeGenericCli(command: string): Partial<ProviderCatalog> {
   return { note: `${command} listed no models` };
 }
 
-function gatewayBaseUrl(agent: Agent): { base: string; token?: string } | undefined {
+function claudeContextInputs(_config: RouterConfig, cwd: string): CatalogContextInputs {
+  const home = os.homedir();
+  return {
+    cwd: path.resolve(cwd),
+    files: [
+      path.join(home, ".claude", "settings.json"),
+      path.join(home, ".claude.json"),
+      path.join(cwd, ".claude", "settings.json"),
+      path.join(cwd, ".claude", "settings.local.json"),
+    ],
+    environment: [
+      "ANTHROPIC_BASE_URL",
+      "ANTHROPIC_API_KEY",
+      "ANTHROPIC_AUTH_TOKEN",
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+      "ANTHROPIC_DEFAULT_SONNET_MODEL",
+      "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    ],
+  };
+}
+
+function codexContextInputs(): CatalogContextInputs {
+  const config = path.join(codexHome(), "config.toml");
+  const provider = readTomlValue(config, "model_provider");
+  const envKey = provider
+    ? readTomlTableValue(config, ["model_providers", provider], "env_key")
+    : undefined;
+  return {
+    files: [config, path.join(codexHome(), "models_cache.json")],
+    environment: ["CODEX_HOME", "OPENAI_API_KEY", ...(envKey ? [envKey] : [])],
+  };
+}
+
+function noContextInputs(): CatalogContextInputs {
+  return { files: [], environment: [] };
+}
+
+function claudeGateway(): { base: string; token?: string } | undefined {
   const environment = loginShellEnvironment();
-  if (agent === "claude") {
-    const base = environment.ANTHROPIC_BASE_URL?.trim();
-    const token = environment.ANTHROPIC_AUTH_TOKEN?.trim() || environment.ANTHROPIC_API_KEY?.trim();
-    return base ? { base, token } : undefined;
-  }
-  if (agent === "codex") {
-    const config = path.join(codexHome(), "config.toml");
-    const provider = readTomlValue(config, "model_provider");
-    if (!provider) return undefined;
-    const table = ["model_providers", provider];
-    const base = readTomlTableValue(config, table, "base_url");
-    const envKey = readTomlTableValue(config, table, "env_key");
-    // codex may take its token from an `auth.command`; running that is out of
-    // scope for a probe, so the gateway call is only attempted with a token
-    // that is already in the environment.
-    const token = envKey ? environment[envKey]?.trim() : undefined;
-    return base ? { base, token } : undefined;
-  }
-  return undefined;
+  const base = environment.ANTHROPIC_BASE_URL?.trim();
+  const token = environment.ANTHROPIC_AUTH_TOKEN?.trim() || environment.ANTHROPIC_API_KEY?.trim();
+  return base ? { base, token } : undefined;
+}
+
+function codexGateway(): { base: string; token?: string } | undefined {
+  const environment = loginShellEnvironment();
+  const config = path.join(codexHome(), "config.toml");
+  const provider = readTomlValue(config, "model_provider");
+  if (!provider) return undefined;
+  const table = ["model_providers", provider];
+  const base = readTomlTableValue(config, table, "base_url");
+  const envKey = readTomlTableValue(config, table, "env_key");
+  // codex may take its token from an `auth.command`; running that is out of
+  // scope for a probe, so the gateway call is only attempted with a token
+  // that is already in the environment.
+  const token = envKey ? environment[envKey]?.trim() : undefined;
+  return base ? { base, token } : undefined;
+}
+
+export const PROVIDER_CATALOG_ADAPTERS: Record<Agent, ProviderCatalogAdapter> = {
+  claude: {
+    probeLocal: (_command, cwd) => probeClaude(cwd),
+    contextInputs: claudeContextInputs,
+    gateway: claudeGateway,
+  },
+  codex: {
+    probeLocal: (command) => probeCodex(command),
+    contextInputs: codexContextInputs,
+    gateway: codexGateway,
+  },
+  gemini: { probeLocal: probeGenericCli, contextInputs: noContextInputs },
+  copilot: { probeLocal: probeGenericCli, contextInputs: noContextInputs },
+};
+
+export function providerCatalogAdapter(agent: Agent): ProviderCatalogAdapter {
+  return PROVIDER_CATALOG_ADAPTERS[agent];
 }
 
 /**
@@ -335,7 +372,7 @@ function gatewayBaseUrl(agent: Agent): { base: string; token?: string } | undefi
  * ever fills in for an empty local probe — it must not replace a CLI catalogue.
  */
 async function probeGateway(agent: Agent): Promise<Partial<ProviderCatalog>> {
-  const gateway = gatewayBaseUrl(agent);
+  const gateway = providerCatalogAdapter(agent).gateway?.();
   if (!gateway?.token) return {};
   const base = gateway.base.replace(/\/+$/, "");
   const urls = /\/v\d+$/.test(base) ? [`${base}/models`] : [`${base}/v1/models`, `${base}/models`];
@@ -365,10 +402,7 @@ async function probeGateway(agent: Agent): Promise<Partial<ProviderCatalog>> {
 }
 
 function probeLocal(agent: Agent, config: RouterConfig, cwd: string): Partial<ProviderCatalog> {
-  const command = config[agent].command;
-  if (agent === "codex") return probeCodex(command);
-  if (agent === "claude") return probeClaude(cwd);
-  return probeGenericCli(command);
+  return providerCatalogAdapter(agent).probeLocal(config[agent].command, cwd);
 }
 
 function finish(
