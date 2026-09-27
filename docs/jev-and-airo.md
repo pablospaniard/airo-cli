@@ -4,7 +4,7 @@
 
 Jev is not planned as a required production routing dependency or as a replacement for AIRO's router. The planned direction has two bounded uses:
 
-1. An unpublished development evaluator that supplies semantic labels and decision feedback for improving AIRO's shipped routing policy. This is implemented on the development branch for reviewed fixtures only.
+1. An unpublished development evaluator that supplies semantic labels and decision feedback for improving AIRO's shipped routing policy. The Milestone 3 evaluator, split dataset, comparison report, and review gate are implemented on the development branch for synthetic privacy-reviewed fixtures only.
 2. A future optional production feedback integration that uses the user's API key, runs after a task, stores feedback locally, and may improve later automatic decisions.
 
 The development evaluator is not part of the published runtime and does not run in CI against the external service. Optional production feedback remains unimplemented. The complete provider, learning, sync, and research roadmap is recorded in [Routing platform roadmap](routing-platform-roadmap.md).
@@ -45,7 +45,7 @@ AIRO's additive provider scores are not probabilities. Its `learningConfidence` 
 
 ## Development evaluator
 
-The first Jev milestone should be an unpublished workspace or tool outside the production runtime. It may read synthetic tasks and explicitly approved, sanitized routing journeys.
+The development evaluator is an unpublished tool outside the production runtime. It reads synthetic tasks today; support for explicitly approved, sanitized routing journeys would require a separately reviewed dataset version.
 
 Useful questions include:
 
@@ -68,17 +68,38 @@ Each label must retain:
 
 Jev feedback is supporting evidence. Actual verified completion, regressions, retries, explicit feedback, and user corrections are stronger signals. Jev cannot establish the counterfactual claim that an unexecuted provider would have succeeded.
 
-The evaluator may help calibrate a generic routing-policy artifact, but it must never edit production weights automatically. Proposed policy changes require a held-out comparison, regression review, and normal source review.
+The evaluator may help calibrate a generic routing-policy artifact, but it never edits production weights automatically. Proposed policy changes require a held-out comparison, regression review, the existing routing-policy accuracy gate, and normal source review.
 
 Tests must use recorded fixtures or a fake transport. CI must not require a TypeSafe credential or spend external quota.
 
 The development command uses the separately installed `jev` CLI without adding it to AIRO's runtime dependencies:
 
 ```bash
-pnpm evaluate:jev -- --model jev-EXACT-VERSION --output .airo-dev/jev-routing-report.json
+pnpm evaluate:jev -- --model jev-EXACT-VERSION --dataset all --output .airo-dev/jev-routing-report.json
 ```
 
-The exact model is mandatory; aliases such as `jev-latest` are rejected. The CLI resolves `TYPESAFE_API_KEY` itself, so AIRO never accepts, prints, or stores the key. For every reviewed fixture, the evaluator sends only the fixture task and AIRO's provider, tier, complexity, and policy version. It asks versioned Choice and Noul questions for category, risk, provider, tier, and route appropriateness. Reports retain the full typed answers, distributions, confidence values, returned model, CLI version, usage, question-set version, and fixture identifier, but omit task text. Reports never update routing weights. CI exercises the same parser and failure boundary through a fake Jev executable.
+The exact model is mandatory; moving aliases such as `jev-latest` and `jev-preview` are rejected, and a response naming a different model fails the run. The CLI resolves `TYPESAFE_API_KEY` itself, so AIRO never accepts, prints, or stores the key. For every reviewed fixture, the evaluator sends only the fixture task and AIRO's provider, tier, complexity, and policy version. It asks versioned Choice and Noul questions for category, risk, provider, tier, and route appropriateness. Reports retain the full typed answers, distributions, confidence values, returned model, CLI version, usage, question-set version, dataset version, split, and fixture identifier, but omit task text. Reports never update routing weights. CI exercises the same parser and failure boundary through a fake Jev executable.
+
+### Dataset and comparison protocol
+
+Dataset version 1 contains two disjoint source-controlled splits:
+
+- 12 calibration cases that may identify policy-review candidates.
+- 8 held-out cases that may only measure provider, tier, and joint accuracy.
+
+The dataset manifest declares synthetic provenance, an approved privacy-review version, and excluded data categories. Tests reject common URL, filesystem-path, email, API-key, and token patterns. A report can select `all`, `calibration`, or `held-out`; the default is `all`. `--limit` is intended for transport checks, not an acceptance evaluation.
+
+Report schema version 2 compares AIRO and Jev against the reviewed label for each available split. It records provider, tier, and joint accuracy; AIRO/Jev agreement; average confidence; appropriateness probability; held-out improvements; and held-out regressions. A calibration candidate is emitted only when AIRO misses the reviewed calibration label, Jev matches it, and both provider and tier confidence are at least 0.7. This candidate is a review prompt, not a weight update.
+
+The report always carries `policyModified: false` and `reviewRequiredBeforePolicyChange: true`. Before changing `src/routing-policy.ts`, a developer must:
+
+1. Run the full pinned-model evaluation without `--limit`.
+2. Review calibration candidates and all held-out regressions.
+3. Propose the policy change separately.
+4. Re-run `pnpm evaluate:routing-policy` and the pinned Jev comparison.
+5. Commit the reviewed policy artifact and evidence independently from generated `.airo-dev` reports.
+
+Generated reports stay under the ignored `.airo-dev/` directory because they contain external model output and can be regenerated. No live TypeSafe result is required in CI, and the evaluator script is excluded from the npm package's published file list.
 
 ## Optional production feedback
 
@@ -170,11 +191,11 @@ Jev 1.13 is documented as literal, less reliable with irrelevant state, vulnerab
 
 Development evaluation is ready only when:
 
-- The evaluator is excluded from the published runtime
-- The model and question set are versioned
-- Datasets are synthetic or explicitly approved and reviewed
-- Results are measured on held-out cases
-- Policy changes require review and can be rolled back
+- [x] The evaluator is excluded from the published runtime
+- [x] The model, report, question set, and dataset are versioned
+- [x] The dataset is synthetic and privacy reviewed
+- [x] Reports measure calibration and held-out cases separately
+- [x] Policy changes require review and can be rolled back
 
 Optional production feedback is ready only when:
 

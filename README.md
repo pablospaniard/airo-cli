@@ -137,6 +137,14 @@ See [Routing rules and learning](docs/routing-and-learning.md) for the complete 
 
 The roadmap is not released functionality. The current package keeps history and learning local, does not require Jev or an AIRO account, and does not upload routing journeys to an AIRO service.
 
+Developers can run the unpublished Jev evaluation harness against versioned synthetic calibration and held-out cases. It requires a separately installed Jev CLI, an exact model ID, and the CLI's own TypeSafe credential configuration:
+
+```bash
+pnpm evaluate:jev -- --model jev-1.13.0 --dataset all --output .airo-dev/jev-routing-report.json
+```
+
+The report compares AIRO and Jev against reviewed labels and identifies human-review candidates; it cannot modify the production routing policy. See [Jev and AIRO](docs/jev-and-airo.md) for the privacy boundary and review protocol.
+
 Out of the box, the automatic defaults are:
 
 | Provider | Tier | Model | Effort |

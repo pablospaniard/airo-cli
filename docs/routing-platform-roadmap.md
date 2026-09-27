@@ -6,7 +6,7 @@ This document records the planned product and architecture direction for AIRO. I
 
 The current published package is [`airo-ai-router`](https://www.npmjs.com/package/airo-ai-router). Current behavior is documented in [Routing rules and learning](routing-and-learning.md). None of the provider-registry, Jev-feedback, cloud-sync, or research-consent milestones below should be presented as released until their implementation, tests, security review, and user documentation are complete.
 
-Development status: Milestones 1 and 2 are complete on the development branch. Provider-neutral foundations now include the source-controlled registry, generic routing and fallback, versioned policy, exhaustive adapters, support audit, and diagnostics. Portable local learning now includes versioned evidence, stable repository identities, authenticated encrypted archives, idempotent merge, and deterministic rebuild from source evidence. This status does not present the work as published until it passes the release process. The Jev development evaluator is implemented as an initial Milestone 3 tool; calibration work remains optional and open.
+Development status: Milestones 1, 2, and 3 are complete on the development branch. Provider-neutral foundations and portable local learning are implemented, and the unpublished Jev development evaluator now has versioned synthetic calibration and held-out datasets, privacy checks, comparison metrics, and a human policy-review gate. This status does not present the work as published until it passes the release process. Live pinned-model reports remain regenerable development evidence rather than committed runtime artifacts.
 
 ## Architecture principles
 
@@ -308,11 +308,20 @@ Cloud sync consent never implies research consent. Local Jev consent never impli
 
 ### Milestone 3: Jev development evaluator
 
-- Unpublished evaluation workspace
-- Pinned model and versioned question set
-- Synthetic and privacy-reviewed datasets
-- Held-out comparison and policy-calibration reports
-- No runtime dependency in core routing
+- [x] Unpublished evaluation workspace excluded from package files
+- [x] Pinned model and versioned question set
+- [x] Versioned synthetic, privacy-reviewed calibration and held-out datasets
+- [x] Held-out comparison metrics and policy-calibration review reports
+- [x] No runtime dependency or automatic policy mutation
+
+#### Milestone 3 acceptance record
+
+- **Versioning:** report schema version 2 records exact requested and returned model IDs, Jev CLI version, question-set version, dataset version, routing-policy version, split, and evaluation time.
+- **Verification:** CI uses a fake Jev executable and tests valid typed responses, malformed responses, unpinned models, returned-model mismatch, task-text omission, restrictive report permissions, split isolation, dataset privacy patterns, and routing-policy accuracy.
+- **Diagnostics:** reports include overall, calibration, and held-out provider/tier/joint accuracy; agreement and confidence; improvement and regression IDs; and high-confidence calibration candidates.
+- **Security and privacy:** only synthetic reviewed fixture state is eligible. Requests use permission-restricted temporary files that are deleted, reports omit task text, the API key remains owned by the external CLI, and no external request runs in CI.
+- **Compatibility and migration:** report schema 1 was development-only and had no reader or runtime consumer. Regenerate old reports as schema 2; production configuration and history are unchanged.
+- **Rollback:** the evaluator cannot write the policy artifact and is excluded from the published runtime. Generated reports are ignored, and any separately reviewed policy change remains an ordinary versioned source change that can be reverted.
 
 ### Milestone 4: optional local Jev feedback
 
@@ -356,13 +365,11 @@ A milestone is not complete until it has:
 ## Open implementation decisions
 
 - Calibration and future versioning of provider capability weights
-- Routing-policy training or calibration method
-- Portable archive format and key derivation parameters
-- Git remote fingerprinting and non-Git project linking UX
+- Future statistical policy training beyond the reviewed calibration-candidate workflow
 - Authentication provider beyond the initial GitHub flow
 - Credential-store implementation on each operating system
 - Sync quotas, retention, and encrypted archive limits
-- Jev question set, confidence thresholds, and local boost bounds
+- Production Jev question set, confidence thresholds, and local boost bounds
 - Research retention period and policy-rebuild response to deletion
 - Jurisdiction and governance requirements for hosted services
 
