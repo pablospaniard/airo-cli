@@ -3,7 +3,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { withFileLock, withFileLockAsync, withFileLocks } from "../file-lock.js";
+import { sameBootIdentity, withFileLock, withFileLockAsync, withFileLocks } from "../file-lock.js";
+
+test("treats nearby uptime estimates as the same boot", () => {
+  assert.equal(sameBootIdentity("uptime:1000", "uptime:1001"), true);
+  assert.equal(sameBootIdentity("uptime:1000", "uptime:1300"), true);
+  assert.equal(sameBootIdentity("uptime:1000", "uptime:1301"), false);
+  assert.equal(sameBootIdentity("darwin:1000", "darwin:1001"), false);
+});
 
 test("reclaims locks from a prior boot even when the PID is alive", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "airo-lock-boot-"));

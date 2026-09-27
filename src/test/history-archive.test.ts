@@ -156,3 +156,47 @@ test("import holds the evidence locks while taking its merge snapshot", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("learning reset follows the shared multi-file lock order", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-history-lock-order-"));
+  const config = historyConfig(path.join(dir, "history.jsonl"));
+  const feedbackLock = `${path.join(dir, "history.feedback.jsonl")}.lock`;
+  const historyLock = `${config.path}.lock`;
+  const ready = path.join(dir, "feedback-lock-ready");
+  const release = path.join(dir, "feedback-lock-release");
+  const blocker = spawn(process.execPath, [
+    "-e",
+    `const fs=require("node:fs");fs.writeFileSync(${JSON.stringify(feedbackLock)},process.pid+"\\nlegacy\\n",{flag:"wx"});fs.writeFileSync(${JSON.stringify(ready)},"ready");const timer=setInterval(()=>{if(!fs.existsSync(${JSON.stringify(release)}))return;clearInterval(timer);fs.unlinkSync(${JSON.stringify(feedbackLock)})},5);`,
+  ]);
+  let resetter: ReturnType<typeof spawn> | undefined;
+  try {
+    const deadline = Date.now() + 2_000;
+    while (!fs.existsSync(ready) && Date.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(fs.existsSync(ready), true);
+    const historyModule = new URL("../history.js", import.meta.url).href;
+    resetter = spawn(process.execPath, [
+      "--input-type=module",
+      "-e",
+      `import {resetLearning} from ${JSON.stringify(historyModule)};resetLearning(${JSON.stringify(config)});`,
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(
+      fs.existsSync(historyLock),
+      false,
+      "reset acquired history before the canonical first lock",
+    );
+    fs.writeFileSync(release, "release");
+    await new Promise<void>((resolve, reject) => {
+      resetter!.once("exit", (code: number | null) =>
+        code === 0 ? resolve() : reject(new Error(`reset exited ${code}`)),
+      );
+      resetter!.once("error", reject);
+    });
+  } finally {
+    fs.writeFileSync(release, "release");
+    blocker.kill();
+    resetter?.kill();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

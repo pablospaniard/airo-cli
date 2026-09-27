@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import os from "node:os";
+import { execFileSync } from "node:child_process";
 
 const LOCK_WAIT_MS = 25;
 const LOCK_TIMEOUT_MS = 30_000;
@@ -29,10 +30,38 @@ function currentBootId(): string {
     const value = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
     if (value) return `linux:${value}`;
   } catch {}
-  return `uptime:${Math.round((Date.now() - os.uptime() * 1000) / 300_000)}`;
+  if (process.platform === "darwin") {
+    try {
+      const value = execFileSync("/usr/sbin/sysctl", ["-n", "kern.boottime"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      const seconds = /sec\s*=\s*(\d+)/.exec(value)?.[1];
+      if (seconds) return `darwin:${seconds}`;
+    } catch {}
+  }
+  try {
+    return `uptime:${Math.round((Date.now() - os.uptime() * 1000) / 1000)}`;
+  } catch {
+    // Some restricted runtimes deny the platform uptime syscall. A shared
+    // unknown value retains PID-based live-owner protection without making
+    // every process look as if it came from a different boot.
+    return "unknown";
+  }
 }
 
 const BOOT_ID = currentBootId();
+
+export function sameBootIdentity(left: string, right: string): boolean {
+  if (left === right) return true;
+  const parseFallback = (value: string) =>
+    value.startsWith("uptime:") ? Number(value.slice("uptime:".length)) : Number.NaN;
+  const leftTime = parseFallback(left);
+  const rightTime = parseFallback(right);
+  return (
+    Number.isFinite(leftTime) && Number.isFinite(rightTime) && Math.abs(leftTime - rightTime) <= 300
+  );
+}
 
 function readOwner(file: string): LockOwner | undefined {
   try {
@@ -54,7 +83,7 @@ function readOwner(file: string): LockOwner | undefined {
 }
 
 function ownerIsAlive(owner: LockOwner): boolean {
-  if (owner.bootId && owner.bootId !== BOOT_ID) return false;
+  if (owner.bootId && !sameBootIdentity(owner.bootId, BOOT_ID)) return false;
   try {
     process.kill(owner.pid, 0);
     return true;

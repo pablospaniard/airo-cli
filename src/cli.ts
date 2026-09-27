@@ -1167,7 +1167,9 @@ async function main() {
       return;
     }
     const limit = Math.max(1, Number(raw[1] ?? 15));
-    for (const r of readHistory(config.history).slice(-limit).reverse())
+    for (const r of readHistory(config.history)
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp) || b.id.localeCompare(a.id))
+      .slice(0, limit))
       console.log(
         `${r.id}${r.runId ? ` run=${r.runId}` : ""}${r.sessionId ? ` session=${r.sessionId}` : ""} ${r.agent}/${r.model} ${r.effort} exit=${r.exitCode} ${r.feedback ?? ""}`,
       );

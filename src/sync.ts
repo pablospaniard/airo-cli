@@ -8,7 +8,7 @@ import { loadGlobalConfig, writeGlobalConfig } from "./config.js";
 import { dataRootDir } from "./paths.js";
 import { feedbackPath, historyPath, readFeedback, readHistory } from "./history.js";
 import { jevFeedbackPath, readJevFeedback } from "./jev-feedback.js";
-import { withFileLock, withFileLockAsync } from "./file-lock.js";
+import { withFileLock, withFileLockAsync, withFileLocks } from "./file-lock.js";
 import type { RouterConfig } from "./types.js";
 import {
   createAccountKey,
@@ -507,7 +507,13 @@ async function authenticated<T>(
   }
 }
 
-export async function syncLogin(options: {
+function withSyncOperationLock<T>(operation: () => Promise<T>): Promise<T> {
+  return withFileLockAsync(path.join(dataRootDir(), "sync-operation.lock"), operation, {
+    timeoutMs: 15 * 60_000,
+  });
+}
+
+async function syncLoginUnlocked(options: {
   server?: string;
   allowCredentialFile?: boolean;
   onChallenge: (verificationUri: string, userCode: string) => void;
@@ -640,7 +646,15 @@ export async function syncLogin(options: {
   throw new Error("Device authorization expired.");
 }
 
-export async function enableSync(passphrase: string, allowFile = false): Promise<void> {
+export function syncLogin(options: {
+  server?: string;
+  allowCredentialFile?: boolean;
+  onChallenge: (verificationUri: string, userCode: string) => void;
+}): Promise<{ login: string; credentialStore: string }> {
+  return withSyncOperationLock(() => syncLoginUnlocked(options));
+}
+
+async function enableSyncUnlocked(passphrase: string, allowFile = false): Promise<void> {
   const state = readState();
   if (!state?.user) throw new Error("Run `airo sync login` first.");
   const store = credentialStoreForState(state, allowFile);
@@ -677,6 +691,10 @@ export async function enableSync(passphrase: string, allowFile = false): Promise
   writeState(state);
 }
 
+export function enableSync(passphrase: string, allowFile = false): Promise<void> {
+  return withSyncOperationLock(() => enableSyncUnlocked(passphrase, allowFile));
+}
+
 function eventContext(event: Pick<SyncEvent, "id" | "kind">): string {
   return `event:${event.kind}:${event.id}`;
 }
@@ -687,14 +705,21 @@ type LocalSyncRecord = {
 };
 
 function localRecords(config: RouterConfig): LocalSyncRecord[] {
-  return [
-    ...readHistory(config.history).map((record) => ({ kind: "history" as const, record })),
-    ...readFeedback(config.history).map((record) => ({ kind: "feedback" as const, record })),
-    ...readJevFeedback(config.history).map((record) => ({
-      kind: "jev-feedback" as const,
-      record,
-    })),
-  ];
+  return withFileLocks(
+    [
+      `${historyPath(config.history)}.lock`,
+      `${feedbackPath(config.history)}.lock`,
+      `${jevFeedbackPath(config.history)}.lock`,
+    ],
+    () => [
+      ...readHistory(config.history).map((record) => ({ kind: "history" as const, record })),
+      ...readFeedback(config.history).map((record) => ({ kind: "feedback" as const, record })),
+      ...readJevFeedback(config.history).map((record) => ({
+        kind: "jev-feedback" as const,
+        record,
+      })),
+    ],
+  );
 }
 
 function recordVersion(key: Buffer, record: unknown): string {
@@ -789,10 +814,10 @@ function applyEventPage(
   previous: SyncRecordManifest = {},
 ): { changed: number; manifest: SyncRecordManifest } {
   const manifest = structuredClone(previous);
-  const operations = new Map<SyncDataKind, Array<{ id: string; record?: { id: string } }>>();
+  const operations = new Map<SyncDataKind, Map<string, { id: string; record?: { id: string } }>>();
   const add = (kind: SyncDataKind, operation: { id: string; record?: { id: string } }) => {
-    const current = operations.get(kind) ?? [];
-    current.push(operation);
+    const current = operations.get(kind) ?? new Map();
+    current.set(operation.id, operation);
     operations.set(kind, current);
   };
   for (const event of events) {
@@ -823,12 +848,21 @@ function applyEventPage(
     changed += withFileLock(`${file}.lock`, () => {
       const records = readJsonLines(file);
       let kindChanged = 0;
-      for (const operation of kindOperations) {
+      for (const operation of kindOperations.values()) {
+        const existing = records.get(operation.id);
+        const existingVersion = existing ? recordVersion(key, existing) : undefined;
+        const expectedVersion = previous[kind]?.[operation.id];
+        const incomingVersion = operation.record ? recordVersion(key, operation.record) : undefined;
+        const locallyChanged = existingVersion !== expectedVersion;
+        const remotelyChangesFile = existingVersion !== incomingVersion;
+        // A writer changed this ID after the push snapshot. Preserve that
+        // local transition; leaving the remote version in the manifest makes
+        // the next sync push the preserved local value (or tombstone).
+        if (locallyChanged && remotelyChangesFile) continue;
         if (!operation.record) {
           if (records.delete(operation.id)) kindChanged++;
           continue;
         }
-        const existing = records.get(operation.id);
         if (!existing || JSON.stringify(existing) !== JSON.stringify(operation.record)) {
           records.set(operation.id, operation.record);
           kindChanged++;
@@ -1051,11 +1085,7 @@ export async function syncNow(
   config: RouterConfig,
   allowFile = false,
 ): Promise<{ pushed: number; pulled: number }> {
-  return withFileLockAsync(
-    path.join(dataRootDir(), "sync-operation.lock"),
-    () => syncNowUnlocked(config, allowFile),
-    { timeoutMs: 5 * 60_000 },
-  );
+  return withSyncOperationLock(() => syncNowUnlocked(config, allowFile));
 }
 
 export function syncStatus(allowFile = false): {
@@ -1188,7 +1218,7 @@ export async function exportCloudData(
   }
 }
 
-export async function syncLogout(allowFile = false): Promise<void> {
+async function syncLogoutUnlocked(allowFile = false): Promise<void> {
   const state = readState();
   if (!state) return;
   const store = credentialStoreForState(state, allowFile);
@@ -1199,7 +1229,11 @@ export async function syncLogout(allowFile = false): Promise<void> {
   writeState(state);
 }
 
-export async function deleteCloudData(allowFile = false): Promise<void> {
+export function syncLogout(allowFile = false): Promise<void> {
+  return withSyncOperationLock(() => syncLogoutUnlocked(allowFile));
+}
+
+async function deleteCloudDataUnlocked(allowFile = false): Promise<void> {
   const state = readState();
   if (!state) throw new Error("Sync is not configured.");
   const store = credentialStoreForState(state, allowFile);
@@ -1211,4 +1245,8 @@ export async function deleteCloudData(allowFile = false): Promise<void> {
   try {
     fs.unlinkSync(syncStatePath());
   } catch {}
+}
+
+export function deleteCloudData(allowFile = false): Promise<void> {
+  return withSyncOperationLock(() => deleteCloudDataUnlocked(allowFile));
 }
