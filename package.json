@@ -28,6 +28,7 @@
     "airo.config.example.json",
     "README.md",
     "dist/*.js",
+    "docs/jev-and-airo.md",
     "docs/routing-and-learning.md"
   ],
   "type": "module",
