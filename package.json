@@ -1,5 +1,5 @@
 {
-  "name": "airo-cli",
+  "name": "@pablospaniard/airo-cli",
   "version": "0.7.1",
   "description": "Adaptive Intelligence Routing & Orchestration for Claude Code and Codex CLI",
   "keywords": [
