@@ -74,6 +74,8 @@ import { AGENTS } from "./providers.js";
 import { buildUsageReport, nonCachedTokens, processedTokens } from "./usage.js";
 import { firstRunWelcome } from "./welcome.js";
 import { auditProviderSupport } from "./provider-support.js";
+import { exportLearningArchive, importLearningArchive } from "./history-archive.js";
+import { linkRepositoryIdentity, resolveRepositoryIdentity } from "./repository.js";
 import pathModule from "node:path";
 import { evaluateRoute, extractTaskFeatures } from "./evaluation.js";
 
@@ -131,6 +133,15 @@ function help() {
     `  ${commandColor("airo history [limit]")}                    ${ui.gray("show routing history")}`,
   );
   console.log(
+    `  ${commandColor("airo history export --encrypted <file>")}  ${ui.gray("export portable learning evidence")}`,
+  );
+  console.log(
+    `  ${commandColor("airo history import <file>")}              ${ui.gray("merge a portable learning archive")}`,
+  );
+  console.log(
+    `  ${commandColor("airo repository id|link <id>")}            ${ui.gray("inspect or link the learning scope")}`,
+  );
+  console.log(
     `  ${commandColor("airo usage [limit]")}                      ${ui.gray("show token use and measured savings")}`,
   );
   console.log(
@@ -158,6 +169,21 @@ function help() {
     `${statusIcon("info")} ${ui.dim("Follow-ups preserve session context but are re-routed independently.")}`,
   );
   console.log(`${statusIcon("info")} ${ui.dim("Set NO_COLOR=1 to disable ANSI colors.")}`);
+}
+
+function archivePassphrase(args: string[]): string {
+  const passphraseFileIndex = args.indexOf("--passphrase-file");
+  if (passphraseFileIndex >= 0) {
+    const file = args[passphraseFileIndex + 1];
+    if (!file) throw new Error("--passphrase-file requires a path.");
+    return fs.readFileSync(pathModule.resolve(file), "utf8").replace(/[\r\n]+$/, "");
+  }
+  const passphrase = process.env.AIRO_ARCHIVE_PASSPHRASE;
+  if (!passphrase)
+    throw new Error(
+      "Set AIRO_ARCHIVE_PASSPHRASE or use --passphrase-file. Passphrases are never accepted as command arguments.",
+    );
+  return passphrase;
 }
 
 function parseArgs(argv: string[]) {
@@ -909,11 +935,58 @@ async function main() {
     return;
   }
   if (raw[0] === "history") {
+    if (raw[1] === "export") {
+      const encrypted = raw.indexOf("--encrypted");
+      const output = encrypted >= 0 ? raw[encrypted + 1] : undefined;
+      if (!output || output.startsWith("--"))
+        throw new Error("Use: airo history export --encrypted <archive.airo> [--force]");
+      const result = exportLearningArchive(config.history, output, archivePassphrase(raw), {
+        overwrite: raw.includes("--force"),
+      });
+      console.log(
+        `${statusIcon("ok")} ${ui.gray("encrypted archive written:")} ${ui.cyan(pathModule.resolve(output))}`,
+      );
+      console.log(
+        `${ui.gray("Evidence")} ${result.history.total} phase(s), ${result.feedback.total} feedback record(s) · digest ${result.evidenceDigest.slice(0, 12)}`,
+      );
+      return;
+    }
+    if (raw[1] === "import") {
+      const input = raw[2];
+      if (!input || input.startsWith("--"))
+        throw new Error("Use: airo history import <archive.airo>");
+      const result = importLearningArchive(config.history, input, archivePassphrase(raw));
+      console.log(
+        `${statusIcon("ok")} ${ui.gray("learning evidence merged:")} ${ui.cyan(pathModule.resolve(input))}`,
+      );
+      console.log(
+        `${ui.gray("History")} ${result.history.imported} imported · ${result.history.skipped} already present · ${result.history.total} total`,
+      );
+      console.log(
+        `${ui.gray("Feedback")} ${result.feedback.imported} imported · ${result.feedback.skipped} already present · ${result.feedback.total} total · digest ${result.evidenceDigest.slice(0, 12)}`,
+      );
+      if (result.backupFiles.length)
+        console.log(
+          `${ui.gray("Backups")} ${result.backupFiles.map((file) => ui.cyan(file)).join(", ")}`,
+        );
+      return;
+    }
     const limit = Math.max(1, Number(raw[1] ?? 15));
     for (const r of readHistory(config.history).slice(-limit).reverse())
       console.log(
         `${r.id}${r.runId ? ` run=${r.runId}` : ""}${r.sessionId ? ` session=${r.sessionId}` : ""} ${r.agent}/${r.model} ${r.effort} exit=${r.exitCode} ${r.feedback ?? ""}`,
       );
+    return;
+  }
+  if (raw[0] === "repository") {
+    const storageDir = pathModule.dirname(historyPath(config.history));
+    if (!raw[1] || raw[1] === "id") {
+      const identity = resolveRepositoryIdentity(process.cwd(), storageDir);
+      console.log(`${identity.id} ${ui.gray(`(${identity.source})`)}`);
+    } else if (raw[1] === "link" && raw[2]) {
+      linkRepositoryIdentity(process.cwd(), storageDir, raw[2]);
+      console.log(`${statusIcon("ok")} ${ui.gray("repository linked to")} ${ui.cyan(raw[2])}`);
+    } else throw new Error("Use: airo repository id|link <repository-id>");
     return;
   }
   if (raw[0] === "usage") {

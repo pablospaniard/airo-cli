@@ -316,6 +316,21 @@ airo learning explain <run-or-phase-id>
 airo learning reset --yes
 ```
 
+Move history and feedback to another machine with an encrypted, versioned archive:
+
+```bash
+export AIRO_ARCHIVE_PASSPHRASE="a long passphrase from your password manager"
+airo history export --encrypted backup.airo
+
+# On the other machine:
+export AIRO_ARCHIVE_PASSPHRASE="a long passphrase from your password manager"
+airo history import backup.airo
+```
+
+For automation, `--passphrase-file <path>` reads the passphrase from a permission-restricted file. AIRO deliberately does not accept passphrases directly as command arguments. Import merges immutable history and feedback IDs, ignores identical duplicates, rejects conflicting IDs, and creates timestamped backups before changing existing files. Repeating the same import is safe. The archive contains routing evidence—including task text and excerpts—so keep both the archive and passphrase private.
+
+Repository-scoped learning uses a stable repository ID instead of requiring the same absolute checkout path. Git repositories with an `origin` derive a local ID from the normalized remote. Repositories without one receive a random ID; run `airo repository id` on the source and `airo repository link <id>` in the destination checkout when you want both to share learning. Remote-derived IDs are stored only locally or inside encrypted archives; future cloud sync must replace them with keyed account identifiers.
+
 For every new phase, AIRO stores task features, a local hashed feature embedding, route/model/effort, latency and token telemetry, and a deterministic evaluation. Successful provider exit, reported verification, missing verification, retries, recovery, and later regression-review findings contribute with different confidence levels. Explicit feedback remains the strongest signal. AIRO does not train provider models or let a producing model award itself an unverified success.
 
 The router combines these outcomes with its normal request signals. Similar observations are time-decayed, model/provider/tier performance is tracked separately, cost and latency reduce route utility, and learned tier changes require a minimum amount of effective evidence. Learning is repository-scoped by default. Controlled exploration is available but disabled by default.
@@ -403,6 +418,9 @@ Claude runs use `permissionMode: "acceptEdits"` inside prompt mode so headless i
 | `airo session clear` | Clear the active repository session. |
 | `airo logs [run-id]` / `airo logs --follow <run-id>` | List, print, or follow persisted run logs. |
 | `airo history [limit]` | Show recent routing history. |
+| `airo history export --encrypted <file>` | Export versioned history and feedback as an encrypted archive. |
+| `airo history import <file>` | Idempotently merge an encrypted learning archive. |
+| `airo repository id` / `airo repository link <id>` | Inspect or link the stable repository learning scope. |
 | `airo usage [limit]` | Show provider-reported tokens and the historical default-model comparison. |
 | `airo feedback <good\|bad> [note]` | Teach the router from the latest completed run. |
 | `airo --help` / `airo --version` | Show help or the installed version. |
@@ -447,7 +465,7 @@ The hook runs `pnpm run validate`, which checks formatting, linting, types, and 
 
 ## Architecture roadmap
 
-Future work includes a complete provider-adapter contract, generic routing and fallback, portable local learning, optional post-run Jev feedback, and private multi-device sync. Research participation remains a separate, deferred opt-in.
+Future work includes optional post-run Jev feedback and private multi-device sync. Research participation remains a separate, deferred opt-in.
 
 See the [routing platform roadmap](docs/routing-platform-roadmap.md) and [Jev decision record](docs/jev-and-airo.md) for the planned boundaries and acceptance gates. None of those roadmap capabilities should be inferred from the current npm release.
 

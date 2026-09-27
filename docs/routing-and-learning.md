@@ -233,7 +233,7 @@ Learned evidence cannot override an explicitly selected model or tier. A learned
 - `minimumSamples` prevents route changes based on insufficient evidence.
 - `halfLifeDays` controls how quickly older evidence loses weight.
 - `explorationRate` is the probability of selecting an under-observed tier when no learned route already wins.
-- `repositoryScoped` prevents evidence from one working directory from influencing another.
+- `repositoryScoped` prevents evidence from one stable repository identity from influencing another. Legacy records without an identity still compare their absolute working directory.
 
 ## Inspecting decisions and evidence
 
@@ -264,3 +264,28 @@ Reset feedback-derived learning evidence:
 ```bash
 airo learning reset --yes
 ```
+
+## Portable history and stable repository identity
+
+New history and feedback records use schema version 1. History records also carry a stable `repositoryId`. Records created before these fields existed remain readable and are upgraded when exported or merged; the JSONL configuration and storage paths do not change.
+
+For a Git checkout with an `origin`, AIRO normalizes the remote, removes embedded credentials, and stores a SHA-256-derived local identifier. This lets another checkout of the same remote share repository-scoped learning without exposing the remote itself in history. Because public remote hashes may still be discoverable by dictionary matching, this identifier must remain local or inside an encrypted archive; it is not the identifier planned for cloud sync. A future synchronized account will use a domain-separated HMAC instead.
+
+For a repository without an origin, AIRO stores a random project identifier in the local repository index. Inspect and transfer it explicitly when moving to another checkout:
+
+```bash
+airo repository id
+airo repository link local-v1:<uuid>
+```
+
+Create and merge a portable archive with:
+
+```bash
+export AIRO_ARCHIVE_PASSPHRASE="a long passphrase from your password manager"
+airo history export --encrypted backup.airo
+airo history import backup.airo
+```
+
+Alternatively, use `--passphrase-file <path>` with a permission-restricted file. Passphrases must contain at least 12 characters and are never accepted as command arguments. The archive uses scrypt key derivation and authenticated AES-256-GCM encryption. It includes the same potentially sensitive task text, output excerpts, telemetry, and feedback notes present in local history, so encryption does not remove the need to protect the archive and passphrase.
+
+Import is idempotent. It preserves record IDs and relationships, skips byte-equivalent logical records already present, rejects an ID with different content, sorts merged evidence deterministically, and creates timestamped copies of existing JSONL files before the first write. AIRO imports no derived routing cache: learning is rebuilt from the merged source evidence, so one machine cannot overwrite another machine's learned state with an opaque policy file.

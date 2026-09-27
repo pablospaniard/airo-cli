@@ -6,7 +6,7 @@ This document records the planned product and architecture direction for AIRO. I
 
 The current published package is [`airo-ai-router`](https://www.npmjs.com/package/airo-ai-router). Current behavior is documented in [Routing rules and learning](routing-and-learning.md). None of the provider-registry, Jev-feedback, cloud-sync, or research-consent milestones below should be presented as released until their implementation, tests, security review, and user documentation are complete.
 
-Development status: Milestone 1 is complete on the development branch. The source-controlled provider registry, generic fallback and candidate generation, provider-neutral task features, versioned cold-start policy, development evaluation corpus, exhaustive provider adapters, support audit, diagnostics, and acceptance evidence are implemented. This status does not present the work as published until it passes the release process. The Jev development evaluator is implemented as an initial Milestone 3 tool; calibration work remains optional and open.
+Development status: Milestones 1 and 2 are complete on the development branch. Provider-neutral foundations now include the source-controlled registry, generic routing and fallback, versioned policy, exhaustive adapters, support audit, and diagnostics. Portable local learning now includes versioned evidence, stable repository identities, authenticated encrypted archives, idempotent merge, and deterministic rebuild from source evidence. This status does not present the work as published until it passes the release process. The Jev development evaluator is implemented as an initial Milestone 3 tool; calibration work remains optional and open.
 
 ## Architecture principles
 
@@ -292,10 +292,19 @@ Cloud sync consent never implies research consent. Local Jev consent never impli
 
 ### Milestone 2: portable local learning
 
-- Versioned history and feedback schemas
-- Stable repository identity
-- Idempotent encrypted export and import
-- Deterministic learning rebuild after merge
+- [x] Versioned history and feedback schemas with backward-compatible legacy reads
+- [x] Stable Git-remote and explicitly linkable local repository identities
+- [x] Idempotent authenticated encrypted export and import
+- [x] Deterministic evidence ordering and learning rebuild after merge
+
+#### Milestone 2 acceptance record
+
+- **Versioning:** history schema, feedback schema, and encrypted archive format are independently versioned at version 1. Missing record versions are treated as legacy data and upgraded during export or import.
+- **Verification:** unit and CLI integration coverage includes encryption, wrong-passphrase failure, legacy upgrade, conflicting immutable IDs, repeated imports, repository normalization, local identity persistence, and manual linking. The full `pnpm validate` gate remains required.
+- **Diagnostics:** export and import report record counts and an evidence digest. Import reports new versus already-present evidence and lists any pre-import backups. `airo repository id` reports the active identity source.
+- **Security and privacy:** archives use scrypt and AES-256-GCM, enforce a size limit, write with restrictive permissions, and never accept passphrases in command arguments. Archives contain sensitive local history and must still be protected. No network access or telemetry is added.
+- **Compatibility and migration:** existing JSONL paths and records remain readable. Git-remote identities allow moved checkouts to retain scope; repositories without a remote use a random ID that can be linked explicitly on the new machine.
+- **Rollback and recovery:** portability is opt-in and does not alter routing until an import is requested. Import is atomic per evidence file, makes timestamped backups before replacing existing files, rejects divergent ID collisions, and never imports a derived learning cache.
 
 ### Milestone 3: Jev development evaluator
 

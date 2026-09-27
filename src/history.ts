@@ -12,6 +12,10 @@ import type {
 } from "./types.js";
 import { dataRootDir } from "./paths.js";
 import { enrichHistoryRecord, extractTaskFeatures } from "./evaluation.js";
+import { resolveRepositoryIdentity } from "./repository.js";
+
+export const HISTORY_SCHEMA_VERSION = 1;
+export const FEEDBACK_SCHEMA_VERSION = 1;
 
 const STOP = new Set([
   "the",
@@ -61,7 +65,18 @@ export function appendHistory(config: HistoryConfig, record: HistoryRecord): voi
   if (!config.enabled) return;
   const file = historyPath(config);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.appendFileSync(file, JSON.stringify(enrichHistoryRecord(record)) + "\n");
+  const repositoryId =
+    record.repositoryId ?? resolveRepositoryIdentity(record.cwd, path.dirname(file)).id;
+  fs.appendFileSync(
+    file,
+    JSON.stringify(
+      enrichHistoryRecord({
+        ...record,
+        schemaVersion: HISTORY_SCHEMA_VERSION,
+        repositoryId,
+      }),
+    ) + "\n",
+  );
 }
 
 export function feedbackPath(config: HistoryConfig): string {
@@ -92,7 +107,10 @@ export function appendFeedback(config: HistoryConfig, feedback: FeedbackRecord):
   if (!config.enabled) return;
   const file = feedbackPath(config);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.appendFileSync(file, JSON.stringify(feedback) + "\n");
+  fs.appendFileSync(
+    file,
+    JSON.stringify({ ...feedback, schemaVersion: FEEDBACK_SCHEMA_VERSION }) + "\n",
+  );
 }
 
 export function setScopedFeedback(
@@ -119,6 +137,7 @@ export function setScopedFeedback(
       : records.some((record) => record.id === targetId);
   if (!exists) throw new Error(`${scope === "run" ? "Run" : "Phase"} ${targetId} not found.`);
   const feedback: FeedbackRecord = {
+    schemaVersion: FEEDBACK_SCHEMA_VERSION,
     id: newHistoryId(),
     timestamp: new Date().toISOString(),
     scope,
@@ -332,8 +351,17 @@ export function learningHints(task: string, config: HistoryConfig): LearningHint
   const halfLife = Math.max(1, config.halfLifeDays ?? 90) * 86_400_000;
   const now = Date.now();
   const currentCwd = path.resolve(process.cwd());
+  const currentRepositoryId = config.repositoryScoped
+    ? resolveRepositoryIdentity(currentCwd, path.dirname(historyPath(config))).id
+    : undefined;
   const similar = readHistory(config)
-    .filter((record) => !config.repositoryScoped || path.resolve(record.cwd) === currentCwd)
+    .filter(
+      (record) =>
+        !config.repositoryScoped ||
+        (record.repositoryId
+          ? record.repositoryId === currentRepositoryId
+          : path.resolve(record.cwd) === currentCwd),
+    )
     .map((r) => ({ r, reward: rewardFor(r, feedback), sim: semanticSimilarity(task, r) }))
     .filter(
       (x): x is typeof x & { reward: { value: number; confidence: number; explicit: boolean } } =>
