@@ -91,7 +91,7 @@ function activate(context) {
     }), vscode.window.createTreeView("airo.attachments", {
         treeDataProvider: attachmentDropProvider,
         dragAndDropController: attachmentDropProvider,
-    }), vscode.commands.registerCommand("airo.runTask", () => provider.focus()), vscode.commands.registerCommand("airo.openHistory", () => provider.openHistory()), vscode.commands.registerCommand("airo.openSettings", () => vscode.commands.executeCommand("workbench.action.openSettings", "@ext:pablospaniard.airo-vscode")), vscode.commands.registerCommand("airo.openTerminal", () => {
+    }), vscode.commands.registerCommand("airo.runTask", () => provider.focus()), vscode.commands.registerCommand("airo.openHistory", () => provider.openHistory()), vscode.commands.registerCommand("airo.syncStatus", () => provider.syncStatus()), vscode.commands.registerCommand("airo.syncNow", () => provider.syncNow()), vscode.commands.registerCommand("airo.jevStatus", () => provider.jevStatus()), vscode.commands.registerCommand("airo.openSettings", () => vscode.commands.executeCommand("workbench.action.openSettings", "@ext:pablospaniard.airo-vscode")), vscode.commands.registerCommand("airo.openTerminal", () => {
         const terminal = vscode.window.createTerminal("AIRO");
         terminal.show();
         terminal.sendText(vscode.workspace.getConfiguration("airo").get("command", "airo"));
@@ -105,6 +105,8 @@ class SidebarProvider {
     attachmentPreviews = new Map();
     sidebarChats = new Map();
     activeChatId;
+    ready;
+    resolveReady;
     constructor(session) {
         this.session = session;
         this.activeSession = Boolean(session);
@@ -118,9 +120,14 @@ class SidebarProvider {
     }
     resolveWebviewView(view) {
         this.view = view;
+        this.ready = new Promise((resolve) => {
+            this.resolveReady = resolve;
+        });
         this.initializeWebview(view.webview);
         view.onDidDispose(() => {
             this.view = undefined;
+            this.ready = undefined;
+            this.resolveReady = undefined;
         });
     }
     initializeWebview(webview) {
@@ -131,11 +138,26 @@ class SidebarProvider {
         webview.onDidReceiveMessage((message) => void this.receive(message));
     }
     focus() {
-        this.view?.show?.(true);
-        this.post({ type: "focus" });
+        void this.reveal();
     }
     openHistory() {
         void this.showHistory();
+    }
+    syncStatus() {
+        void this.reveal().then(() => this.sync([], this.activeChatId));
+    }
+    syncNow() {
+        void this.reveal().then(() => this.sync(["now"], this.activeChatId));
+    }
+    jevStatus() {
+        void this.reveal().then(() => this.jev([], this.activeChatId));
+    }
+    async reveal() {
+        if (!this.view)
+            await vscode.commands.executeCommand("airo.sidebar.focus");
+        await this.ready;
+        this.view?.show?.(true);
+        this.post({ type: "focus" });
     }
     async attachDroppedUris(uris) {
         await this.addAttachments(uris.map((uri) => uri.toString()));
@@ -147,8 +169,10 @@ class SidebarProvider {
             this.postAttachments();
             this.post({ type: "route", ...this.configuredRoute() });
             this.postState();
+            this.resolveReady?.();
+            this.resolveReady = undefined;
             if (!this.session) {
-                const result = await this.run(["session", "--json"], false);
+                const result = await runCommand(["session", "--json"]);
                 try {
                     const session = JSON.parse(result.output);
                     if (session?.sessionId)
@@ -199,7 +223,7 @@ class SidebarProvider {
                 this.sidebarChats.get(message.chatId ?? this.activeChatId)?.attachments.length))
             await this.prompt(message.text?.trim() || "Please inspect the attached file(s).", message.chatId);
     }
-    async prompt(text, chatId = this.activeChatId) {
+    async prompt(text, chatId = this.activeChatId, forceNoJev = false) {
         const chat = this.sidebarChats.get(chatId);
         if (!chat)
             return;
@@ -211,7 +235,7 @@ class SidebarProvider {
             }
             return;
         }
-        if (text.startsWith("/"))
+        if (text.startsWith("/") && !forceNoJev)
             return this.slash(text, chatId);
         if (chat.title === "New chat") {
             chat.title = shortDescription(text);
@@ -229,7 +253,7 @@ class SidebarProvider {
             this.attachmentPreviews.clear();
         }
         this.postAttachments(chatId);
-        const result = await this.run(this.taskArgs(text + attached, chat), true, text, chatId);
+        const result = await this.run(this.taskArgs(text + attached, chat, forceNoJev), true, text, chatId, { outputFormat: "markdown" });
         if (result.started) {
             const chat = this.sidebarChats.get(chatId);
             if (!chat)
@@ -355,7 +379,24 @@ class SidebarProvider {
             return this.notice("The sidebar stays available. Start a new chat whenever you like.", chatId);
         if (["/mode", "/agent", "/tier", "/log"].includes(command))
             return this.notice("Routing preferences are managed in VS Code Settings.", chatId);
+        if (command === "/setup")
+            return this.openAiroTerminal(["setup"], "AIRO Setup");
+        if (command === "/sync")
+            return this.sync(parts, chatId);
+        if (command === "/jev")
+            return this.jev(parts, chatId);
+        if (command === "/history")
+            return this.portableHistory(parts, chatId);
+        if (command === "/repository")
+            return this.repository(parts, chatId);
+        if (command === "/no-jev") {
+            if (!argument)
+                return this.notice("Usage: /no-jev <task> runs one task without Jev feedback.", chatId);
+            return this.prompt(argument, chatId, true);
+        }
         if (command === "/feedback") {
+            if (parts[0]?.toLowerCase() === "jev")
+                return this.jev(parts.slice(1), chatId);
             if (!/^(?:good|bad)(?:\s|$)|^phase\s+\S+\s+(?:good|bad)(?:\s|$)/.test(argument))
                 return this.notice("Usage: /feedback good|bad [note] or /feedback phase <id> good|bad [note]", chatId);
             await this.run(["feedback", ...parts], true, "Feedback", chatId);
@@ -387,6 +428,8 @@ class SidebarProvider {
             return this.newTab();
         if (action === "history")
             return this.showHistory();
+        if (action === "sync")
+            return this.sync([], chatId);
         if (action === "stop")
             return this.stop(chatId);
         if (action === "feedback") {
@@ -402,6 +445,193 @@ class SidebarProvider {
         };
         if (commands[action])
             await this.run(commands[action], true, action, chatId);
+    }
+    async sync(parts, chatId) {
+        const action = (parts[0] ?? "status").toLowerCase();
+        const allowCredentialFile = parts.includes("--allow-credential-file");
+        if (allowCredentialFile) {
+            const approved = await this.confirm("Allow credential file", "This stores the sync credential in a protected local file because the operating-system credential store is unavailable. Use it only on a trusted machine.");
+            if (!approved)
+                return;
+        }
+        const credentialFlag = allowCredentialFile ? ["--allow-credential-file"] : [];
+        if (["status", "now"].includes(action)) {
+            await this.run(["sync", action, ...credentialFlag], true, `Sync ${action}`, chatId);
+            return;
+        }
+        if (action === "login") {
+            const suppliedServer = parts.slice(1).find((part) => !part.startsWith("--"));
+            const server = suppliedServer ??
+                (await vscode.window.showInputBox({
+                    title: "AIRO Sync server",
+                    prompt: "Enter the trusted HTTPS sync service URL.",
+                    value: "https://airo-sync.pablospaniard.workers.dev",
+                    ignoreFocusOut: true,
+                    validateInput: validateServerUrl,
+                }));
+            if (!server)
+                return;
+            const serverError = validateServerUrl(server);
+            if (serverError)
+                return this.notice(serverError, chatId);
+            await this.run(["sync", "login", "--server", server, ...credentialFlag], true, "Sync login", chatId);
+            return;
+        }
+        if (action === "enable") {
+            const passphrase = await this.askPassphrase("Enable encrypted sync", "Enter your end-to-end encryption passphrase (12+ characters). It is sent only to the local AIRO process.", true);
+            if (!passphrase)
+                return;
+            await this.run(["sync", "enable", ...credentialFlag], true, "Enable sync", chatId, {
+                environment: { AIRO_SYNC_PASSPHRASE: passphrase },
+            });
+            return;
+        }
+        if (action === "devices") {
+            if (parts[1]?.toLowerCase() !== "revoke") {
+                await this.run(["sync", "devices", ...credentialFlag], true, "Sync devices", chatId);
+                return;
+            }
+            const deviceId = parts[2];
+            if (!deviceId)
+                return this.notice("Usage: /sync devices revoke <device-id>", chatId);
+            const approved = await this.confirm("Revoke device", `Revoke sync access for device ${deviceId}?`);
+            if (!approved)
+                return;
+            await this.run(["sync", "devices", "revoke", deviceId, ...credentialFlag], true, "Revoke sync device", chatId);
+            return;
+        }
+        if (action === "export") {
+            const target = await vscode.window.showSaveDialog({
+                title: "Export encrypted sync data",
+                saveLabel: "Export",
+                filters: { "AIRO encrypted export": ["airo-sync"] },
+            });
+            if (!target)
+                return;
+            await this.run(["sync", "export", target.fsPath, "--force", ...credentialFlag], true, "Export sync data", chatId);
+            return;
+        }
+        if (action === "logout") {
+            if (!(await this.confirm("Log out", "Remove this machine's local sync credentials?")))
+                return;
+            await this.run(["sync", "logout", ...credentialFlag], true, "Sync logout", chatId);
+            return;
+        }
+        if (action === "delete-cloud-data") {
+            if (!(await this.confirm("Delete cloud data", "Permanently delete your encrypted settings and learning data from the sync service? This cannot be undone.")))
+                return;
+            await this.run(["sync", "delete-cloud-data", "--yes", ...credentialFlag], true, "Delete cloud sync data", chatId);
+            return;
+        }
+        this.notice("Usage: /sync status|login [server]|enable|now|devices|devices revoke <id>|export|logout|delete-cloud-data", chatId);
+    }
+    async jev(parts, chatId) {
+        const action = (parts[0] ?? "status").toLowerCase();
+        if (action === "status" || action === "disable") {
+            if (action === "disable" &&
+                !(await this.confirm("Disable Jev", "Disable optional Jev feedback for future runs?")))
+                return;
+            await this.run(["feedback", "jev", action], true, `Jev ${action}`, chatId);
+            return;
+        }
+        if (action === "enable") {
+            const approved = await this.confirm("Enable Jev feedback", "AIRO sends task text, phase/task features, selected route identifiers, and bucketed outcomes to TypeSafe Jev after a run. It does not send source files, diffs, provider output, repository paths or remotes, credentials, environment variables, feedback notes, or session transcripts. TYPESAFE_API_KEY remains in your environment. Jev feedback is stored locally and can only make bounded adjustments to unpinned automatic routes.");
+            if (!approved)
+                return;
+            await this.run(["feedback", "jev", "enable", "--accept-data-sharing"], true, "Enable Jev feedback", chatId);
+            return;
+        }
+        if (action === "inspect") {
+            const limit = parts[1];
+            if (limit && !/^\d+$/.test(limit))
+                return this.notice("Usage: /jev inspect [limit]", chatId);
+            await this.run(["feedback", "jev", "inspect", ...(limit ? ["--limit", limit] : [])], true, "Inspect Jev feedback", chatId);
+            return;
+        }
+        if (action === "reset") {
+            if (!(await this.confirm("Reset Jev feedback", "Delete the locally stored Jev feedback records? Existing routing history is preserved.")))
+                return;
+            await this.run(["feedback", "jev", "reset", "--yes"], true, "Reset Jev feedback", chatId);
+            return;
+        }
+        this.notice("Usage: /jev status|enable|disable|inspect [limit]|reset", chatId);
+    }
+    async portableHistory(parts, chatId) {
+        const action = parts[0]?.toLowerCase();
+        if (!action || /^\d+$/.test(action)) {
+            await this.run(["history", ...(action ? [action] : [])], true, "History", chatId);
+            return;
+        }
+        if (action !== "export" && action !== "import") {
+            this.notice("Usage: /history [limit] or /history export|import", chatId);
+            return;
+        }
+        const target = action === "export"
+            ? await vscode.window.showSaveDialog({
+                title: "Export encrypted AIRO history",
+                saveLabel: "Export",
+                filters: { "AIRO encrypted archive": ["airo"] },
+            })
+            : (await vscode.window.showOpenDialog({
+                title: "Import encrypted AIRO history",
+                canSelectMany: false,
+                canSelectFiles: true,
+                canSelectFolders: false,
+                filters: { "AIRO encrypted archive": ["airo"] },
+            }))?.[0];
+        if (!target)
+            return;
+        const passphrase = await this.askPassphrase(`${action === "export" ? "Export" : "Import"} encrypted history`, "Enter the archive passphrase (12+ characters). It is sent only to the local AIRO process.", action === "export");
+        if (!passphrase)
+            return;
+        await this.run([
+            "history",
+            action,
+            ...(action === "export" ? ["--encrypted"] : []),
+            target.fsPath,
+            ...(action === "export" ? ["--force"] : []),
+        ], true, `${action === "export" ? "Export" : "Import"} history`, chatId, { environment: { AIRO_ARCHIVE_PASSPHRASE: passphrase } });
+    }
+    async repository(parts, chatId) {
+        const action = (parts[0] ?? "id").toLowerCase();
+        if (action === "id") {
+            await this.run(["repository", "id"], true, "Repository identity", chatId);
+            return;
+        }
+        if (action !== "link" || !parts[1]) {
+            this.notice("Usage: /repository id or /repository link <repository-id>", chatId);
+            return;
+        }
+        if (!(await this.confirm("Link repository", `Link this workspace's learning history to repository ID ${parts[1]}?`)))
+            return;
+        await this.run(["repository", "link", parts[1]], true, "Link repository history", chatId);
+    }
+    async askPassphrase(title, prompt, confirmEntry = false) {
+        const passphrase = await vscode.window.showInputBox({
+            title,
+            prompt,
+            password: true,
+            ignoreFocusOut: true,
+            validateInput: (value) => value.length >= 12 ? undefined : "Passphrase must contain at least 12 characters.",
+        });
+        if (!passphrase || !confirmEntry)
+            return passphrase;
+        const confirmation = await vscode.window.showInputBox({
+            title: `${title} — confirm passphrase`,
+            prompt: "Enter the same passphrase again.",
+            password: true,
+            ignoreFocusOut: true,
+            validateInput: (value) => (value === passphrase ? undefined : "Passphrases do not match."),
+        });
+        return confirmation === passphrase ? passphrase : undefined;
+    }
+    async confirm(action, detail) {
+        return (await vscode.window.showWarningMessage(detail, { modal: true }, action)) === action;
+    }
+    openAiroTerminal(args, name) {
+        const command = vscode.workspace.getConfiguration("airo").get("command", "airo");
+        const terminal = vscode.window.createTerminal({ name, shellPath: command, shellArgs: args });
+        terminal.show();
     }
     stop(chatId = this.activeChatId) {
         const chat = this.sidebarChats.get(chatId);
@@ -509,12 +739,13 @@ class SidebarProvider {
             previews: this.previewsFor(attachments, previews),
         });
     }
-    taskArgs(task, chat = this.sidebarChats.get(this.activeChatId)) {
+    taskArgs(task, chat = this.sidebarChats.get(this.activeChatId), forceNoJev = false) {
         const config = vscode.workspace.getConfiguration("airo");
         const mode = config.get("mode", "auto");
         const agent = config.get("agent", "auto");
         const tier = config.get("tier", "auto");
         const log = config.get("logLevel", "live");
+        const jevFeedback = config.get("jevFeedback", "inherit");
         const args = chat?.session
             ? ["--session", chat.session.sessionId]
             : chat?.activeSession
@@ -528,9 +759,11 @@ class SidebarProvider {
             args.push("--prefer-agent", agent);
         if (tier !== "auto")
             args.push("--prefer-tier", tier);
+        if (forceNoJev || jevFeedback === "disabled")
+            args.push("--no-jev");
         return [...args, "--log", log, task];
     }
-    run(args, showOutput, label = args.join(" "), chatId = this.activeChatId) {
+    run(args, showOutput, label = args.join(" "), chatId = this.activeChatId, options = {}) {
         const chat = this.sidebarChats.get(chatId);
         if (!chat)
             return Promise.resolve({ code: null, output: "", started: false });
@@ -563,7 +796,12 @@ class SidebarProvider {
                     shell: false,
                     windowsHide: true,
                     stdio: ["pipe", "pipe", "pipe"],
-                    env: { ...environment, NO_COLOR: "1", AIRO_STREAM_PROTOCOL: "1" },
+                    env: {
+                        ...environment,
+                        ...options.environment,
+                        NO_COLOR: "1",
+                        AIRO_STREAM_PROTOCOL: "1",
+                    },
                 });
                 chat.child = child;
                 started = true;
@@ -676,7 +914,11 @@ class SidebarProvider {
                 this.postAllStates();
                 if (!stopped && showOutput && !hasFinal && humanOutput.trim()) {
                     this.postToChat(chatId, {
-                        type: code === 0 ? "final" : "failure",
+                        type: code === 0
+                            ? options.outputFormat === "markdown"
+                                ? "final"
+                                : "command"
+                            : "failure",
                         text: this.plainText(humanOutput).trim(),
                     });
                 }
@@ -927,6 +1169,19 @@ function shortDescription(value) {
 function chatTitle(value) {
     const title = shortDescription(value);
     return /^(?:new session|airo sidebar session)$/i.test(title) ? "New chat" : title;
+}
+function validateServerUrl(value) {
+    try {
+        const url = new URL(value);
+        if (url.protocol === "https:")
+            return undefined;
+        if (url.protocol === "http:" && ["localhost", "127.0.0.1", "::1"].includes(url.hostname))
+            return undefined;
+    }
+    catch {
+        // Return the same actionable validation message for malformed URLs.
+    }
+    return "Use an HTTPS URL (HTTP is allowed only for localhost development).";
 }
 function listSessionSummaries() {
     return runCommand(["sessions", "--json"]).then((result) => {

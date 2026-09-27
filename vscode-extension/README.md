@@ -31,9 +31,19 @@ The extension runs the CLI in the currently opened workspace; it does not upload
 attached files or store provider credentials.
 
 The extension uses the same local routing, history, and learning behavior as the
-CLI. If optional Jev feedback is enabled from the shell, completed extension runs
-can produce the same bounded post-run evidence. Encrypted sync is also managed
-from the shell rather than the extension UI. Both features are implemented only
-on the development branch until a newer npm package is published. Research
-consent remains unimplemented and is documented separately in
+CLI. Use the sync button in the sidebar header, the **AIRO: Sync Now** and
+**AIRO: Show Sync Status** commands, or `/sync` commands to manage encrypted
+sync. Passphrases are collected with VS Code password prompts and passed only to
+the local AIRO process through its environment.
+
+Use `/jev` to inspect, enable, disable, or reset optional Jev feedback. Enabling
+it displays the data-sharing disclosure and requires explicit confirmation.
+`/no-jev <task>` disables Jev for one run, while **AIRO: Jev Feedback** can
+disable it for every task started by the extension. Portable encrypted history
+archives are available through `/history export|import`, repository identities
+through `/repository`, and the interactive first-run flow through `/setup`.
+
+These features require a matching development build of the AIRO CLI until a
+newer npm package is published. Research consent remains unimplemented and is
+documented separately in
 [`docs/routing-platform-roadmap.md`](../docs/routing-platform-roadmap.md).
