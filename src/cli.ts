@@ -932,7 +932,7 @@ async function main() {
     console.error(`${statusIcon("error")} ${ui.yellow(`legacy data migration skipped: ${error}`)}`);
   let { config, path } = loadConfig();
 
-  if (shouldShowWelcome(raw, Boolean(process.stdin.isTTY), Boolean(path))) {
+  if (shouldShowWelcome(raw, Boolean(process.stdin.isTTY))) {
     console.log(firstRunWelcome());
   }
 

@@ -26,9 +26,9 @@ export function shouldRunInitialSetup(raw: string[], isTTY: boolean, hasConfig: 
   );
 }
 
-/** Show the startup orientation once for each interactive CLI invocation. */
-export function shouldShowWelcome(raw: string[], isTTY: boolean, hasConfig = false): boolean {
-  if (!isTTY || hasConfig) return false;
+/** Show the branded orientation before every interactive CLI invocation. */
+export function shouldShowWelcome(raw: string[], isTTY: boolean): boolean {
+  if (!isTTY) return false;
   return (
     !raw.includes("--help") &&
     !raw.includes("-h") &&
