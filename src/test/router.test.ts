@@ -76,6 +76,9 @@ test("routes explicit models outside the automatic tier defaults", () => {
   });
   assert.equal(agentForModel("sonnet", current), "claude");
   assert.equal(agentForModel("o3", current), "codex");
+  assert.equal(agentForModel("gpt-4.1", current), "codex");
+  assert.equal(agentForModel("claude-haiku-4.5", current), "copilot");
+  assert.equal(agentForModel("gpt-5.3-codex", current), "copilot");
   assert.equal(agentForModel("unknown-model", current), undefined);
   assert.equal(requestedModel("use GPT for this task", current), undefined);
   assert.equal(codex.agent, "codex");

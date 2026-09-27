@@ -1,11 +1,11 @@
 # Routing rules and learning
 
-For research into adding a semantic decision model to this routing flow, see [Jev and AIRO: concepts, differences, and integration options](jev-and-airo.md).
+This document describes behavior in the current `airo-ai-router` release. For the planned provider registry, portable learning, Jev feedback, encrypted sync, and research-consent milestones, see [Routing platform roadmap](routing-platform-roadmap.md). [Jev and AIRO](jev-and-airo.md) records the planned narrower role for Jev.
 
 AIRO makes a routing decision in two parts:
 
 1. Select a provider (`claude`, `codex`, `gemini`, or `copilot`).
-2. Select a model tier (`fast`, `balanced`, or `deep`) and use the model and effort configured for that provider and tier.
+2. Select a model tier (`fast`, `balanced`, or `deep`) and use the configured model plus any effort control implemented by that provider adapter.
 
 In an adaptive workflow, AIRO repeats this decision for every phase. Analysis, implementation, validation, and review can therefore use different providers or model tiers.
 
@@ -76,6 +76,18 @@ The configured routing policy can add a small Claude or Codex bias. Historical e
 
 The provider with the highest total score wins. If several providers tie and `defaultAgent` is among them, `defaultAgent` wins; otherwise AIRO uses the first highest-scoring provider in its candidate order.
 
+## Current fallback behavior
+
+Automatic fallback is not yet provider-neutral:
+
+- A missing Claude command falls back to Codex.
+- A missing Codex, Gemini, or Copilot command falls back to Claude.
+- Authentication and usage-limit failures use the same pairing and probe the Claude or Codex fallback account before switching.
+- A missing-command fallback checks executable availability but does not run a sign-in probe.
+- An explicitly selected provider never falls back.
+
+Gemini and Copilot are not automatic fallback targets in the current release. Generic fallback across every eligible registered provider is planned in the [routing platform roadmap](routing-platform-roadmap.md).
+
 ## Complexity and model tier
 
 Complexity begins at `2` and is clamped to the range `1` through `5`.
@@ -102,7 +114,7 @@ The result maps to a tier:
 | 3 | `balanced` |
 | 4–5 | `deep` |
 
-The selected provider's configuration maps that tier to a concrete model and effort. A tier is therefore an automatic profile, not a model allowlist.
+The selected provider's configuration maps that tier to a concrete model and an optional effort value. Claude and Codex currently receive their configured effort controls; Gemini and Copilot do not, so their tiers differ by model selection and retain `auto` effort. A tier is an automatic profile, not a model allowlist.
 
 ## Adaptive phase preferences
 
@@ -120,6 +132,8 @@ These preferences do not replace a provider, model, or tier explicitly selected 
 ## What learning stores
 
 Learning is local, file-based, and repository-scoped by default. AIRO does not train a provider model or maintain a separate learned-weights file.
+
+The current release does not sync history between machines. Portable encrypted export/import and optional end-to-end encrypted cloud sync are roadmap items, not current commands. Until those milestones ship, users must treat the files below as local data and migrate them manually if needed.
 
 Unless `history.path` is configured, records are stored at:
 

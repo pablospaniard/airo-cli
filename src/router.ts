@@ -243,7 +243,6 @@ export function agentForModel(model: string, config: RouterConfig): Agent | unde
   if (/^(?:claude(?:-|$)|haiku$|sonnet$|opus$)/i.test(model)) return "claude";
   if (/^(?:gpt(?:-|$)|codex(?:-|$)|o[1-9](?:-|$))/i.test(model)) return "codex";
   if (/^gemini(?:-|$)/i.test(model)) return "gemini";
-  if (/^(?:claude|gpt)-/i.test(model)) return "copilot";
   return undefined;
 }
 

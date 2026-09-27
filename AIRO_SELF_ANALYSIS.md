@@ -1,8 +1,10 @@
 # AIRO CLI Self-Analysis Report
 
+> **Historical snapshot:** This report reflects an earlier implementation and retains old line numbers, provider assumptions, and conclusions for reference. It is not current product documentation. Use [README.md](README.md), [Routing rules and learning](docs/routing-and-learning.md), and the [Routing platform roadmap](docs/routing-platform-roadmap.md) for the released package and planned architecture.
+
 ## Overview
 
-AIRO (Adaptive Intelligence Routing & Orchestration) is a CLI tool that intelligently routes tasks between two AI agent providers (Claude and Codex) using a scoring system, with support for both single-run and multi-phase orchestration workflows.
+At the time of this snapshot, AIRO (Adaptive Intelligence Routing & Orchestration) routed tasks primarily between Claude and Codex using a scoring system, with support for both single-run and multi-phase orchestration workflows. The current `airo-ai-router` package also includes registered Gemini and GitHub Copilot support; consult the current documentation rather than this historical analysis for supported behavior.
 
 ---
 
@@ -507,4 +509,3 @@ The AIRO CLI implements a well-designed routing and orchestration system with:
 2. Add bounds checking to learned routing boosts
 3. Add integration tests for multi-phase orchestration workflows
 4. Document the learning similarity threshold impact
-
