@@ -1,5 +1,7 @@
 # Routing rules and learning
 
+For research into adding a semantic decision model to this routing flow, see [Jev and AIRO: concepts, differences, and integration options](jev-and-airo.md).
+
 AIRO makes a routing decision in two parts:
 
 1. Select a provider (`claude`, `codex`, `gemini`, or `copilot`).
@@ -238,4 +240,3 @@ Reset feedback-derived learning evidence:
 ```bash
 airo learning reset --yes
 ```
-
