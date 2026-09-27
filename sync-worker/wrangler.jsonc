@@ -17,6 +17,11 @@
   ],
   "ratelimits": [
     {
+      "name": "EDGE_RATE_LIMITER",
+      "namespace_id": "41000",
+      "simple": { "limit": 120, "period": 60 },
+    },
+    {
       "name": "AUTH_RATE_LIMITER",
       "namespace_id": "41001",
       "simple": { "limit": 30, "period": 60 },

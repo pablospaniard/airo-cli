@@ -2,7 +2,7 @@ import { env, SELF } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { cleanupExpiredAuth } from "../src/index";
 
-const accessToken = "test-access-token-that-is-long-enough-for-validation";
+const accessToken = "a".repeat(43);
 
 async function hash(value: string): Promise<string> {
   const bytes = new Uint8Array(
@@ -50,12 +50,19 @@ function authorized(path: string, init: RequestInit = {}): Promise<Response> {
 
 describe("sync Worker", () => {
   it("reports health and rejects unauthenticated sync", async () => {
-    expect(await (await SELF.fetch("https://example.com/health")).json()).toEqual({
+    const health = await SELF.fetch("https://example.com/health");
+    expect(health.headers.get("cache-control")).toBe("no-store");
+    expect(health.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(await health.json()).toEqual({
       status: "ok",
       service: "airo-sync",
       schemaVersion: 1,
     });
     expect((await SELF.fetch("https://example.com/v1/sync/status")).status).toBe(401);
+    expect((await SELF.fetch("https://example.com/v1/private/unknown")).status).toBe(404);
+    expect(
+      (await SELF.fetch("https://example.com/v1/auth/device/start", { method: "POST" })).status,
+    ).toBe(404);
     expect(await (await SELF.fetch("https://example.com/v1/auth/config")).json()).toEqual({
       provider: "github",
       clientId: "Ov23li72JP3433SbMpe7",
@@ -155,7 +162,7 @@ describe("sync Worker", () => {
 
   it("revokes a token family when a rotated refresh token is reused", async () => {
     const timestamp = Math.floor(Date.now() / 1000);
-    const refreshToken = "test-refresh-token-that-is-long-enough-for-validation";
+    const refreshToken = "r".repeat(43);
     await env.DB.prepare(
       "INSERT INTO sessions(id, family_id, user_id, device_id, token_hash, kind, expires_at, created_at, revoked_at) VALUES(?, ?, ?, ?, ?, 'refresh', ?, ?, ?)",
     )
@@ -199,15 +206,12 @@ describe("sync Worker", () => {
     });
   });
 
-  it("cleans expired authentication artifacts without deleting device audit entries", async () => {
+  it("cleans expired sessions without deleting device audit entries", async () => {
     const timestamp = Math.floor(Date.now() / 1000);
-    await env.DB.batch([
-      env.DB.prepare(
-        "INSERT INTO auth_challenges(id_hash, device_id, device_name, github_device_code, expires_at, interval_seconds, next_poll_at) VALUES(?, ?, ?, ?, ?, ?, ?)",
-      ).bind("expired-challenge", "device-test", "test", "expired-code", timestamp - 1, 5, 0),
-      env.DB.prepare(
-        "INSERT INTO sessions(id, family_id, user_id, device_id, token_hash, kind, expires_at, created_at) VALUES(?, ?, ?, ?, ?, 'access', ?, ?)",
-      ).bind(
+    await env.DB.prepare(
+      "INSERT INTO sessions(id, family_id, user_id, device_id, token_hash, kind, expires_at, created_at) VALUES(?, ?, ?, ?, ?, 'access', ?, ?)",
+    )
+      .bind(
         "expired-session",
         "expired-family",
         "user-test",
@@ -215,14 +219,9 @@ describe("sync Worker", () => {
         await hash("expired-access-token-that-is-long-enough"),
         timestamp - 1,
         timestamp - 100,
-      ),
-    ]);
+      )
+      .run();
     await cleanupExpiredAuth(env, timestamp);
-    expect(
-      await env.DB.prepare("SELECT id_hash FROM auth_challenges WHERE id_hash = ?")
-        .bind("expired-challenge")
-        .first(),
-    ).toBeNull();
     expect(
       await env.DB.prepare("SELECT id FROM sessions WHERE id = ?").bind("expired-session").first(),
     ).toBeNull();

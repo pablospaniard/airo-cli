@@ -40,7 +40,9 @@ The tests run in Cloudflare's Workers runtime integration with an isolated local
 
 - Access tokens expire after 15 minutes; refresh tokens expire after 30 days and rotate as a family.
 - Reuse of a rotated refresh token revokes the remaining family.
-- A daily scheduled cleanup removes expired challenges and sessions; revoked session records are retained for 30 days. Encrypted user data and device audit entries are not age-deleted.
+- The only unauthenticated API operations are health, public OAuth configuration, GitHub identity exchange, and token refresh. Every data, settings, key, export, device, logout, and deletion operation requires a valid device access token and is scoped to its account.
+- Public authentication operations have a network-edge throttle in addition to token/device-specific limits. Unknown routes are rejected before any token database lookup.
+- A daily scheduled cleanup removes expired sessions; revoked session records are retained for 30 days. Encrypted user data and device audit entries are not age-deleted.
 - Devices can be listed and individually revoked.
 - Retried GitHub exchanges revoke prior token families for that device before issuing replacements.
 - Requests are size-bounded, validated, and rate-limited before storage.
@@ -50,3 +52,5 @@ The tests run in Cloudflare's Workers runtime integration with an isolated local
 - Account export returns the encrypted server-side representation. Account deletion cascades through D1.
 
 Cloudflare logs must never include request bodies, authorization headers, GitHub tokens, or encrypted envelopes. The Worker emits only structured path-level errors.
+
+This is a public CLI service, so the hostname and GitHub OAuth client ID are necessarily public and the binary is reproducible by third parties. Security therefore does not rely on an embedded application secret or a spoofable client header. Possession of a valid GitHub authorization is required to create a device session, and possession of that device's AIRO token is required for all private operations. Cloudflare Access is not placed in front of the public API because it would add a separate interactive identity gate that ordinary CLI users cannot satisfy transparently.

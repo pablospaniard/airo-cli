@@ -391,6 +391,7 @@ export async function syncLogin(options: {
   const githubResponse = await retryTransientFetch(() =>
     fetch("https://github.com/login/device/code", {
       method: "POST",
+      redirect: "error",
       signal: AbortSignal.timeout(15_000),
       headers: {
         Accept: "application/json",
@@ -428,6 +429,7 @@ export async function syncLogin(options: {
     try {
       response = await fetch("https://github.com/login/oauth/access_token", {
         method: "POST",
+        redirect: "error",
         signal: AbortSignal.timeout(15_000),
         headers: {
           Accept: "application/json",

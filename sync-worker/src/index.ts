@@ -1,4 +1,10 @@
-const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8" };
+const JSON_HEADERS = {
+  "Cache-Control": "no-store",
+  "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+  "Content-Type": "application/json; charset=utf-8",
+  "Referrer-Policy": "no-referrer",
+  "X-Content-Type-Options": "nosniff",
+};
 const MAX_BODY_BYTES = 1_048_576;
 const MAX_EVENTS = 100;
 const ACCESS_TTL_SECONDS = 15 * 60;
@@ -12,16 +18,6 @@ interface AuthContext {
   deviceId: string;
 }
 
-interface ChallengeRow {
-  id_hash: string;
-  device_id: string;
-  device_name: string;
-  github_device_code: string;
-  expires_at: number;
-  interval_seconds: number;
-  next_poll_at: number;
-}
-
 interface SessionRow {
   id: string;
   family_id: string;
@@ -30,16 +26,6 @@ interface SessionRow {
   expires_at: number;
   revoked_at: number | null;
   device_revoked_at: number | null;
-}
-
-interface GithubDeviceResponse {
-  device_code?: unknown;
-  user_code?: unknown;
-  verification_uri?: unknown;
-  expires_in?: unknown;
-  interval?: unknown;
-  access_token?: unknown;
-  error?: unknown;
 }
 
 interface GithubUser {
@@ -179,7 +165,8 @@ async function authenticate(request: Request, env: Env): Promise<AuthContext | R
   const header = request.headers.get("authorization");
   if (!header?.startsWith("Bearer ")) return error(401, "unauthorized", "Access token required.");
   const token = header.slice(7);
-  if (token.length < 32) return error(401, "unauthorized", "Invalid access token.");
+  if (!/^[a-zA-Z0-9_-]{43}$/.test(token))
+    return error(401, "unauthorized", "Invalid access token.");
   const row = await env.DB.prepare(
     `SELECT s.id, s.family_id, s.user_id, s.device_id, s.expires_at, s.revoked_at,
             d.revoked_at AS device_revoked_at
@@ -238,173 +225,13 @@ async function issueTokens(
   return { accessToken, refreshToken, expiresIn: ACCESS_TTL_SECONDS };
 }
 
-async function startDeviceFlow(request: Request, env: Env): Promise<Response> {
-  const body = object(await readJson(request));
-  if (!body || !validId(body.deviceId) || typeof body.deviceName !== "string")
-    return error(400, "invalid_request", "A valid deviceId and deviceName are required.");
-  const deviceName = body.deviceName.trim().slice(0, 80);
-  if (!deviceName) return error(400, "invalid_request", "deviceName cannot be empty.");
-  const limited = await rateLimit(env.AUTH_RATE_LIMITER, `device-start:${body.deviceId}`);
-  if (limited) return limited;
-  if (env.GITHUB_CLIENT_ID.startsWith("REPLACE_"))
-    return error(503, "not_configured", "GitHub OAuth is not configured.");
-  const github = await fetch("https://github.com/login/device/code", {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/x-www-form-urlencoded",
-      "User-Agent": "airo-sync-worker",
-    },
-    body: new URLSearchParams({ client_id: env.GITHUB_CLIENT_ID, scope: "read:user" }),
-  });
-  if (!github.ok) return error(502, "github_unavailable", "GitHub device authorization failed.");
-  const payload: GithubDeviceResponse = await github.json();
-  if (
-    typeof payload.device_code !== "string" ||
-    typeof payload.user_code !== "string" ||
-    typeof payload.verification_uri !== "string" ||
-    typeof payload.expires_in !== "number" ||
-    typeof payload.interval !== "number"
-  )
-    return error(502, "github_invalid", "GitHub returned an invalid device response.");
-  const challenge = randomToken();
-  const createdAt = now();
-  await env.DB.prepare(
-    "INSERT INTO auth_challenges(id_hash, device_id, device_name, github_device_code, expires_at, interval_seconds, next_poll_at) VALUES(?, ?, ?, ?, ?, ?, ?)",
-  )
-    .bind(
-      await sha256(challenge),
-      body.deviceId,
-      deviceName,
-      payload.device_code,
-      createdAt + payload.expires_in,
-      payload.interval,
-      createdAt + payload.interval,
-    )
-    .run();
-  return json(
-    {
-      challenge,
-      userCode: payload.user_code,
-      verificationUri: payload.verification_uri,
-      expiresIn: payload.expires_in,
-      interval: payload.interval,
-    },
-    201,
-  );
-}
-
-async function pollDeviceFlow(request: Request, env: Env): Promise<Response> {
-  const body = object(await readJson(request));
-  if (!body || typeof body.challenge !== "string")
-    return error(400, "invalid_request", "challenge is required.");
-  const idHash = await sha256(body.challenge);
-  const challenge = await env.DB.prepare("SELECT * FROM auth_challenges WHERE id_hash = ?")
-    .bind(idHash)
-    .first<ChallengeRow>();
-  if (!challenge) return error(404, "challenge_not_found", "Device challenge was not found.");
-  const limited = await rateLimit(env.AUTH_RATE_LIMITER, `device-poll:${idHash}`);
-  if (limited) return limited;
-  const time = now();
-  if (challenge.expires_at <= time) {
-    await env.DB.prepare("DELETE FROM auth_challenges WHERE id_hash = ?").bind(idHash).run();
-    return error(410, "challenge_expired", "Device challenge expired.");
-  }
-  if (challenge.next_poll_at > time)
-    return json({ status: "pending", retryAfter: challenge.next_poll_at - time }, 202);
-  await env.DB.prepare("UPDATE auth_challenges SET next_poll_at = ? WHERE id_hash = ?")
-    .bind(time + challenge.interval_seconds, idHash)
-    .run();
-  const github = await fetch("https://github.com/login/oauth/access_token", {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/x-www-form-urlencoded",
-      "User-Agent": "airo-sync-worker",
-    },
-    body: new URLSearchParams({
-      client_id: env.GITHUB_CLIENT_ID,
-      device_code: challenge.github_device_code,
-      grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-    }),
-  });
-  const token: GithubDeviceResponse = await github.json();
-  if (token.error === "authorization_pending")
-    return json({ status: "pending", retryAfter: challenge.interval_seconds }, 202);
-  if (token.error === "slow_down") {
-    const interval = challenge.interval_seconds + 5;
-    await env.DB.prepare(
-      "UPDATE auth_challenges SET interval_seconds = ?, next_poll_at = ? WHERE id_hash = ?",
-    )
-      .bind(interval, time + interval, idHash)
-      .run();
-    return json({ status: "pending", retryAfter: interval }, 202);
-  }
-  if (!github.ok) {
-    const oauthError =
-      typeof token.error === "string" && /^[a-z_]{1,64}$/.test(token.error)
-        ? token.error
-        : "unknown";
-    return error(502, `github_${oauthError}`, `GitHub authorization check failed (${oauthError}).`);
-  }
-  if (typeof token.access_token !== "string")
-    return error(401, "authorization_denied", "GitHub authorization was denied or expired.");
-  const profileResponse = await fetch("https://api.github.com/user", {
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${token.access_token}`,
-      "User-Agent": "airo-sync-worker",
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
-  });
-  if (!profileResponse.ok)
-    return error(502, "github_profile_failed", "GitHub profile lookup failed.");
-  const profile: GithubUser = await profileResponse.json();
-  if (
-    (typeof profile.id !== "number" && typeof profile.id !== "string") ||
-    typeof profile.login !== "string"
-  )
-    return error(502, "github_invalid", "GitHub returned an invalid profile.");
-  const githubUserId = String(profile.id);
-  let user = await env.DB.prepare("SELECT id FROM users WHERE github_user_id = ?")
-    .bind(githubUserId)
-    .first<{ id: string }>();
-  if (!user) {
-    user = { id: crypto.randomUUID() };
-    await env.DB.prepare(
-      "INSERT INTO users(id, github_user_id, github_login, created_at) VALUES(?, ?, ?, ?)",
-    )
-      .bind(user.id, githubUserId, profile.login, time)
-      .run();
-  } else {
-    await env.DB.prepare("UPDATE users SET github_login = ? WHERE id = ?")
-      .bind(profile.login, user.id)
-      .run();
-  }
-  await env.DB.prepare(
-    `INSERT INTO devices(id, user_id, name, created_at, last_seen_at, revoked_at)
-     VALUES(?, ?, ?, ?, ?, NULL)
-     ON CONFLICT(user_id, id) DO UPDATE SET name = excluded.name, last_seen_at = excluded.last_seen_at, revoked_at = NULL`,
-  )
-    .bind(challenge.device_id, user.id, challenge.device_name, time, time)
-    .run();
-  const tokens = await issueTokens(env, user.id, challenge.device_id);
-  const wrappedKey = await env.DB.prepare("SELECT envelope FROM account_keys WHERE user_id = ?")
-    .bind(user.id)
-    .first<{ envelope: string }>();
-  await env.DB.prepare("DELETE FROM auth_challenges WHERE id_hash = ?").bind(idHash).run();
-  return json({
-    status: "authorized",
-    user: { id: user.id, login: profile.login },
-    deviceId: challenge.device_id,
-    ...tokens,
-    wrappedAccountKey: wrappedKey ? JSON.parse(wrappedKey.envelope) : null,
-  });
-}
-
 async function refreshSession(request: Request, env: Env): Promise<Response> {
   const body = object(await readJson(request));
-  if (!body || typeof body.refreshToken !== "string")
+  if (
+    !body ||
+    typeof body.refreshToken !== "string" ||
+    !/^[a-zA-Z0-9_-]{43}$/.test(body.refreshToken)
+  )
     return error(400, "invalid_request", "refreshToken is required.");
   const row = await env.DB.prepare(
     `SELECT s.id, s.family_id, s.user_id, s.device_id, s.expires_at, s.revoked_at,
@@ -453,6 +280,7 @@ async function exchangeGithubToken(request: Request, env: Env): Promise<Response
   const limited = await rateLimit(env.AUTH_RATE_LIMITER, `github-exchange:${body.deviceId}`);
   if (limited) return limited;
   const profileResponse = await fetch("https://api.github.com/user", {
+    redirect: "error",
     headers: {
       Accept: "application/vnd.github+json",
       Authorization: `Bearer ${body.githubAccessToken}`,
@@ -766,14 +594,31 @@ async function route(request: Request, env: Env): Promise<Response> {
     return json({ status: "ok", service: "airo-sync", schemaVersion: 1 });
   if (request.method === "GET" && url.pathname === "/v1/auth/config")
     return json({ provider: "github", clientId: env.GITHUB_CLIENT_ID });
-  if (request.method === "POST" && url.pathname === "/v1/auth/github")
-    return exchangeGithubToken(request, env);
-  if (request.method === "POST" && url.pathname === "/v1/auth/device/start")
-    return startDeviceFlow(request, env);
-  if (request.method === "POST" && url.pathname === "/v1/auth/device/poll")
-    return pollDeviceFlow(request, env);
-  if (request.method === "POST" && url.pathname === "/v1/auth/refresh")
-    return refreshSession(request, env);
+  if (request.method === "POST" && ["/v1/auth/github", "/v1/auth/refresh"].includes(url.pathname)) {
+    const edgeKey = request.headers.get("cf-connecting-ip") ?? "unknown";
+    const limited = await rateLimit(env.EDGE_RATE_LIMITER, `${url.pathname}:${edgeKey}`);
+    if (limited) return limited;
+    return url.pathname === "/v1/auth/github"
+      ? exchangeGithubToken(request, env)
+      : refreshSession(request, env);
+  }
+
+  const protectedRoute =
+    (request.method === "GET" &&
+      [
+        "/v1/sync/status",
+        "/v1/account/export",
+        "/v1/sync/pull",
+        "/v1/account-key",
+        "/v1/settings",
+        "/v1/devices",
+      ].includes(url.pathname)) ||
+    (request.method === "POST" && ["/v1/sync/push", "/v1/auth/logout"].includes(url.pathname)) ||
+    (request.method === "PUT" && ["/v1/account-key", "/v1/settings"].includes(url.pathname)) ||
+    (request.method === "DELETE" &&
+      (url.pathname === "/v1/account" ||
+        /^\/v1\/devices\/[a-zA-Z0-9:_-]{8,128}$/.test(url.pathname)));
+  if (!protectedRoute) return error(404, "not_found", "Endpoint not found.");
 
   const auth = await authenticate(request, env);
   if (auth instanceof Response) return auth;
@@ -813,12 +658,11 @@ async function route(request: Request, env: Env): Promise<Response> {
 }
 
 export async function cleanupExpiredAuth(env: Env, time = now()): Promise<void> {
-  await env.DB.batch([
-    env.DB.prepare("DELETE FROM auth_challenges WHERE expires_at < ?").bind(time),
-    env.DB.prepare(
-      "DELETE FROM sessions WHERE expires_at < ? OR (revoked_at IS NOT NULL AND revoked_at < ?)",
-    ).bind(time, time - REVOKED_SESSION_RETENTION_SECONDS),
-  ]);
+  await env.DB.prepare(
+    "DELETE FROM sessions WHERE expires_at < ? OR (revoked_at IS NOT NULL AND revoked_at < ?)",
+  )
+    .bind(time, time - REVOKED_SESSION_RETENTION_SECONDS)
+    .run();
 }
 
 export default {
