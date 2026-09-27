@@ -1,4 +1,5 @@
 import { learningHints } from "./history.js";
+import { AGENTS } from "./providers.js";
 import type { Agent, Effort, ModelTier, RouteResult, RouterConfig, ScoreReason } from "./types.js";
 
 const CLAUDE_SIGNALS: Array<[RegExp, number, string]> = [
@@ -125,7 +126,7 @@ function configuredModelIn(
   config: RouterConfig,
 ): { agent: Agent; model: string; tier: ModelTier } | undefined {
   const matches: Array<{ index: number; agent: Agent; model: string; tier: ModelTier }> = [];
-  for (const agent of ["claude", "codex", "gemini", "copilot"] as const) {
+  for (const agent of AGENTS) {
     for (const tier of ["fast", "balanced", "deep"] as const) {
       const model = config[agent].models[tier].model;
       const flexible = escapeRegex(model).replace(/[-._]+/g, "[-._\\s]+");
@@ -164,9 +165,7 @@ export function userRoutingRequest(task: string, config: RouterConfig): UserRout
   for (const clause of routingClauses(task)) {
     const text = clause.text.replace(/^(?:use|using)\s+/i, "").trim();
     const lower = text.toLowerCase();
-    const knownAgent = (["claude", "codex", "gemini", "copilot"] as const).find((agent) =>
-      new RegExp(`\\b${agent}\\b`, "i").test(text),
-    );
+    const knownAgent = AGENTS.find((agent) => new RegExp(`\\b${agent}\\b`, "i").test(text));
     const configured = configuredModelIn(text, config);
     const namedModelMatches = [...text.matchAll(EXPLICIT_MODEL)];
     const namedModel = namedModelMatches.at(-1)?.[1];
@@ -232,7 +231,7 @@ export function requestedModelTier(task: string): ModelTier | undefined {
 }
 
 export function agentForModel(model: string, config: RouterConfig): Agent | undefined {
-  for (const agent of ["claude", "codex", "gemini", "copilot"] as const) {
+  for (const agent of AGENTS) {
     if (
       Object.values(config[agent].models).some(
         (profile) => profile.model.toLowerCase() === model.toLowerCase(),
@@ -298,7 +297,7 @@ export function routeTask(task: string, config: RouterConfig): RouteResult {
   if (config.policy === "codex-heavy") add(reasons, "codex", 2, "codex-heavy policy");
 
   const learned = learningHints(task, config.history);
-  const agents: Agent[] = ["claude", "codex", "gemini", "copilot"];
+  const agents = [...AGENTS];
   for (const candidate of agents) {
     const boost = learned.agentBoosts[candidate];
     if (boost !== 0) add(reasons, candidate, boost, "history feedback on similar tasks");

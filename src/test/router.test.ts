@@ -9,6 +9,8 @@ import {
   applyRoutePreferences,
   applyRouteOverrides,
   applyPhasePreference,
+  fallbackIfMissing,
+  fallbackProvider,
   needsRecovery,
   planPhases,
   shouldOrchestrate,
@@ -45,6 +47,45 @@ test("routes a small test implementation to Codex with a fast model", () => {
   assert.equal(route.agent, "codex");
   assert.equal(route.modelTier, "fast");
   assert.equal(route.model, DEFAULT_CONFIG.codex.models.fast.model);
+});
+
+test("falls back across every registered provider using route scores", () => {
+  const current = config();
+  current.claude.command = "/missing/claude";
+  current.codex.command = "/missing/codex";
+  current.gemini.command = process.execPath;
+  current.copilot.command = process.execPath;
+  const route = routeTask("Investigate an architecture regression", current);
+  route.agentScores = { claude: 10, codex: 8, gemini: 3, copilot: 5 };
+
+  const fallback = fallbackIfMissing(route, current);
+
+  assert.equal(fallback.agent, "copilot");
+  assert.equal(fallback.model, current.copilot.models.deep.model);
+  assert.match(fallback.modelReasons.at(-1)!, /fallback copilot/);
+});
+
+test("skips a signed-out fallback and continues through the provider registry", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-generic-fallback-"));
+  const signedOut = path.join(dir, "signed-out-codex");
+  fs.writeFileSync(signedOut, "#!/bin/sh\nprintf 'Not logged in'\n");
+  fs.chmodSync(signedOut, 0o755);
+  try {
+    const current = config();
+    current.codex.command = signedOut;
+    current.gemini.command = process.execPath;
+    current.copilot.command = "/missing/copilot";
+    const route = routeTask("Investigate an architecture regression", current);
+    route.agentScores = { claude: 10, codex: 8, gemini: 5, copilot: 3 };
+    const ruledOut = new Set<RouterConfig["defaultAgent"]>();
+
+    const fallback = fallbackProvider(route, current, "authentication", ruledOut);
+
+    assert.equal(fallback?.agent, "gemini");
+    assert.equal(ruledOut.has("codex"), true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("honors an explicit request for the most powerful model", () => {

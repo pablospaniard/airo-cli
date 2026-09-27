@@ -6,6 +6,8 @@ This document records the planned product and architecture direction for AIRO. I
 
 The current published package is [`airo-ai-router`](https://www.npmjs.com/package/airo-ai-router). Current behavior is documented in [Routing rules and learning](routing-and-learning.md). None of the provider-registry, Jev-feedback, cloud-sync, or research-consent milestones below should be presented as released until their implementation, tests, security review, and user documentation are complete.
 
+Development status: the source-controlled provider registry and generic fallback are the first Milestone 1 implementation slice. The rest of the provider-adapter contract and acceptance gate remain open.
+
 ## Architecture principles
 
 1. AIRO remains a local-first router and orchestrator.

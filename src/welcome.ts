@@ -1,10 +1,11 @@
 import { DEFAULT_CONFIG } from "./config.js";
+import { AGENTS } from "./providers.js";
 import type { RouterConfig } from "./types.js";
 import { agentColor, command, outputWidth, sectionRule, ui, visibleLength } from "./ui.js";
 import { VERSION } from "./version.js";
 
 function defaultsTable(config: RouterConfig): string[] {
-  const rows = (["codex", "claude", "gemini", "copilot"] as const).flatMap((agent) =>
+  const rows = AGENTS.flatMap((agent) =>
     (["fast", "balanced", "deep"] as const).map((tier) => {
       const profile = config[agent].models[tier];
       return [agent, tier, profile.model, profile.effort ?? "auto"];

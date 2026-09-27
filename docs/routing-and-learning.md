@@ -78,15 +78,15 @@ The provider with the highest total score wins. If several providers tie and `de
 
 ## Current fallback behavior
 
-Automatic fallback is not yet provider-neutral:
+Automatic fallback uses the source-controlled provider registry:
 
-- A missing Claude command falls back to Codex.
-- A missing Codex, Gemini, or Copilot command falls back to Claude.
-- Authentication and usage-limit failures use the same pairing and probe the Claude or Codex fallback account before switching.
-- A missing-command fallback checks executable availability but does not run a sign-in probe.
-- An explicitly selected provider never falls back.
+1. Exclude the selected provider and every provider already ruled out during this run.
+2. Rank the remaining providers by their task-specific routing score.
+3. Break equal scores with the stable registry priority: Claude, Codex, Gemini, then Copilot.
+4. Skip commands that are not available.
+5. After authentication or usage-limit failure, also skip a candidate whose adapter confirms that it is signed out.
 
-Gemini and Copilot are not automatic fallback targets in the current release. Generic fallback across every eligible registered provider is planned in the [routing platform roadmap](routing-platform-roadmap.md).
+Gemini and Copilot do not yet have account probes, so their authentication state is unknown until execution. Missing-command fallback checks executable availability only. An explicitly selected provider never falls back.
 
 ## Complexity and model tier
 

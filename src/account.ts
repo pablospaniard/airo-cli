@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import type { Agent, RouterConfig } from "./types.js";
+import { PROVIDERS } from "./providers.js";
 import { readJson, readTomlValue, runProviderCommand } from "./provider-shell.js";
 
 export interface ProviderAccount {
@@ -142,5 +143,7 @@ export function inspectAccount(
 }
 
 export function inspectAccounts(config: RouterConfig, cwd = process.cwd()): ProviderAccount[] {
-  return [inspectAccount("claude", config, cwd)!, inspectAccount("codex", config, cwd)!];
+  return PROVIDERS.filter((provider) => provider.capabilities.accountInspection)
+    .map((provider) => inspectAccount(provider.id, config, cwd))
+    .filter((account): account is ProviderAccount => Boolean(account));
 }

@@ -1,4 +1,5 @@
 import { inspectAccount } from "./account.js";
+import { AGENTS, providerDefinition } from "./providers.js";
 import { appendHistory, newHistoryId, newRunId, updateHistoryRecord } from "./history.js";
 import { routeTask } from "./router.js";
 import {
@@ -234,6 +235,32 @@ function providerAvailable(agent: Agent, config: RouterConfig, ruledOut: Set<Age
   return !ruledOut.has(agent) && commandExists(config[agent].command);
 }
 
+/** Rank alternatives by evidence for this task, then by the registry's stable preference. */
+function fallbackCandidates(route: RouteResult): Agent[] {
+  return AGENTS.filter((agent) => agent !== route.agent).sort((a, b) => {
+    const scoreDifference = (route.agentScores?.[b] ?? 0) - (route.agentScores?.[a] ?? 0);
+    if (scoreDifference !== 0) return scoreDifference;
+    return providerDefinition(a).fallbackPriority - providerDefinition(b).fallbackPriority;
+  });
+}
+
+function availableFallback(
+  route: RouteResult,
+  config: RouterConfig,
+  ruledOut: Set<Agent>,
+  verifyAccount: boolean,
+): Agent | undefined {
+  for (const candidate of fallbackCandidates(route)) {
+    if (!providerAvailable(candidate, config, ruledOut)) continue;
+    if (verifyAccount && inspectAccount(candidate, config)?.authenticated === false) {
+      ruledOut.add(candidate);
+      continue;
+    }
+    return candidate;
+  }
+  return undefined;
+}
+
 export function fallbackIfMissing(
   route: RouteResult,
   config: RouterConfig,
@@ -241,9 +268,8 @@ export function fallbackIfMissing(
 ): RouteResult {
   if (providerAvailable(route.agent, config, ruledOut)) return route;
   if (route.agentPinned) throw unavailableProviderError(route, config);
-  const fallback: Agent = route.agent === "claude" ? "codex" : "claude";
-  if (!providerAvailable(fallback, config, ruledOut))
-    throw new Error("Neither Claude Code nor Codex CLI is available in PATH");
+  const fallback = availableFallback(route, config, ruledOut, false);
+  if (!fallback) throw new Error("No registered provider CLI is available in PATH");
   const p = config[fallback].models[route.modelTier];
   return {
     ...route,
@@ -267,12 +293,8 @@ export function fallbackProvider(
   ruledOut: Set<Agent> = new Set(),
 ): RouteResult | undefined {
   if (route.agentPinned) return undefined;
-  const fallback: Agent = route.agent === "claude" ? "codex" : "claude";
-  if (!providerAvailable(fallback, config, ruledOut)) return undefined;
-  if (inspectAccount(fallback, config)?.authenticated === false) {
-    ruledOut.add(fallback);
-    return undefined;
-  }
+  const fallback = availableFallback(route, config, ruledOut, true);
+  if (!fallback) return undefined;
   const profile = config[fallback].models[route.modelTier];
   return {
     ...route,

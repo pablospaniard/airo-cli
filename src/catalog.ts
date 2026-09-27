@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import type { Agent, RouterConfig } from "./types.js";
 import { DEFAULT_CONFIG } from "./config.js";
 import { dataRootDir } from "./paths.js";
+import { AGENTS } from "./providers.js";
 import {
   loginShellEnvironment,
   readJson,
@@ -48,7 +49,7 @@ export interface CatalogOptions {
 
 const CACHE_VERSION = 2;
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
-export const AGENTS = ["claude", "codex", "gemini", "copilot"] as const;
+export { AGENTS } from "./providers.js";
 
 interface CacheFile {
   version: number;

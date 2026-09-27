@@ -84,7 +84,7 @@ The repository includes a VS Code extension in [`vscode-extension`](vscode-exten
 
 The extension invokes the AIRO CLI, so `airo-ai-router` must be installed (or the repository must be linked locally) in addition to any provider CLI. Provider CLIs do not need to be installed in a standard location, but every executable must be reachable either through `PATH` or an explicit command path. If VS Code cannot find `airo`, set **AIRO: Command** to the absolute path of the AIRO executable, such as `/Users/me/.local/bin/airo` or `/opt/homebrew/bin/airo`. The same setting is used by the sidebar and the **AIRO: Open Terminal** command.
 
-Current automatic fallback is limited to Claude and Codex. If Claude is unavailable, AIRO tries Codex; if Codex, Gemini, or Copilot is unavailable, AIRO tries Claude. After an authentication or usage-limit failure, it probes the Claude/Codex fallback account before switching. A provider that is merely missing is checked for command availability, not sign-in status. Generic fallback across every registered provider is planned but not yet implemented.
+Automatic fallback considers every registered provider. AIRO ranks alternatives by their score for the current task, then uses the registry's stable Claude → Codex → Gemini → Copilot priority to break ties. Missing-provider fallback checks command availability. After an authentication or usage-limit failure, AIRO also skips a candidate when its adapter can confirm that its account is signed out; Gemini and Copilot currently have no account probe, so their authentication state remains unknown until execution.
 
 A handover is announced the moment it happens: the CLI prints the new provider, and the VS Code sidebar repaints its header chip, phase chip, and activity accent and adds a short note explaining the change. An explicit choice is never substituted: if you pin a provider with `--agent`, `--model`, `/agent`, the VS Code provider setting, or by naming it in the prompt, AIRO uses that provider only and fails with a clear error instead of switching. Run `airo setup` at any time to revisit the model choices.
 
@@ -179,7 +179,7 @@ Copilot hosts models from several vendors, so a `gpt-*` or `claude-*` name alone
 
 ### Provider coverage
 
-Claude Code and Codex CLI have explicit account probes, provider-to-provider automatic fallback, model-specific effort forwarding, and the broadest integration coverage. Gemini CLI and GitHub Copilot CLI currently provide execution, configured or discovered models, progress parsing, permissions, and explicit routing, but they do not yet have account probes, are not automatic fallback targets, and do not receive AIRO effort settings. The roadmap defines the contract they must meet before all providers have equivalent routing behavior.
+Claude Code and Codex CLI have explicit account probes, model-specific effort forwarding, and the broadest integration coverage. Gemini CLI and GitHub Copilot CLI provide execution, configured or discovered models, permissions, explicit routing, and automatic fallback eligibility, but they do not yet have account probes or receive AIRO effort settings. The roadmap defines the remaining contract they must meet before all providers have equivalent behavior.
 
 ### How AIRO detects your access
 

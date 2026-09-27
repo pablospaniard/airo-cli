@@ -71,6 +71,7 @@ import { migrateLegacyPaths } from "./paths.js";
 import { shouldRunInitialSetup, shouldShowWelcome } from "./startup.js";
 import { singleRunPrompt } from "./prompts.js";
 import { inspectAccounts } from "./account.js";
+import { AGENTS } from "./providers.js";
 import { buildUsageReport, nonCachedTokens, processedTokens } from "./usage.js";
 import { firstRunWelcome } from "./welcome.js";
 import pathModule from "node:path";
@@ -347,13 +348,9 @@ async function singleRun(
   if (path) console.log(`${statusIcon("info")} ${brand()} ${ui.gray("config")} ${ui.cyan(path)}`);
   if (args.explain || args.dryRun) {
     console.log(
-      `${statusIcon("info")} ${ui.bold("provider scores")} ${(
-        ["claude", "codex", "gemini", "copilot"] as Agent[]
-      )
-        .map((agent) =>
-          agentColor(agent, `${agent} ${(routed.agentScores?.[agent] ?? 0).toFixed(1)}`),
-        )
-        .join(ui.gray(" / "))}`,
+      `${statusIcon("info")} ${ui.bold("provider scores")} ${AGENTS.map((agent) =>
+        agentColor(agent, `${agent} ${(routed.agentScores?.[agent] ?? 0).toFixed(1)}`),
+      ).join(ui.gray(" / "))}`,
     );
     for (const r of routed.reasons)
       console.log(
@@ -874,7 +871,7 @@ async function main() {
     console.log(divider("Doctor"));
     console.log(`${ui.gray("Config ")} ${path ? ui.cyan(path) : ui.yellow("built-in defaults")}`);
     console.log(`${ui.gray("History")} ${ui.cyan(historyPath(config.history))}`);
-    for (const agent of ["claude", "codex", "gemini", "copilot"] as const) {
+    for (const agent of AGENTS) {
       const command = config[agent].command;
       const exists = commandExists(command);
       console.log(
@@ -922,7 +919,7 @@ async function main() {
     console.log(
       `${ui.bold("Output")}     ${ui.cyan(report.totals.outputTokens.toLocaleString())} ${ui.gray("tokens (included above)")}`,
     );
-    for (const agent of ["claude", "codex", "gemini", "copilot"] as const) {
+    for (const agent of AGENTS) {
       console.log(
         `${agentColor(agent, agent.padEnd(6))} ${ui.gray("default model")} ${report.defaults[agent] ? ui.cyan(report.defaults[agent]!) : ui.yellow("not detected")}`,
       );
