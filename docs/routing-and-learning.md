@@ -90,6 +90,8 @@ Automatic fallback uses the source-controlled provider registry:
 
 Gemini and Copilot do not yet have account probes, so their authentication state is unknown until execution. Missing-command fallback checks executable availability only. An explicitly selected provider never falls back.
 
+Every registered provider has an explicit runtime adapter for command construction and progress parsing. The adapter identifies the task-prompt argument so command diagnostics can redact task text instead of assuming that every provider places the prompt last.
+
 ## Complexity and model tier
 
 Complexity begins at `2` and is clamped to the range `1` through `5`.

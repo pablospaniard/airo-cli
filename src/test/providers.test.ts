@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { DEFAULT_CONFIG } from "../config.js";
 import {
   AGENTS,
   PROVIDERS,
@@ -7,6 +8,13 @@ import {
   providerDefinition,
   routingCapabilityScore,
 } from "../providers.js";
+import {
+  PROVIDER_RUNTIME_ADAPTERS,
+  buildProviderInvocation,
+  diagnosticInvocationArgs,
+  providerRuntimeAdapter,
+} from "../runner.js";
+import { routeTask } from "../router.js";
 
 test("defines every supported provider exactly once", () => {
   assert.deepEqual(AGENTS, ["claude", "codex", "gemini", "copilot"]);
@@ -26,6 +34,40 @@ test("records provider capabilities used by generic policy", () => {
   assert.equal(effectiveEffort("codex", "xhigh"), "xhigh");
   assert.equal(effectiveEffort("gemini", "high"), "auto");
   assert.equal(effectiveEffort("copilot", "high"), "auto");
+});
+
+test("requires every registered provider to have config and a runtime adapter", () => {
+  assert.deepEqual(Object.keys(PROVIDER_RUNTIME_ADAPTERS), [...AGENTS]);
+
+  for (const provider of PROVIDERS) {
+    const configured = DEFAULT_CONFIG[provider.id];
+    const adapter = providerRuntimeAdapter(provider.id);
+    assert.ok(configured.command);
+    assert.deepEqual(Object.keys(configured.models), ["fast", "balanced", "deep"]);
+    assert.equal(typeof adapter.buildInvocation, "function");
+    assert.equal(typeof adapter.parseProgress, "function");
+  }
+});
+
+test("runtime adapters identify the prompt argument for safe diagnostics", () => {
+  const prompt = "private task text";
+  for (const agent of AGENTS) {
+    const route = routeTask("neutral routing task", DEFAULT_CONFIG);
+    route.agent = agent;
+    route.model = DEFAULT_CONFIG[agent].models.balanced.model;
+    const invocation = buildProviderInvocation(route, prompt, DEFAULT_CONFIG, {
+      headless: true,
+      structuredProgress: true,
+    });
+
+    assert.equal(invocation.args[invocation.promptArgIndex], prompt);
+    assert.equal(invocation.args.filter((arg) => arg === prompt).length, 1);
+    assert.equal(diagnosticInvocationArgs(invocation).includes(prompt), false);
+    assert.equal(
+      diagnosticInvocationArgs(invocation)[invocation.promptArgIndex],
+      `<prompt:${prompt.length} chars>`,
+    );
+  }
 });
 
 test("scores semantic task features through provider capability profiles", () => {
