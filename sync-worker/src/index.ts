@@ -3,6 +3,7 @@ const MAX_BODY_BYTES = 1_048_576;
 const MAX_EVENTS = 100;
 const ACCESS_TTL_SECONDS = 15 * 60;
 const REFRESH_TTL_SECONDS = 30 * 24 * 60 * 60;
+const REVOKED_SESSION_RETENTION_SECONDS = 30 * 24 * 60 * 60;
 
 interface AuthContext {
   sessionId: string;
@@ -811,6 +812,15 @@ async function route(request: Request, env: Env): Promise<Response> {
   return error(404, "not_found", "Endpoint not found.");
 }
 
+export async function cleanupExpiredAuth(env: Env, time = now()): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM auth_challenges WHERE expires_at < ?").bind(time),
+    env.DB.prepare(
+      "DELETE FROM sessions WHERE expires_at < ? OR (revoked_at IS NOT NULL AND revoked_at < ?)",
+    ).bind(time, time - REVOKED_SESSION_RETENTION_SECONDS),
+  ]);
+}
+
 export default {
   async fetch(request, env): Promise<Response> {
     try {
@@ -826,5 +836,8 @@ export default {
       );
       return error(500, "internal_error", "Request failed.");
     }
+  },
+  async scheduled(_controller, env): Promise<void> {
+    await cleanupExpiredAuth(env);
   },
 } satisfies ExportedHandler<Env>;

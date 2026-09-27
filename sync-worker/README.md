@@ -40,6 +40,7 @@ The tests run in Cloudflare's Workers runtime integration with an isolated local
 
 - Access tokens expire after 15 minutes; refresh tokens expire after 30 days and rotate as a family.
 - Reuse of a rotated refresh token revokes the remaining family.
+- A daily scheduled cleanup removes expired challenges and sessions; revoked session records are retained for 30 days. Encrypted user data and device audit entries are not age-deleted.
 - Devices can be listed and individually revoked.
 - Retried GitHub exchanges revoke prior token families for that device before issuing replacements.
 - Requests are size-bounded, validated, and rate-limited before storage.

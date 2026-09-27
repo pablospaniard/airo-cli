@@ -1,5 +1,6 @@
 import { env, SELF } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
+import { cleanupExpiredAuth } from "../src/index";
 
 const accessToken = "test-access-token-that-is-long-enough-for-validation";
 
@@ -196,5 +197,37 @@ describe("sync Worker", () => {
       current: false,
       revokedAt: expect.any(Number),
     });
+  });
+
+  it("cleans expired authentication artifacts without deleting device audit entries", async () => {
+    const timestamp = Math.floor(Date.now() / 1000);
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO auth_challenges(id_hash, device_id, device_name, github_device_code, expires_at, interval_seconds, next_poll_at) VALUES(?, ?, ?, ?, ?, ?, ?)",
+      ).bind("expired-challenge", "device-test", "test", "expired-code", timestamp - 1, 5, 0),
+      env.DB.prepare(
+        "INSERT INTO sessions(id, family_id, user_id, device_id, token_hash, kind, expires_at, created_at) VALUES(?, ?, ?, ?, ?, 'access', ?, ?)",
+      ).bind(
+        "expired-session",
+        "expired-family",
+        "user-test",
+        "device-test",
+        await hash("expired-access-token-that-is-long-enough"),
+        timestamp - 1,
+        timestamp - 100,
+      ),
+    ]);
+    await cleanupExpiredAuth(env, timestamp);
+    expect(
+      await env.DB.prepare("SELECT id_hash FROM auth_challenges WHERE id_hash = ?")
+        .bind("expired-challenge")
+        .first(),
+    ).toBeNull();
+    expect(
+      await env.DB.prepare("SELECT id FROM sessions WHERE id = ?").bind("expired-session").first(),
+    ).toBeNull();
+    expect(
+      await env.DB.prepare("SELECT id FROM devices WHERE id = ?").bind("device-test").first(),
+    ).not.toBeNull();
   });
 });
