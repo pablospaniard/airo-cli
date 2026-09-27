@@ -23,6 +23,7 @@ test("CLI keeps sync disabled by default and requires an explicit service URL", 
     assert.equal(status.status, 0, status.stderr);
     assert.match(status.stdout, /Status disabled/);
     assert.match(status.stdout, /Account signed out/);
+    assert.doesNotMatch(status.stdout, /Server/);
 
     const login = spawnSync(
       process.execPath,

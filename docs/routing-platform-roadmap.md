@@ -151,7 +151,7 @@ Repositories without a remote receive a random project ID. Linking another check
 
 ## Optional Cloudflare sync
 
-Cloud sync is an opt-in development-branch convenience for migration and multi-device continuity. The development service is deployed at `https://airo-sync.pablospaniard.workers.dev`; the client remains unreleased on npm. Local data remains authoritative, routing continues offline, and sync is invoked explicitly rather than as part of a provider run, so failure never changes a task's exit status.
+Cloud sync is an opt-in development-branch convenience for migration and multi-device continuity. The client uses an explicitly configured sync service URL and remains unreleased on npm. Local data remains authoritative, routing continues offline, and sync is invoked explicitly rather than as part of a provider run, so failure never changes a task's exit status.
 
 The implemented platform is:
 

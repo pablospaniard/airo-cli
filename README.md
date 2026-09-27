@@ -367,7 +367,7 @@ Repository-scoped learning uses a stable repository ID instead of requiring the 
 Milestone 5 adds an optional Cloudflare Worker and D1 service for moving learning evidence and safe routing settings between machines. Core routing stays account-free and offline-capable. Nothing uploads during `login` or `enable`; the user must explicitly run `airo sync now`.
 
 ```bash
-airo sync login --server https://airo-sync.pablospaniard.workers.dev
+airo sync login --server https://sync.example.com
 airo sync enable --passphrase "a long recovery passphrase"
 airo sync now
 airo sync status
