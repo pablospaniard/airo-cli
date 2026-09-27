@@ -7,6 +7,8 @@ const JSON_HEADERS = {
 };
 const MAX_BODY_BYTES = 1_048_576;
 const MAX_EVENTS = 100;
+const MAX_PULL_EVENTS = 10;
+const MAX_RESPONSE_BYTES = 900_000;
 const ACCESS_TTL_SECONDS = 15 * 60;
 const REFRESH_TTL_SECONDS = 30 * 24 * 60 * 60;
 const REVOKED_SESSION_RETENTION_SECONDS = 30 * 24 * 60 * 60;
@@ -264,10 +266,61 @@ async function refreshSession(request: Request, env: Env): Promise<Response> {
     return error(401, "invalid_refresh", "Refresh token expired or revoked.");
   const limited = await rateLimit(env.AUTH_RATE_LIMITER, `refresh:${row.user_id}`);
   if (limited) return limited;
-  await env.DB.prepare("UPDATE sessions SET revoked_at = ? WHERE family_id = ?")
-    .bind(now(), row.family_id)
-    .run();
-  return json(await issueTokens(env, row.user_id, row.device_id, row.family_id));
+  const rotationId = crypto.randomUUID();
+  const accessToken = randomToken();
+  const refreshToken = randomToken();
+  const createdAt = now();
+  const results = await env.DB.batch([
+    env.DB.prepare(
+      "UPDATE sessions SET revoked_at = ?, rotation_id = ? WHERE id = ? AND revoked_at IS NULL",
+    ).bind(createdAt, rotationId, row.id),
+    env.DB.prepare(
+      "UPDATE sessions SET revoked_at = ? WHERE family_id = ? AND id != ? AND revoked_at IS NULL",
+    ).bind(createdAt, row.family_id, row.id),
+    env.DB.prepare(
+      `INSERT INTO sessions(id, family_id, user_id, device_id, token_hash, kind, expires_at, created_at)
+       SELECT ?, ?, ?, ?, ?, 'access', ?, ?
+        WHERE EXISTS (SELECT 1 FROM sessions WHERE id = ? AND rotation_id = ?)`,
+    ).bind(
+      crypto.randomUUID(),
+      row.family_id,
+      row.user_id,
+      row.device_id,
+      await sha256(accessToken),
+      createdAt + ACCESS_TTL_SECONDS,
+      createdAt,
+      row.id,
+      rotationId,
+    ),
+    env.DB.prepare(
+      `INSERT INTO sessions(id, family_id, user_id, device_id, token_hash, kind, expires_at, created_at)
+       SELECT ?, ?, ?, ?, ?, 'refresh', ?, ?
+        WHERE EXISTS (SELECT 1 FROM sessions WHERE id = ? AND rotation_id = ?)`,
+    ).bind(
+      crypto.randomUUID(),
+      row.family_id,
+      row.user_id,
+      row.device_id,
+      await sha256(refreshToken),
+      createdAt + REFRESH_TTL_SECONDS,
+      createdAt,
+      row.id,
+      rotationId,
+    ),
+  ]);
+  if (results[0].meta.changes !== 1) {
+    await env.DB.prepare(
+      "UPDATE sessions SET revoked_at = ? WHERE family_id = ? AND revoked_at IS NULL",
+    )
+      .bind(now(), row.family_id)
+      .run();
+    return error(
+      401,
+      "refresh_reused",
+      "Refresh token reuse detected; device sessions were revoked.",
+    );
+  }
+  return json({ accessToken, refreshToken, expiresIn: ACCESS_TTL_SECONDS });
 }
 
 async function exchangeGithubToken(request: Request, env: Env): Promise<Response> {
@@ -412,11 +465,12 @@ async function pullEvents(url: URL, env: Env, auth: AuthContext): Promise<Respon
   const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit") ?? 100)));
   if (!Number.isInteger(cursor) || !Number.isInteger(limit))
     return error(400, "invalid_cursor", "cursor and limit must be integers.");
+  const queryLimit = Math.min(limit, MAX_PULL_EVENTS);
   const result = await env.DB.prepare(
     `SELECT cursor, event_id, version, device_id, kind, repository_id, created_at, envelope
        FROM sync_events WHERE user_id = ? AND cursor > ? ORDER BY cursor LIMIT ?`,
   )
-    .bind(auth.userId, cursor, limit)
+    .bind(auth.userId, cursor, queryLimit)
     .all<{
       cursor: number;
       event_id: string;
@@ -427,20 +481,40 @@ async function pullEvents(url: URL, env: Env, auth: AuthContext): Promise<Respon
       created_at: number;
       envelope: string;
     }>();
-  const events = result.results.map((row) => ({
-    cursor: row.cursor,
-    id: row.event_id,
-    version: row.version,
-    deviceId: row.device_id,
-    kind: row.kind,
-    repositoryId: row.repository_id ?? undefined,
-    createdAt: row.created_at,
-    envelope: JSON.parse(row.envelope),
-  }));
+  const events: Array<{
+    cursor: number;
+    id: string;
+    version: string;
+    deviceId: string;
+    kind: EventInput["kind"];
+    repositoryId?: string;
+    createdAt: number;
+    envelope: EncryptedEnvelope;
+  }> = [];
+  for (const row of result.results) {
+    const event = {
+      cursor: row.cursor,
+      id: row.event_id,
+      version: row.version,
+      deviceId: row.device_id,
+      kind: row.kind,
+      repositoryId: row.repository_id ?? undefined,
+      createdAt: row.created_at,
+      envelope: JSON.parse(row.envelope) as EncryptedEnvelope,
+    };
+    const candidate = [...events, event];
+    if (
+      events.length &&
+      new TextEncoder().encode(JSON.stringify({ events: candidate })).byteLength >
+        MAX_RESPONSE_BYTES
+    )
+      break;
+    events.push(event);
+  }
   return json({
     events,
     cursor: events.at(-1)?.cursor ?? cursor,
-    hasMore: events.length === limit,
+    hasMore: events.length < result.results.length || result.results.length === queryLimit,
   });
 }
 
@@ -454,24 +528,35 @@ async function putSetting(request: Request, env: Env, auth: AuthContext): Promis
     !validEnvelope(body.envelope)
   )
     return error(400, "invalid_setting", "Invalid setting update.");
-  const existing = await env.DB.prepare(
-    "SELECT revision FROM sync_settings WHERE user_id = ? AND key = ?",
-  )
-    .bind(auth.userId, body.key)
-    .first<{ revision: number }>();
-  const revision = existing?.revision ?? 0;
-  if (body.expectedRevision !== revision)
+  const expectedRevision = body.expectedRevision as number;
+  const next = expectedRevision + 1;
+  const serialized = JSON.stringify(body.envelope);
+  const saved =
+    expectedRevision === 0
+      ? await env.DB.prepare(
+          "INSERT OR IGNORE INTO sync_settings(user_id, key, revision, envelope, updated_at) VALUES(?, ?, 1, ?, ?)",
+        )
+          .bind(auth.userId, body.key, serialized, now())
+          .run()
+      : await env.DB.prepare(
+          "UPDATE sync_settings SET revision = ?, envelope = ?, updated_at = ? WHERE user_id = ? AND key = ? AND revision = ?",
+        )
+          .bind(next, serialized, now(), auth.userId, body.key, expectedRevision)
+          .run();
+  if (saved.meta.changes !== 1) {
+    const current = await env.DB.prepare(
+      "SELECT revision FROM sync_settings WHERE user_id = ? AND key = ?",
+    )
+      .bind(auth.userId, body.key)
+      .first<{ revision: number }>();
     return json(
-      { error: { code: "revision_conflict", message: "Setting changed remotely." }, revision },
+      {
+        error: { code: "revision_conflict", message: "Setting changed remotely." },
+        revision: current?.revision ?? 0,
+      },
       409,
     );
-  const next = revision + 1;
-  await env.DB.prepare(
-    `INSERT INTO sync_settings(user_id, key, revision, envelope, updated_at) VALUES(?, ?, ?, ?, ?)
-     ON CONFLICT(user_id, key) DO UPDATE SET revision = excluded.revision, envelope = excluded.envelope, updated_at = excluded.updated_at`,
-  )
-    .bind(auth.userId, body.key, next, JSON.stringify(body.envelope), now())
-    .run();
+  }
   return json({ key: body.key, revision: next });
 }
 

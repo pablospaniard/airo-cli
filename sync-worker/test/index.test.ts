@@ -164,6 +164,30 @@ describe("sync Worker", () => {
     expect(body.cursor).toBeGreaterThan(0);
   });
 
+  it("bounds pull pages by serialized bytes as well as event count", async () => {
+    const envelope = JSON.stringify({
+      version: 1,
+      algorithm: "aes-256-gcm",
+      nonce: "abcdefghijklmnop",
+      ciphertext: "x".repeat(450_000),
+      tag: "abcdefghijklmnop",
+    });
+    await env.DB.batch(
+      ["large-event-one", "large-event-two", "large-event-three"].map((id, index) =>
+        env.DB.prepare(
+          `INSERT INTO sync_events(user_id, event_id, version, device_id, kind, created_at, envelope)
+           VALUES(?, ?, ?, ?, 'history', ?, ?)`,
+        ).bind("user-test", id, String(index).repeat(43), "device-test", index, envelope),
+      ),
+    );
+    const response = await authorized("/v1/sync/pull?cursor=0&limit=100");
+    const text = await response.text();
+    const body = JSON.parse(text) as { events: unknown[]; hasMore: boolean };
+    expect(new TextEncoder().encode(text).byteLength).toBeLessThan(900_000);
+    expect(body.events).toHaveLength(1);
+    expect(body.hasMore).toBe(true);
+  });
+
   it("uses optimistic revisions and never replaces an account key", async () => {
     const envelope = { version: 1, opaque: "wrapped" };
     expect(
@@ -194,6 +218,32 @@ describe("sync Worker", () => {
         })
       ).status,
     ).toBe(409);
+    const competingUpdates = await Promise.all([
+      authorized("/v1/settings", {
+        method: "PUT",
+        body: JSON.stringify({ key: "routing", expectedRevision: 1, envelope: setting }),
+      }),
+      authorized("/v1/settings", {
+        method: "PUT",
+        body: JSON.stringify({ key: "routing", expectedRevision: 1, envelope: setting }),
+      }),
+    ]);
+    expect(competingUpdates.map((response) => response.status).sort()).toEqual([200, 409]);
+
+    await env.DB.prepare("DELETE FROM sync_settings WHERE user_id = ? AND key = ?")
+      .bind("user-test", "routing")
+      .run();
+    const concurrent = await Promise.all([
+      authorized("/v1/settings", {
+        method: "PUT",
+        body: JSON.stringify({ key: "routing", expectedRevision: 0, envelope: setting }),
+      }),
+      authorized("/v1/settings", {
+        method: "PUT",
+        body: JSON.stringify({ key: "routing", expectedRevision: 0, envelope: setting }),
+      }),
+    ]);
+    expect(concurrent.map((response) => response.status).sort()).toEqual([200, 409]);
   });
 
   it("exports opaque account data and deletes it with explicit confirmation", async () => {
@@ -258,6 +308,41 @@ describe("sync Worker", () => {
       (
         await SELF.fetch("https://example.com/v1/sync/status", {
           headers: { Authorization: `Bearer ${replacements.accessToken}` },
+        })
+      ).status,
+    ).toBe(401);
+  });
+
+  it("allows only one concurrent refresh and revokes its replacements on reuse", async () => {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const refreshToken = "c".repeat(43);
+    await env.DB.prepare(
+      "INSERT INTO sessions(id, family_id, user_id, device_id, token_hash, kind, expires_at, created_at) VALUES(?, ?, ?, ?, ?, 'refresh', ?, ?)",
+    )
+      .bind(
+        "refresh-concurrent",
+        "family-concurrent",
+        "user-test",
+        "device-test",
+        await hash(refreshToken),
+        timestamp + 3600,
+        timestamp,
+      )
+      .run();
+    const request = () =>
+      SELF.fetch("https://example.com/v1/auth/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refreshToken }),
+      });
+    const responses = await Promise.all([request(), request()]);
+    expect(responses.map((response) => response.status).sort()).toEqual([200, 401]);
+    const successful = responses.find((response) => response.status === 200)!;
+    const replacement = await successful.json<{ accessToken: string }>();
+    expect(
+      (
+        await SELF.fetch("https://example.com/v1/sync/status", {
+          headers: { Authorization: `Bearer ${replacement.accessToken}` },
         })
       ).status,
     ).toBe(401);

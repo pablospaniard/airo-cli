@@ -8,7 +8,7 @@ import { loadGlobalConfig, writeGlobalConfig } from "./config.js";
 import { dataRootDir } from "./paths.js";
 import { feedbackPath, historyPath, readFeedback, readHistory } from "./history.js";
 import { jevFeedbackPath, readJevFeedback } from "./jev-feedback.js";
-import type { FeedbackRecord, HistoryRecord, RouterConfig } from "./types.js";
+import type { RouterConfig } from "./types.js";
 import {
   createAccountKey,
   decryptSyncPayload,
@@ -27,6 +27,9 @@ interface Credentials {
   accountKey?: string;
 }
 
+type SyncDataKind = "history" | "feedback" | "jev-feedback";
+type SyncRecordManifest = Partial<Record<SyncDataKind, Record<string, string>>>;
+
 interface SyncState {
   version: 1;
   server: string;
@@ -37,6 +40,9 @@ interface SyncState {
   settingsRevision?: number;
   settingsDigest?: string;
   lastSyncAt?: string;
+  credentialStore?: "system" | "file";
+  syncIdentity?: { server: string; userId: string };
+  records?: SyncRecordManifest;
 }
 
 interface SyncEvent {
@@ -244,6 +250,22 @@ export function credentialStore(allowFile = false, root = dataRootDir()): Creden
   );
 }
 
+function credentialStoreForState(
+  state: SyncState | undefined,
+  allowFile = false,
+  root = dataRootDir(),
+): CredentialStore {
+  return credentialStore(allowFile || state?.credentialStore === "file", root);
+}
+
+function resetSyncProgress(state: SyncState): void {
+  state.cursor = 0;
+  delete state.settingsRevision;
+  delete state.settingsDigest;
+  delete state.lastSyncAt;
+  delete state.records;
+}
+
 function digest(value: unknown): string {
   return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
@@ -383,6 +405,10 @@ export async function syncLogin(options: {
 }): Promise<{ login: string; credentialStore: string }> {
   const root = dataRootDir();
   const existing = readState(root);
+  const previousServer = existing?.server;
+  const useCredentialFile = Boolean(
+    options.allowCredentialFile || existing?.credentialStore === "file",
+  );
   const server = options.server ?? process.env.AIRO_SYNC_URL ?? existing?.server;
   if (!server)
     throw new Error("Set AIRO_SYNC_URL or pass --server with the deployed AIRO sync Worker URL.");
@@ -393,8 +419,11 @@ export async function syncLogin(options: {
     enabled: false,
     cursor: 0,
   };
-  if (options.server) state.server = options.server.replace(/\/$/, "");
-  const store = credentialStore(options.allowCredentialFile, root);
+  state.server = server.replace(/\/$/, "");
+  const previousIdentity =
+    state.syncIdentity ??
+    (state.user ? { server: previousServer ?? state.server, userId: state.user.id } : undefined);
+  const store = credentialStore(useCredentialFile, root);
   const authConfig = await api<{ provider: "github"; clientId: string }>(state, "/v1/auth/config");
   const githubResponse = await retryTransientFetch(() =>
     fetch("https://github.com/login/device/code", {
@@ -479,6 +508,15 @@ export async function syncLogin(options: {
       }),
     });
     store.save({ accessToken: authorized.accessToken, refreshToken: authorized.refreshToken });
+    const identity = { server: state.server, userId: authorized.user.id };
+    if (
+      !previousIdentity ||
+      previousIdentity.server !== identity.server ||
+      previousIdentity.userId !== identity.userId
+    )
+      resetSyncProgress(state);
+    state.credentialStore = useCredentialFile ? "file" : "system";
+    state.syncIdentity = identity;
     state.user = authorized.user;
     writeState(state, root);
     return { login: authorized.user.login, credentialStore: store.description };
@@ -489,7 +527,7 @@ export async function syncLogin(options: {
 export async function enableSync(passphrase: string, allowFile = false): Promise<void> {
   const state = readState();
   if (!state?.user) throw new Error("Run `airo sync login` first.");
-  const store = credentialStore(allowFile);
+  const store = credentialStoreForState(state, allowFile);
   const credentials = store.load();
   if (!credentials) throw new Error("Sync credentials are missing. Run `airo sync login` again.");
   let key: Buffer;
@@ -527,32 +565,72 @@ function eventContext(event: Pick<SyncEvent, "id" | "kind">): string {
   return `event:${event.kind}:${event.id}`;
 }
 
-function localEvents(config: RouterConfig, key: Buffer): SyncEvent[] {
+type LocalSyncRecord = {
+  kind: SyncDataKind;
+  record: { id: string; timestamp?: string; repositoryId?: string };
+};
+
+function localRecords(config: RouterConfig): LocalSyncRecord[] {
+  return [
+    ...readHistory(config.history).map((record) => ({ kind: "history" as const, record })),
+    ...readFeedback(config.history).map((record) => ({ kind: "feedback" as const, record })),
+    ...readJevFeedback(config.history).map((record) => ({
+      kind: "jev-feedback" as const,
+      record,
+    })),
+  ];
+}
+
+function recordVersion(key: Buffer, record: unknown): string {
+  return crypto.createHmac("sha256", key).update(JSON.stringify(record)).digest("base64url");
+}
+
+function recordManifest(records: LocalSyncRecord[], key: Buffer): SyncRecordManifest {
+  const manifest: SyncRecordManifest = { history: {}, feedback: {}, "jev-feedback": {} };
+  for (const { kind, record } of records) manifest[kind]![record.id] = recordVersion(key, record);
+  return manifest;
+}
+
+function localEvents(
+  records: LocalSyncRecord[],
+  key: Buffer,
+  previous: SyncRecordManifest = {},
+): SyncEvent[] {
   const make = (
-    kind: SyncEvent["kind"],
+    kind: SyncDataKind,
     record: { id: string; timestamp?: string; repositoryId?: string },
   ): SyncEvent => {
-    const serialized = JSON.stringify(record);
     return {
       id: record.id,
       // A keyed content version keeps retries idempotent without exposing a
       // guessable plaintext digest. Changed records become new cursor entries.
-      version: crypto.createHmac("sha256", key).update(serialized).digest("base64url"),
+      version: recordVersion(key, record),
       kind,
       repositoryId: record.repositoryId ? syncRepositoryId(key, record.repositoryId) : undefined,
       createdAt: Math.floor(new Date(record.timestamp ?? 0).getTime() / 1000) || 0,
       envelope: encryptSyncPayload(key, record, `event:${kind}:${record.id}`),
     };
   };
-  return [
-    ...readHistory(config.history).map((record) => make("history", record)),
-    ...readFeedback(config.history).map((record) => make("feedback", record)),
-    ...readJevFeedback(config.history).map((record) => make("jev-feedback", record)),
-  ];
+  const current = recordManifest(records, key);
+  const events = records.map(({ kind, record }) => make(kind, record));
+  for (const kind of ["history", "feedback", "jev-feedback"] as const) {
+    for (const [id, deletedVersion] of Object.entries(previous[kind] ?? {})) {
+      if (current[kind]?.[id]) continue;
+      const tombstone = { id, targetKind: kind, deletedVersion };
+      events.push({
+        id,
+        version: recordVersion(key, tombstone),
+        kind: "tombstone",
+        createdAt: Math.floor(Date.now() / 1000),
+        envelope: encryptSyncPayload(key, tombstone, `event:tombstone:${id}`),
+      });
+    }
+  }
+  return events;
 }
 
-function mergeJsonLines<T extends { id: string }>(file: string, incoming: T[]): number {
-  const current: T[] = fs.existsSync(file)
+function readJsonLines<T extends { id: string }>(file: string): Map<string, T> {
+  const records: T[] = fs.existsSync(file)
     ? fs
         .readFileSync(file, "utf8")
         .split(/\r?\n/)
@@ -565,26 +643,87 @@ function mergeJsonLines<T extends { id: string }>(file: string, incoming: T[]): 
           }
         })
     : [];
-  const byId = new Map(current.map((record) => [record.id, record]));
+  return new Map(records.map((record) => [record.id, record]));
+}
+
+function writeJsonLines(file: string, records: Map<string, { id: string }>): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const temporary = `${file}.${process.pid}.tmp`;
+  const serialized = [...records.values()].map((record) => JSON.stringify(record)).join("\n");
+  fs.writeFileSync(temporary, serialized ? `${serialized}\n` : "", { mode: 0o600 });
+  fs.renameSync(temporary, file);
+}
+
+function syncFile(config: RouterConfig, kind: SyncDataKind): string {
+  if (kind === "history") return historyPath(config.history);
+  if (kind === "feedback") return feedbackPath(config.history);
+  return jevFeedbackPath(config.history);
+}
+
+function applyEventPage(config: RouterConfig, key: Buffer, events: SyncEvent[]): number {
+  const maps = new Map<SyncDataKind, Map<string, { id: string }>>();
+  const changedKinds = new Set<SyncDataKind>();
+  const getRecords = (kind: SyncDataKind) => {
+    let records = maps.get(kind);
+    if (!records) {
+      records = readJsonLines(syncFile(config, kind));
+      maps.set(kind, records);
+    }
+    return records;
+  };
   let changed = 0;
-  for (const record of incoming) {
-    const existing = byId.get(record.id);
+  for (const event of events) {
+    if (event.kind === "tombstone") {
+      const tombstone = decryptSyncPayload<{ id: string; targetKind: SyncDataKind }>(
+        key,
+        event.envelope,
+        eventContext(event),
+      );
+      if (
+        tombstone.id !== event.id ||
+        !["history", "feedback", "jev-feedback"].includes(tombstone.targetKind)
+      )
+        throw new Error(`Sync tombstone ${event.id} failed validation.`);
+      if (getRecords(tombstone.targetKind).delete(event.id)) {
+        changed++;
+        changedKinds.add(tombstone.targetKind);
+      }
+      continue;
+    }
+    const record = decryptSyncPayload<{ id: string }>(key, event.envelope, eventContext(event));
+    if (record.id !== event.id)
+      throw new Error(`Sync event ${event.id} failed identity validation.`);
+    const records = getRecords(event.kind);
+    const existing = records.get(record.id);
     if (!existing || JSON.stringify(existing) !== JSON.stringify(record)) {
-      byId.set(record.id, record);
+      records.set(record.id, record);
       changed++;
+      changedKinds.add(event.kind);
     }
   }
-  if (changed) {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const temporary = `${file}.${process.pid}.tmp`;
-    fs.writeFileSync(
-      temporary,
-      [...byId.values()].map((record) => JSON.stringify(record)).join("\n") + "\n",
-      { mode: 0o600 },
-    );
-    fs.renameSync(temporary, file);
-  }
+  for (const kind of changedKinds) writeJsonLines(syncFile(config, kind), getRecords(kind));
   return changed;
+}
+
+function eventBatches(events: SyncEvent[], maxBytes = 900_000, maxEvents = 100): string[] {
+  const bodies: string[] = [];
+  let batch: SyncEvent[] = [];
+  for (const event of events) {
+    const candidate = [...batch, event];
+    const body = JSON.stringify({ events: candidate });
+    if (candidate.length <= maxEvents && Buffer.byteLength(body) <= maxBytes) {
+      batch = candidate;
+      continue;
+    }
+    if (!batch.length) throw new Error(`Sync event ${event.id} exceeds the request size limit.`);
+    bodies.push(JSON.stringify({ events: batch }));
+    batch = [event];
+    const single = JSON.stringify({ events: batch });
+    if (Buffer.byteLength(single) > maxBytes)
+      throw new Error(`Sync event ${event.id} exceeds the request size limit.`);
+  }
+  if (batch.length) bodies.push(JSON.stringify({ events: batch }));
+  return bodies;
 }
 
 export async function syncNow(
@@ -593,27 +732,23 @@ export async function syncNow(
 ): Promise<{ pushed: number; pulled: number }> {
   const state = readState();
   if (!state?.enabled) throw new Error("Sync is disabled. Run `airo sync enable`.");
-  const store = credentialStore(allowFile);
+  const store = credentialStoreForState(state, allowFile);
   const credentials = store.load();
   if (!credentials?.accountKey)
     throw new Error("The local account key is missing. Run `airo sync enable`.");
   const key = Buffer.from(credentials.accountKey, "base64url");
   const globalConfig = loadGlobalConfig().config;
-  const events = localEvents(config, key);
+  const records = localRecords(config);
+  const events = localEvents(records, key, state.records);
   let pushed = 0;
-  for (let index = 0; index < events.length; index += 100) {
+  for (const body of eventBatches(events)) {
     const result = await authenticated<{ accepted: number }>(state, store, "/v1/sync/push", {
       method: "POST",
-      body: JSON.stringify({ events: events.slice(index, index + 100) }),
+      body,
     });
     pushed += result.accepted;
   }
-  const incoming: Record<SyncEvent["kind"], Array<{ id: string }>> = {
-    history: [],
-    feedback: [],
-    "jev-feedback": [],
-    tombstone: [],
-  };
+  let pulled = 0;
   let hasMore = true;
   while (hasMore) {
     const result = await authenticated<{ events: SyncEvent[]; cursor: number; hasMore: boolean }>(
@@ -621,20 +756,12 @@ export async function syncNow(
       store,
       `/v1/sync/pull?cursor=${state.cursor}&limit=100`,
     );
-    for (const event of result.events) {
-      if (event.kind === "tombstone") continue;
-      const record = decryptSyncPayload<{ id: string }>(key, event.envelope, eventContext(event));
-      if (record.id !== event.id)
-        throw new Error(`Sync event ${event.id} failed identity validation.`);
-      incoming[event.kind].push(record);
-    }
+    pulled += applyEventPage(config, key, result.events);
     state.cursor = result.cursor;
+    state.records = recordManifest(localRecords(config), key);
+    writeState(state);
     hasMore = result.hasMore;
   }
-  let pulled = 0;
-  pulled += mergeJsonLines(historyPath(config.history), incoming.history as HistoryRecord[]);
-  pulled += mergeJsonLines(feedbackPath(config.history), incoming.feedback as FeedbackRecord[]);
-  pulled += mergeJsonLines(jevFeedbackPath(config.history), incoming["jev-feedback"]);
 
   // Repository overrides affect the current run and its local history, but
   // account-wide cloud settings always originate from the global config.
@@ -687,6 +814,7 @@ export async function syncNow(
       state.settingsDigest = remoteDigest;
     }
   }
+  state.records = recordManifest(localRecords(config), key);
   state.lastSyncAt = new Date().toISOString();
   writeState(state);
   return { pushed, pulled };
@@ -699,7 +827,7 @@ export function syncStatus(allowFile = false): {
 } {
   const state = readState();
   try {
-    const store = credentialStore(allowFile);
+    const store = credentialStoreForState(state, allowFile);
     return { state, credentials: Boolean(store.load()), credentialStore: store.description };
   } catch {
     return { state, credentials: false };
@@ -726,7 +854,7 @@ export async function syncDevices(allowFile = false): Promise<
         revokedAt: number | null;
         current: boolean;
       }>;
-    }>(state, credentialStore(allowFile), "/v1/devices")
+    }>(state, credentialStoreForState(state, allowFile), "/v1/devices")
   ).devices;
 }
 
@@ -734,7 +862,7 @@ export async function syncRevokeDevice(deviceId: string, allowFile = false): Pro
   if (!/^[a-zA-Z0-9:_-]{8,128}$/.test(deviceId)) throw new Error("Invalid device ID.");
   const state = readState();
   if (!state) throw new Error("Sync is not configured.");
-  await authenticated(state, credentialStore(allowFile), `/v1/devices/${deviceId}`, {
+  await authenticated(state, credentialStoreForState(state, allowFile), `/v1/devices/${deviceId}`, {
     method: "DELETE",
   });
 }
@@ -750,7 +878,7 @@ export async function exportCloudData(
     throw new Error(`${file} already exists. Use --force to replace it.`);
   const data = await authenticated<Record<string, unknown>>(
     state,
-    credentialStore(options.allowFile),
+    credentialStoreForState(state, options.allowFile),
     "/v1/account/export",
   );
   restrictedWrite(file, data);
@@ -760,7 +888,7 @@ export async function exportCloudData(
 export async function syncLogout(allowFile = false): Promise<void> {
   const state = readState();
   if (!state) return;
-  const store = credentialStore(allowFile);
+  const store = credentialStoreForState(state, allowFile);
   await authenticated(state, store, "/v1/auth/logout", { method: "POST" }).catch(() => undefined);
   store.clear();
   state.enabled = false;
@@ -771,7 +899,7 @@ export async function syncLogout(allowFile = false): Promise<void> {
 export async function deleteCloudData(allowFile = false): Promise<void> {
   const state = readState();
   if (!state) throw new Error("Sync is not configured.");
-  const store = credentialStore(allowFile);
+  const store = credentialStoreForState(state, allowFile);
   await authenticated(state, store, "/v1/account", {
     method: "DELETE",
     body: JSON.stringify({ confirmation: "DELETE" }),

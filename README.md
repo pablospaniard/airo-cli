@@ -1,5 +1,9 @@
 <h1 align="center">AIRO</h1>
 
+<p align="center">
+  <img src="docs/airo-setup.png" alt="AIRO welcome screen showing automatic model discovery across Claude Code, Codex CLI, Gemini CLI, and GitHub Copilot CLI" width="960">
+</p>
+
 <p align="center">Adaptive Intelligence Routing &amp; Orchestration for coding-agent CLIs.</p>
 
 <p align="center">
@@ -373,7 +377,7 @@ airo sync status
 airo sync devices
 ```
 
-The browser-assisted GitHub login identifies the sync account. The CLI performs GitHub's device authorization directly, then sends the resulting short-lived GitHub token once to the Worker. The Worker verifies the token against AIRO's OAuth app through GitHub's token-check endpoint; the token is never persisted by AIRO. AIRO stores its own short-lived access and rotating refresh credentials in macOS Keychain or a Secret Service keyring when available. Keychain writes send credential data over stdin rather than process arguments. `--allow-credential-file` is an explicit fallback that writes a mode-`0600` local file. For setup convenience, `--passphrase <string>` accepts the recovery passphrase directly. Be aware that command arguments can remain in shell history or be briefly visible to other local processes. `AIRO_SYNC_PASSPHRASE` and `--passphrase-file <path>` remain available when that exposure is unacceptable. The passphrase is never sent to the service.
+The browser-assisted GitHub login identifies the sync account. The CLI performs GitHub's device authorization directly, then sends the resulting short-lived GitHub token once to the Worker. The Worker verifies the token against AIRO's OAuth app through GitHub's token-check endpoint; the token is never persisted by AIRO. AIRO stores its own short-lived access and rotating refresh credentials in macOS Keychain or a Secret Service keyring when available. Keychain writes send credential data over stdin rather than process arguments. `--allow-credential-file` is an explicit fallback that writes a mode-`0600` local file; after login, that backend choice is remembered for later CLI and VS Code sync commands. For setup convenience, `--passphrase <string>` accepts the recovery passphrase directly. Be aware that command arguments can remain in shell history or be briefly visible to other local processes. `AIRO_SYNC_PASSPHRASE` and `--passphrase-file <path>` remain available when that exposure is unacceptable. The passphrase is never sent to the service.
 
 History, user feedback, optional Jev feedback, and classified routing settings are encrypted locally with AES-256-GCM. The account data key is wrapped locally with a scrypt-derived recovery key. The service sees ciphertext, keyed repository indexes, cursors, device metadata, and GitHub account identity. It cannot decrypt the private records.
 

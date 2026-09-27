@@ -8,4 +8,7 @@
 - Replace 32-bit history IDs with 128-bit IDs and add versioned, kind-scoped sync events so changed records converge without permanent cursor conflicts.
 - Keep macOS Keychain credential values out of process arguments.
 - Bind GitHub identity exchange to AIRO's OAuth application using GitHub's pinned token-check API and a Worker secret.
+- Bound encrypted sync requests and responses by serialized size, process pull pages incrementally, and propagate record deletions with tombstones.
+- Make refresh rotation and settings revisions atomic under concurrent requests.
+- Namespace sync cursors by service and account, and remember an explicitly selected credential-file backend.
 - Continue automatic fallback through all eligible installed providers.
