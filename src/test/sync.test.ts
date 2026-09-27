@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { DEFAULT_CONFIG } from "../config.js";
-import { credentialStore, safeSyncSettings } from "../sync.js";
+import { credentialStore, safeSyncSettings, syncPassphrase } from "../sync.js";
 
 test("sync settings exclude secrets and machine-specific configuration", () => {
   const config = structuredClone(DEFAULT_CONFIG);
@@ -36,4 +36,15 @@ test("credential-file fallback requires an explicit choice and restrictive permi
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("sync setup accepts an explicit recovery passphrase string", () => {
+  assert.deepEqual(syncPassphrase(["sync", "enable", "--passphrase", "long recovery phrase"]), {
+    value: "long recovery phrase",
+    source: "argument",
+  });
+  assert.throws(
+    () => syncPassphrase(["sync", "enable", "--passphrase"]),
+    /--passphrase requires a value/,
+  );
 });

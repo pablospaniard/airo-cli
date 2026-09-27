@@ -93,6 +93,31 @@ export function syncStatePath(root = dataRootDir()): string {
   return path.join(root, "sync.json");
 }
 
+export function syncPassphrase(args: string[]): {
+  value: string;
+  source: "argument" | "file" | "environment";
+} {
+  const passphraseIndex = args.indexOf("--passphrase");
+  if (passphraseIndex >= 0) {
+    const value = args[passphraseIndex + 1];
+    if (!value || value.startsWith("--")) throw new Error("--passphrase requires a value.");
+    return { value, source: "argument" };
+  }
+  const passphraseFileIndex = args.indexOf("--passphrase-file");
+  if (passphraseFileIndex >= 0) {
+    const file = args[passphraseFileIndex + 1];
+    if (!file) throw new Error("--passphrase-file requires a path.");
+    return {
+      value: fs.readFileSync(path.resolve(file), "utf8").replace(/[\r\n]+$/, ""),
+      source: "file",
+    };
+  }
+  const passphrase = process.env.AIRO_SYNC_PASSPHRASE;
+  if (!passphrase)
+    throw new Error("Use --passphrase, set AIRO_SYNC_PASSPHRASE, or use --passphrase-file.");
+  return { value: passphrase, source: "environment" };
+}
+
 function readState(root = dataRootDir()): SyncState | undefined {
   const file = syncStatePath(root);
   if (!fs.existsSync(file)) return undefined;

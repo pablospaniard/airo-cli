@@ -356,13 +356,13 @@ Milestone 5 adds an optional Cloudflare Worker and D1 service for moving learnin
 
 ```bash
 airo sync login --server https://airo-sync.pablospaniard.workers.dev
-AIRO_SYNC_PASSPHRASE="..." airo sync enable
+airo sync enable --passphrase "a long recovery passphrase"
 airo sync now
 airo sync status
 airo sync devices
 ```
 
-The browser-assisted GitHub login identifies the sync account. The CLI performs GitHub's device authorization directly, then sends the resulting short-lived GitHub token once to the Worker for identity verification; the token is never persisted by AIRO. AIRO stores its own short-lived access and rotating refresh credentials in macOS Keychain or a Secret Service keyring when available. `--allow-credential-file` is an explicit fallback that writes a mode-`0600` local file. The recovery passphrase can also be read with `--passphrase-file`; it is never accepted as a command argument or sent to the service.
+The browser-assisted GitHub login identifies the sync account. The CLI performs GitHub's device authorization directly, then sends the resulting short-lived GitHub token once to the Worker for identity verification; the token is never persisted by AIRO. AIRO stores its own short-lived access and rotating refresh credentials in macOS Keychain or a Secret Service keyring when available. `--allow-credential-file` is an explicit fallback that writes a mode-`0600` local file. For setup convenience, `--passphrase <string>` accepts the recovery passphrase directly. Be aware that command arguments can remain in shell history or be briefly visible to other local processes. `AIRO_SYNC_PASSPHRASE` and `--passphrase-file <path>` remain available when that exposure is unacceptable. The passphrase is never sent to the service.
 
 History, user feedback, optional Jev feedback, and classified routing settings are encrypted locally with AES-256-GCM. The account data key is wrapped locally with a scrypt-derived recovery key. The service sees ciphertext, keyed repository indexes, cursors, device metadata, and GitHub account identity. It cannot decrypt the private records.
 
@@ -460,7 +460,7 @@ Claude runs use `permissionMode: "acceptEdits"` inside prompt mode so headless i
 | `airo history export --encrypted <file>` | Export versioned history and feedback as an encrypted archive. |
 | `airo history import <file>` | Idempotently merge an encrypted learning archive. |
 | `airo sync login [--server <url>]` | Authenticate a device with the optional sync service. |
-| `airo sync enable` | Create or recover the local end-to-end encryption key. |
+| `airo sync enable --passphrase <string>` | Create or recover the local end-to-end encryption key. Environment-variable and file inputs remain supported. |
 | `airo sync now` | Explicitly push and pull encrypted evidence and safe settings. |
 | `airo sync status\|devices\|logout` | Inspect or manage the local sync account and devices. |
 | `airo sync export <file>` | Export the encrypted server-side account representation. |

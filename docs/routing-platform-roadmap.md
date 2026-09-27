@@ -193,7 +193,7 @@ Expected controls include:
 
 ```bash
 airo sync login
-airo sync enable
+airo sync enable --passphrase "a long recovery passphrase"
 airo sync now
 airo sync status
 airo sync devices
@@ -354,7 +354,7 @@ Cloud sync consent never implies research consent. Local Jev consent never impli
 - **Versioning:** encrypted event envelopes, wrapped account keys, local sync state, account exports, and the D1 schema start at version 1. The Worker uses a pinned compatibility date and generated runtime types.
 - **Verification:** package tests cover authenticated encryption, recovery wrapping, account-key-separated repository indexes, and setting exclusions. Workers-runtime integration tests apply real D1 migrations and cover authentication, idempotent events, cursors, immutable account-key setup, and optimistic revisions. Wrangler's dry-run build and the full `pnpm validate` gate are required.
 - **Authentication and devices:** the CLI completes GitHub's browser-assisted device flow directly. It sends the resulting short-lived GitHub token once to the Worker, which verifies the account through GitHub and never persists the token. AIRO then issues short access tokens and rotating refresh-token families; only their hashes reach D1. Login retries revoke earlier token families for the same device before issuing replacements. A detected refresh-token replay revokes its family, and users can list or revoke devices independently.
-- **Security and privacy:** AES-256-GCM payload encryption and scrypt recovery wrapping happen locally. D1 receives ciphertext, a wrapped account key, keyed repository indexes, and operational metadata. Provider credentials, API keys, executable paths, permission settings, Jev consent, and recovery passphrases never sync. Existing local history uploads only when the user explicitly runs `airo sync now`.
+- **Security and privacy:** AES-256-GCM payload encryption and scrypt recovery wrapping happen locally. D1 receives ciphertext, a wrapped account key, keyed repository indexes, and operational metadata. Provider credentials, API keys, executable paths, permission settings, Jev consent, and recovery passphrases never sync. Setup accepts `--passphrase <string>` with an explicit shell-history/process-list warning; environment-variable and permission-restricted file inputs remain available. Existing local history uploads only when the user explicitly runs `airo sync now`.
 - **Conflict and recovery behavior:** immutable event IDs are inserted once, pulls advance an account cursor, and divergent local immutable records fail closed. Settings use per-key optimistic revisions; simultaneous local and remote edits stop without overwriting either side. Losing the recovery passphrase and every authorized device makes cloud data unrecoverable.
 - **Operations and rollback:** the service supports encrypted account export, per-device revocation, logout, and cascading cloud-data deletion. Sync remains optional and can be disabled by signing out; local evidence remains authoritative and portable encrypted archives remain available without the service.
 

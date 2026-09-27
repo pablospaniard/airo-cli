@@ -86,6 +86,7 @@ import {
   syncLogin,
   syncLogout,
   syncNow,
+  syncPassphrase,
   syncRevokeDevice,
   syncStatePath,
   syncStatus,
@@ -213,21 +214,6 @@ function archivePassphrase(args: string[]): string {
   if (!passphrase)
     throw new Error(
       "Set AIRO_ARCHIVE_PASSPHRASE or use --passphrase-file. Passphrases are never accepted as command arguments.",
-    );
-  return passphrase;
-}
-
-function syncPassphrase(args: string[]): string {
-  const passphraseFileIndex = args.indexOf("--passphrase-file");
-  if (passphraseFileIndex >= 0) {
-    const file = args[passphraseFileIndex + 1];
-    if (!file) throw new Error("--passphrase-file requires a path.");
-    return fs.readFileSync(pathModule.resolve(file), "utf8").replace(/[\r\n]+$/, "");
-  }
-  const passphrase = process.env.AIRO_SYNC_PASSPHRASE;
-  if (!passphrase)
-    throw new Error(
-      "Set AIRO_SYNC_PASSPHRASE or use --passphrase-file. Recovery passphrases are never accepted as command arguments.",
     );
   return passphrase;
 }
@@ -1030,7 +1016,13 @@ async function main() {
       console.log(
         `${ui.gray("Provider credentials, API keys, executable paths, local permission settings, and Jev consent never sync.")}`,
       );
-      await enableSync(syncPassphrase(raw), allowFile);
+      const passphrase = syncPassphrase(raw);
+      if (passphrase.source === "argument") {
+        console.log(
+          `${statusIcon("info")} ${ui.yellow("A command-line passphrase may be retained in shell history or briefly visible to other local processes.")}`,
+        );
+      }
+      await enableSync(passphrase.value, allowFile);
       console.log(`${statusIcon("ok")} ${ui.green("End-to-end encrypted sync enabled.")}`);
       return;
     }
