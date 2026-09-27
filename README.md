@@ -7,8 +7,8 @@
 <p align="center">Adaptive Intelligence Routing &amp; Orchestration for Claude Code and Codex CLI.</p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/@pablospaniard/airo-cli"><img src="https://img.shields.io/npm/v/%40pablospaniard%2Fairo-cli?logo=npm&label=npm" alt="npm version"></a>
-  <a href="https://www.npmjs.com/package/@pablospaniard/airo-cli"><img src="https://img.shields.io/npm/dm/%40pablospaniard%2Fairo-cli?logo=npm&label=downloads" alt="npm downloads"></a>
+  <a href="https://www.npmjs.com/package/airo-ai-router"><img src="https://img.shields.io/npm/v/airo-ai-router?logo=npm&label=npm" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/airo-ai-router"><img src="https://img.shields.io/npm/dm/airo-ai-router?logo=npm&label=downloads" alt="npm downloads"></a>
   <a href="https://github.com/pablospaniard/airo-cli/actions/workflows/ci.yml"><img src="https://github.com/pablospaniard/airo-cli/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/pablospaniard/airo-cli/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License"></a>
   <a href="https://github.com/sponsors/pablospaniard"><img src="https://img.shields.io/badge/sponsor-GitHub-EA4AAA?logo=githubsponsors&logoColor=white" alt="Sponsor on GitHub"></a>
@@ -60,7 +60,7 @@ That means one job can be served by multiple models and providers, and another r
 2. Install AIRO and check your local setup:
 
    ```bash
-   npm install --global @pablospaniard/airo-cli
+   npm install --global airo-ai-router
    airo doctor
    ```
 
@@ -80,7 +80,7 @@ That means one job can be served by multiple models and providers, and another r
 
 The repository includes a VS Code extension in [`vscode-extension`](vscode-extension). Run `pnpm install` from the repository root, open the extension folder in VS Code, then press `F5` to launch an Extension Development Host. Its secondary-sidebar view is a stateful AIRO chat with visual workflow phases, provider-colored activity, attachments, inline previews for generated images, and controls for models, accounts, usage, logs, diagnostics, and feedback. Generated local files are exposed as clickable artifacts, including paths outside the current workspace. Use **New chat** to open an independent editor chat while another one runs; use **Previous chats** to restore or switch to saved chats, with active work clearly marked. Configure the executable, routing mode, provider, tier, and output detail under VS Code’s **AIRO** extension settings.
 
-The extension invokes the AIRO CLI, so `@pablospaniard/airo-cli` must be installed (or the repository must be linked locally) in addition to any provider CLI. Provider CLIs do not need to be installed in a standard location, but every executable must be reachable either through `PATH` or an explicit command path. If VS Code cannot find `airo`, set **AIRO: Command** to the absolute path of the AIRO executable, such as `/Users/me/.local/bin/airo` or `/opt/homebrew/bin/airo`. The same setting is used by the sidebar and the **AIRO: Open Terminal** command.
+The extension invokes the AIRO CLI, so `airo-ai-router` must be installed (or the repository must be linked locally) in addition to any provider CLI. Provider CLIs do not need to be installed in a standard location, but every executable must be reachable either through `PATH` or an explicit command path. If VS Code cannot find `airo`, set **AIRO: Command** to the absolute path of the AIRO executable, such as `/Users/me/.local/bin/airo` or `/opt/homebrew/bin/airo`. The same setting is used by the sidebar and the **AIRO: Open Terminal** command.
 
 When AIRO picks the provider itself, it can fall back to the other provider if one CLI is missing, signed out (for example Codex reporting `401 Unauthorized`), or usage-limited; it only falls back to a provider that is actually signed in, and it stops retrying a provider that already failed that way during the run. A handover is announced the moment it happens: the CLI prints the new provider, and the VS Code sidebar repaints its header chip, phase chip, and activity accent and adds a short note explaining the change. An explicit choice is never substituted: if you pin a provider with `--agent`, `--model`, `/agent`, the VS Code provider setting, or by naming it in the prompt, AIRO uses that provider only and fails with a clear error instead of switching. Run `airo setup` at any time to revisit the model choices.
 
@@ -345,7 +345,7 @@ Claude runs use `permissionMode: "acceptEdits"` inside prompt mode so headless i
 | Problem | What to do |
 | --- | --- |
 | AIRO says a provider is unavailable | Run `airo doctor`. Install the missing `claude` or `codex` CLI, put it on `PATH`, or set `claude.command`/`codex.command` to its absolute path in AIRO configuration, then sign in with that CLI. |
-| The VS Code sidebar cannot start AIRO | Install or link `@pablospaniard/airo-cli`, then set **AIRO: Command** to the absolute `airo` executable path if `airo` is not on VS Code’s `PATH`. |
+| The VS Code sidebar cannot start AIRO | Install or link `airo-ai-router`, then set **AIRO: Command** to the absolute `airo` executable path if `airo` is not on VS Code’s `PATH`. |
 | A dev server cannot bind to localhost | Approve AIRO's permission prompt with `yes`, `approve`, or the sidebar's **Approve** button. AIRO retries that continuation with elevated access and requires the agent to verify the local URL before reporting it. |
 | A generated image is missing | Ask the agent to generate it again. AIRO requires generated files to be persisted and verified, and the VS Code sidebar previews existing image artifacts inline. |
 | AIRO cannot tell whether I am signed in | Run `airo account`, then sign in or refresh the login using the provider's own CLI. Provider CLIs may not reveal an email address or subscription name; that is expected. |
@@ -399,7 +399,7 @@ pnpm link --global
 airo doctor
 ```
 
-After linking, `airo` uses the source checkout while you work on it. Run `pnpm test` before submitting changes. To remove the local link later, run `pnpm unlink --global @pablospaniard/airo-cli`.
+After linking, `airo` uses the source checkout while you work on it. Run `pnpm test` before submitting changes. To remove the local link later, run `pnpm unlink --global airo-ai-router`.
 
 ## Development
 
