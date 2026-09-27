@@ -10,6 +10,7 @@ import {
   readHistory,
 } from "./history.js";
 import { resolveRepositoryIdentity } from "./repository.js";
+import { withFileLocks } from "./file-lock.js";
 import type { FeedbackRecord, HistoryConfig, HistoryRecord } from "./types.js";
 
 export const LEARNING_ARCHIVE_VERSION = 1;
@@ -128,10 +129,16 @@ export function exportLearningArchive(
   if (fs.existsSync(target) && !options.overwrite)
     throw new Error(`Archive already exists: ${target}. Use --force to replace it.`);
 
-  const history = readHistory(config)
-    .map((record) => normalizeHistory(record, config))
-    .sort(compareEvidence);
-  const feedback = readFeedback(config).map(normalizeFeedback).sort(compareEvidence);
+  const snapshot = withFileLocks(
+    [`${historyPath(config)}.lock`, `${feedbackPath(config)}.lock`],
+    () => ({
+      history: readHistory(config)
+        .map((record) => normalizeHistory(record, config))
+        .sort(compareEvidence),
+      feedback: readFeedback(config).map(normalizeFeedback).sort(compareEvidence),
+    }),
+  );
+  const { history, feedback } = snapshot;
   const payload: LearningArchivePayload = {
     schemaVersion: LEARNING_ARCHIVE_VERSION,
     exportedAt: new Date().toISOString(),
@@ -258,52 +265,56 @@ export function importLearningArchive(
   passphrase: string,
 ): LearningArchiveResult {
   const payload = decryptArchive(inputFile, passphrase);
-  const incomingRepositoryIds = new Map(
-    payload.history.map((record) => [record.id, record.repositoryId]),
-  );
-  const localHistory = readHistory(config).map((record) =>
-    normalizeHistory(record, config, incomingRepositoryIds.get(record.id)),
-  );
-  const localFeedback = readFeedback(config).map(normalizeFeedback);
-  const incomingHistory = payload.history.map((record) => normalizeHistory(record, config));
-  const incomingFeedback = payload.feedback.map(normalizeFeedback);
-  const history = mergeEvidence(localHistory, incomingHistory, "history");
-  const feedback = mergeEvidence(localFeedback, incomingFeedback, "feedback");
-  const mergedHistory = history.records.sort(compareEvidence);
-  const mergedFeedback = feedback.records.sort(compareEvidence);
-  const phaseIds = new Set(mergedHistory.map((record) => record.id));
-  const runIds = new Set(mergedHistory.map((record) => record.runId ?? record.id));
-  for (const record of incomingFeedback) {
-    const exists =
-      record.scope === "phase" ? phaseIds.has(record.targetId) : runIds.has(record.targetId);
-    if (!exists) throw new Error(`Archive feedback ${record.id} references missing evidence.`);
-  }
-  const backups: string[] = [];
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-
-  if (history.imported || feedback.imported) {
-    for (const file of [historyPath(config), feedbackPath(config)]) {
-      if (!fs.existsSync(file)) continue;
-      const backup = `${file}.before-import-${stamp}`;
-      fs.copyFileSync(file, backup);
-      backups.push(backup);
+  const historyFile = historyPath(config);
+  const feedbackFile = feedbackPath(config);
+  return withFileLocks([`${historyFile}.lock`, `${feedbackFile}.lock`], () => {
+    const incomingRepositoryIds = new Map(
+      payload.history.map((record) => [record.id, record.repositoryId]),
+    );
+    const localHistory = readHistory(config).map((record) =>
+      normalizeHistory(record, config, incomingRepositoryIds.get(record.id)),
+    );
+    const localFeedback = readFeedback(config).map(normalizeFeedback);
+    const incomingHistory = payload.history.map((record) => normalizeHistory(record, config));
+    const incomingFeedback = payload.feedback.map(normalizeFeedback);
+    const history = mergeEvidence(localHistory, incomingHistory, "history");
+    const feedback = mergeEvidence(localFeedback, incomingFeedback, "feedback");
+    const mergedHistory = history.records.sort(compareEvidence);
+    const mergedFeedback = feedback.records.sort(compareEvidence);
+    const phaseIds = new Set(mergedHistory.map((record) => record.id));
+    const runIds = new Set(mergedHistory.map((record) => record.runId ?? record.id));
+    for (const record of incomingFeedback) {
+      const exists =
+        record.scope === "phase" ? phaseIds.has(record.targetId) : runIds.has(record.targetId);
+      if (!exists) throw new Error(`Archive feedback ${record.id} references missing evidence.`);
     }
-    writeJsonLines(historyPath(config), mergedHistory);
-    writeJsonLines(feedbackPath(config), mergedFeedback);
-  }
+    const backups: string[] = [];
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 
-  return {
-    history: {
-      imported: history.imported,
-      skipped: history.skipped,
-      total: mergedHistory.length,
-    },
-    feedback: {
-      imported: feedback.imported,
-      skipped: feedback.skipped,
-      total: mergedFeedback.length,
-    },
-    evidenceDigest: evidenceDigest(mergedHistory, mergedFeedback),
-    backupFiles: backups,
-  };
+    if (history.imported || feedback.imported) {
+      for (const file of [historyFile, feedbackFile]) {
+        if (!fs.existsSync(file)) continue;
+        const backup = `${file}.before-import-${stamp}`;
+        fs.copyFileSync(file, backup);
+        backups.push(backup);
+      }
+      writeJsonLines(historyFile, mergedHistory);
+      writeJsonLines(feedbackFile, mergedFeedback);
+    }
+
+    return {
+      history: {
+        imported: history.imported,
+        skipped: history.skipped,
+        total: mergedHistory.length,
+      },
+      feedback: {
+        imported: feedback.imported,
+        skipped: feedback.skipped,
+        total: mergedFeedback.length,
+      },
+      evidenceDigest: evidenceDigest(mergedHistory, mergedFeedback),
+      backupFiles: backups,
+    };
+  });
 }

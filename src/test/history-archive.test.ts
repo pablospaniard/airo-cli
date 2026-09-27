@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import test from "node:test";
 import { exportLearningArchive, importLearningArchive } from "../history-archive.js";
 import { appendFeedback, appendHistory, readFeedback, readHistory } from "../history.js";
@@ -112,6 +113,46 @@ test("upgrades legacy records during export and rejects conflicting immutable ID
       /Unsupported history schema version: 99/,
     );
   } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("import holds the evidence locks while taking its merge snapshot", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-history-import-lock-"));
+  const source = historyConfig(path.join(dir, "source", "history.jsonl"));
+  const destination = historyConfig(path.join(dir, "destination", "history.jsonl"));
+  const project = path.join(dir, "project");
+  const archive = path.join(dir, "portable.airo");
+  const ready = path.join(dir, "ready");
+  fs.mkdirSync(project);
+  appendHistory(source, record(project));
+  exportLearningArchive(source, archive, PASSPHRASE);
+  const concurrent = {
+    ...record(project),
+    id: "phase-concurrent",
+    runId: "run-concurrent",
+    task: "written while import waits",
+  };
+  fs.mkdirSync(path.dirname(destination.path!), { recursive: true });
+  const lock = `${destination.path}.lock`;
+  const child = spawn(process.execPath, [
+    "-e",
+    `const fs=require("node:fs");const lock=${JSON.stringify(lock)};fs.writeFileSync(lock,process.pid+"\\nlegacy\\n",{flag:"wx"});fs.writeFileSync(${JSON.stringify(ready)},"ready");setTimeout(()=>{fs.appendFileSync(${JSON.stringify(destination.path)},${JSON.stringify(`${JSON.stringify(concurrent)}\n`)});fs.unlinkSync(lock)},75);`,
+  ]);
+  try {
+    const deadline = Date.now() + 2_000;
+    while (!fs.existsSync(ready) && Date.now() < deadline)
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+    assert.equal(fs.existsSync(ready), true);
+    importLearningArchive(destination, archive, PASSPHRASE);
+    assert.deepEqual(
+      readHistory(destination)
+        .map((item) => item.id)
+        .sort(),
+      ["phase-concurrent", "phase-one"],
+    );
+  } finally {
+    child.kill();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

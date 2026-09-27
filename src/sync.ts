@@ -8,6 +8,7 @@ import { loadGlobalConfig, writeGlobalConfig } from "./config.js";
 import { dataRootDir } from "./paths.js";
 import { feedbackPath, historyPath, readFeedback, readHistory } from "./history.js";
 import { jevFeedbackPath, readJevFeedback } from "./jev-feedback.js";
+import { withFileLock, withFileLockAsync } from "./file-lock.js";
 import type { RouterConfig } from "./types.js";
 import {
   createAccountKey,
@@ -43,6 +44,10 @@ interface SyncState {
   credentialStore?: "system" | "file";
   syncIdentity?: { server: string; userId: string };
   records?: SyncRecordManifest;
+  recordsPath?: string;
+  pendingEvents?: SyncEvent[];
+  pendingRecords?: SyncRecordManifest;
+  pendingRecordsPath?: string;
 }
 
 interface SyncEvent {
@@ -92,8 +97,84 @@ export interface CredentialStore {
 
 function restrictedWrite(file: string, value: unknown): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(file, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
-  fs.chmodSync(file, 0o600);
+  const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
+    const descriptor = fs.openSync(temporary, "r");
+    try {
+      fs.fsyncSync(descriptor);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+    fs.renameSync(temporary, file);
+    fs.chmodSync(file, 0o600);
+  } finally {
+    try {
+      fs.unlinkSync(temporary);
+    } catch {}
+  }
+}
+
+function appendJsonItems(file: string, items: unknown[], alreadyHasItems: boolean): boolean {
+  if (!items.length) return alreadyHasItems;
+  const serialized = items.map((item) => JSON.stringify(item)).join(",");
+  fs.appendFileSync(file, `${alreadyHasItems ? "," : ""}${serialized}`, { mode: 0o600 });
+  return true;
+}
+
+function writeAll(descriptor: number, value: string | Buffer): void {
+  const buffer = typeof value === "string" ? Buffer.from(value) : value;
+  let offset = 0;
+  while (offset < buffer.length)
+    offset += fs.writeSync(descriptor, buffer, offset, buffer.length - offset);
+}
+
+function copyFileToDescriptor(source: string, destination: number): void {
+  const sourceDescriptor = fs.openSync(source, "r");
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  try {
+    let bytesRead = 0;
+    while ((bytesRead = fs.readSync(sourceDescriptor, buffer, 0, buffer.length, null)) > 0)
+      writeAll(destination, buffer.subarray(0, bytesRead));
+  } finally {
+    fs.closeSync(sourceDescriptor);
+  }
+}
+
+function writeCloudExport(
+  file: string,
+  metadata: Record<string, unknown>,
+  collections: Array<{ key: string; spool: string }>,
+): void {
+  const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  const descriptor = fs.openSync(temporary, "wx", 0o600);
+  let closed = false;
+  try {
+    const entries = Object.entries(metadata).map(
+      ([key, value]) => `${JSON.stringify(key)}:${JSON.stringify(value)}`,
+    );
+    writeAll(descriptor, `{${entries.length ? `${entries.join(",")},` : ""}`);
+    collections.forEach(({ key, spool }, index) => {
+      writeAll(descriptor, `${JSON.stringify(key)}:[`);
+      copyFileToDescriptor(spool, descriptor);
+      writeAll(descriptor, `]${index + 1 < collections.length ? "," : ""}`);
+    });
+    writeAll(descriptor, "}\n");
+    fs.fsyncSync(descriptor);
+    closed = true;
+    fs.closeSync(descriptor);
+    fs.renameSync(temporary, file);
+    fs.chmodSync(file, 0o600);
+  } finally {
+    if (!closed) {
+      try {
+        fs.closeSync(descriptor);
+      } catch {}
+    }
+    try {
+      fs.unlinkSync(temporary);
+    } catch {}
+  }
 }
 
 export function syncStatePath(root = dataRootDir()): string {
@@ -264,6 +345,10 @@ function resetSyncProgress(state: SyncState): void {
   delete state.settingsDigest;
   delete state.lastSyncAt;
   delete state.records;
+  delete state.recordsPath;
+  delete state.pendingEvents;
+  delete state.pendingRecords;
+  delete state.pendingRecordsPath;
 }
 
 function digest(value: unknown): string {
@@ -360,15 +445,24 @@ async function api<T>(
       },
     });
   const retryable = (init.method ?? "GET").toUpperCase() === "GET" || route === "/v1/auth/github";
-  const response = retryable ? await retryTransientFetch(request) : await request();
-  const body = (await response.json()) as T & { error?: { message?: string } };
-  if (!response.ok)
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const response = retryable ? await retryTransientFetch(request) : await request();
+    const body = (await response.json()) as T & { error?: { message?: string } };
+    if (response.ok) return body;
+    if (response.status === 429 && attempt < 4) {
+      const retryAfter = Number(response.headers.get("retry-after") ?? 0);
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.max(250 * 2 ** attempt, retryAfter * 1000)),
+      );
+      continue;
+    }
     throw new SyncApiError(
       body.error?.message ?? `Sync service returned HTTP ${response.status}.`,
       response.status,
       (body.error as { code?: string } | undefined)?.code,
     );
-  return body;
+  }
+  throw new Error("Sync request retries were exhausted.");
 }
 
 async function authenticated<T>(
@@ -379,22 +473,37 @@ async function authenticated<T>(
 ): Promise<T> {
   let credentials = store.load();
   if (!credentials) throw new Error("This device is not signed in. Run `airo sync login`.");
+  const attemptedAccessToken = credentials.accessToken;
   try {
     return await api<T>(state, route, init, credentials.accessToken);
   } catch (error) {
     if (!(error instanceof SyncApiError) || error.status !== 401) throw error;
-    const refreshed = await api<{ accessToken: string; refreshToken: string }>(
-      state,
-      "/v1/auth/refresh",
-      {
-        method: "POST",
-        body: JSON.stringify({ refreshToken: credentials.refreshToken }),
+    const refreshedCredentials = await withFileLockAsync(
+      path.join(dataRootDir(), "sync-refresh.lock"),
+      async () => {
+        const current = store.load();
+        if (!current) throw error;
+        if (current.accessToken !== attemptedAccessToken) {
+          return current;
+        }
+        const refreshed = await api<{ accessToken: string; refreshToken: string }>(
+          state,
+          "/v1/auth/refresh",
+          {
+            method: "POST",
+            body: JSON.stringify({ refreshToken: current.refreshToken }),
+          },
+        ).catch(() => undefined);
+        if (!refreshed) throw error;
+        credentials = { ...current, ...refreshed };
+        store.save(credentials);
+        return credentials;
       },
-    ).catch(() => undefined);
-    if (!refreshed) throw error;
-    credentials = { ...credentials, ...refreshed };
-    store.save(credentials);
-    return api<T>(state, route, init, credentials.accessToken);
+    );
+    // Do not hold the refresh lock during the retried application request.
+    // Other processes only need serialization while rotating and persisting
+    // the one-time refresh token.
+    return api<T>(state, route, init, refreshedCredentials.accessToken);
   }
 }
 
@@ -424,6 +533,7 @@ export async function syncLogin(options: {
     state.syncIdentity ??
     (state.user ? { server: previousServer ?? state.server, userId: state.user.id } : undefined);
   const store = credentialStore(useCredentialFile, root);
+  const previousCredentials = store.load();
   const authConfig = await api<{ provider: "github"; clientId: string }>(state, "/v1/auth/config");
   const githubResponse = await retryTransientFetch(() =>
     fetch("https://github.com/login/device/code", {
@@ -507,14 +617,20 @@ export async function syncLogin(options: {
         githubAccessToken: result.access_token,
       }),
     });
-    store.save({ accessToken: authorized.accessToken, refreshToken: authorized.refreshToken });
     const identity = { server: state.server, userId: authorized.user.id };
-    if (
-      !previousIdentity ||
-      previousIdentity.server !== identity.server ||
-      previousIdentity.userId !== identity.userId
-    )
-      resetSyncProgress(state);
+    const sameIdentity = Boolean(
+      previousIdentity &&
+      previousIdentity.server === identity.server &&
+      previousIdentity.userId === identity.userId,
+    );
+    store.save({
+      accessToken: authorized.accessToken,
+      refreshToken: authorized.refreshToken,
+      ...(sameIdentity && previousCredentials?.accountKey
+        ? { accountKey: previousCredentials.accountKey }
+        : {}),
+    });
+    if (!sameIdentity) resetSyncProgress(state);
     state.credentialStore = useCredentialFile ? "file" : "system";
     state.syncIdentity = identity;
     state.user = authorized.user;
@@ -585,6 +701,10 @@ function recordVersion(key: Buffer, record: unknown): string {
   return crypto.createHmac("sha256", key).update(JSON.stringify(record)).digest("base64url");
 }
 
+function operationVersion(key: Buffer): string {
+  return crypto.createHmac("sha256", key).update(crypto.randomUUID()).digest("base64url");
+}
+
 function recordManifest(records: LocalSyncRecord[], key: Buffer): SyncRecordManifest {
   const manifest: SyncRecordManifest = { history: {}, feedback: {}, "jev-feedback": {} };
   for (const { kind, record } of records) manifest[kind]![record.id] = recordVersion(key, record);
@@ -602,9 +722,9 @@ function localEvents(
   ): SyncEvent => {
     return {
       id: record.id,
-      // A keyed content version keeps retries idempotent without exposing a
-      // guessable plaintext digest. Changed records become new cursor entries.
-      version: recordVersion(key, record),
+      // Each transition needs its own version so create-delete-restore cycles
+      // are not mistaken for duplicates by the server.
+      version: operationVersion(key),
       kind,
       repositoryId: record.repositoryId ? syncRepositoryId(key, record.repositoryId) : undefined,
       createdAt: Math.floor(new Date(record.timestamp ?? 0).getTime() / 1000) || 0,
@@ -612,14 +732,16 @@ function localEvents(
     };
   };
   const current = recordManifest(records, key);
-  const events = records.map(({ kind, record }) => make(kind, record));
+  const events = records
+    .filter(({ kind, record }) => previous[kind]?.[record.id] !== current[kind]?.[record.id])
+    .map(({ kind, record }) => make(kind, record));
   for (const kind of ["history", "feedback", "jev-feedback"] as const) {
     for (const [id, deletedVersion] of Object.entries(previous[kind] ?? {})) {
       if (current[kind]?.[id]) continue;
       const tombstone = { id, targetKind: kind, deletedVersion };
       events.push({
         id,
-        version: recordVersion(key, tombstone),
+        version: operationVersion(key),
         kind: "tombstone",
         createdAt: Math.floor(Date.now() / 1000),
         envelope: encryptSyncPayload(key, tombstone, `event:tombstone:${id}`),
@@ -660,18 +782,19 @@ function syncFile(config: RouterConfig, kind: SyncDataKind): string {
   return jevFeedbackPath(config.history);
 }
 
-function applyEventPage(config: RouterConfig, key: Buffer, events: SyncEvent[]): number {
-  const maps = new Map<SyncDataKind, Map<string, { id: string }>>();
-  const changedKinds = new Set<SyncDataKind>();
-  const getRecords = (kind: SyncDataKind) => {
-    let records = maps.get(kind);
-    if (!records) {
-      records = readJsonLines(syncFile(config, kind));
-      maps.set(kind, records);
-    }
-    return records;
+function applyEventPage(
+  config: RouterConfig,
+  key: Buffer,
+  events: SyncEvent[],
+  previous: SyncRecordManifest = {},
+): { changed: number; manifest: SyncRecordManifest } {
+  const manifest = structuredClone(previous);
+  const operations = new Map<SyncDataKind, Array<{ id: string; record?: { id: string } }>>();
+  const add = (kind: SyncDataKind, operation: { id: string; record?: { id: string } }) => {
+    const current = operations.get(kind) ?? [];
+    current.push(operation);
+    operations.set(kind, current);
   };
-  let changed = 0;
   for (const event of events) {
     if (event.kind === "tombstone") {
       const tombstone = decryptSyncPayload<{ id: string; targetKind: SyncDataKind }>(
@@ -684,25 +807,38 @@ function applyEventPage(config: RouterConfig, key: Buffer, events: SyncEvent[]):
         !["history", "feedback", "jev-feedback"].includes(tombstone.targetKind)
       )
         throw new Error(`Sync tombstone ${event.id} failed validation.`);
-      if (getRecords(tombstone.targetKind).delete(event.id)) {
-        changed++;
-        changedKinds.add(tombstone.targetKind);
-      }
+      add(tombstone.targetKind, { id: event.id });
+      delete manifest[tombstone.targetKind]?.[event.id];
       continue;
     }
     const record = decryptSyncPayload<{ id: string }>(key, event.envelope, eventContext(event));
     if (record.id !== event.id)
       throw new Error(`Sync event ${event.id} failed identity validation.`);
-    const records = getRecords(event.kind);
-    const existing = records.get(record.id);
-    if (!existing || JSON.stringify(existing) !== JSON.stringify(record)) {
-      records.set(record.id, record);
-      changed++;
-      changedKinds.add(event.kind);
-    }
+    add(event.kind, { id: event.id, record });
+    (manifest[event.kind] ??= {})[event.id] = recordVersion(key, record);
   }
-  for (const kind of changedKinds) writeJsonLines(syncFile(config, kind), getRecords(kind));
-  return changed;
+  let changed = 0;
+  for (const [kind, kindOperations] of operations) {
+    const file = syncFile(config, kind);
+    changed += withFileLock(`${file}.lock`, () => {
+      const records = readJsonLines(file);
+      let kindChanged = 0;
+      for (const operation of kindOperations) {
+        if (!operation.record) {
+          if (records.delete(operation.id)) kindChanged++;
+          continue;
+        }
+        const existing = records.get(operation.id);
+        if (!existing || JSON.stringify(existing) !== JSON.stringify(operation.record)) {
+          records.set(operation.id, operation.record);
+          kindChanged++;
+        }
+      }
+      if (kindChanged) writeJsonLines(file, records);
+      return kindChanged;
+    });
+  }
+  return { changed, manifest };
 }
 
 function eventBatches(events: SyncEvent[], maxBytes = 900_000, maxEvents = 100): string[] {
@@ -726,8 +862,37 @@ function eventBatches(events: SyncEvent[], maxBytes = 900_000, maxEvents = 100):
   return bodies;
 }
 
-export async function syncNow(
-  config: RouterConfig,
+function manifestAfterEvents(
+  previous: SyncRecordManifest | undefined,
+  events: SyncEvent[],
+  key: Buffer,
+): SyncRecordManifest {
+  const manifest = structuredClone(previous ?? {});
+  for (const event of events) {
+    if (event.kind === "tombstone") {
+      const tombstone = decryptSyncPayload<{ id: string; targetKind: SyncDataKind }>(
+        key,
+        event.envelope,
+        eventContext(event),
+      );
+      if (
+        tombstone.id !== event.id ||
+        !["history", "feedback", "jev-feedback"].includes(tombstone.targetKind)
+      )
+        throw new Error(`Sync tombstone ${event.id} failed validation.`);
+      delete manifest[tombstone.targetKind]?.[event.id];
+      continue;
+    }
+    const record = decryptSyncPayload<{ id: string }>(key, event.envelope, eventContext(event));
+    if (record.id !== event.id)
+      throw new Error(`Sync event ${event.id} failed identity validation.`);
+    (manifest[event.kind] ??= {})[event.id] = recordVersion(key, record);
+  }
+  return manifest;
+}
+
+async function syncNowUnlocked(
+  _config: RouterConfig,
   allowFile = false,
 ): Promise<{ pushed: number; pulled: number }> {
   const state = readState();
@@ -737,16 +902,77 @@ export async function syncNow(
   if (!credentials?.accountKey)
     throw new Error("The local account key is missing. Run `airo sync enable`.");
   const key = Buffer.from(credentials.accountKey, "base64url");
-  const globalConfig = loadGlobalConfig().config;
-  const records = localRecords(config);
-  const events = localEvents(records, key, state.records);
+  const loadedGlobal = loadGlobalConfig();
+  const globalConfig = loadedGlobal.config;
+  const syncConfig: RouterConfig = {
+    ...globalConfig,
+    history: {
+      ...globalConfig.history,
+      enabled: true,
+      path: globalConfig.history.path
+        ? path.resolve(
+            path.dirname(loadedGlobal.path ?? syncStatePath()),
+            globalConfig.history.path,
+          )
+        : undefined,
+    },
+  };
+  const recordsPath = historyPath(syncConfig.history);
   let pushed = 0;
-  for (const body of eventBatches(events)) {
-    const result = await authenticated<{ accepted: number }>(state, store, "/v1/sync/push", {
-      method: "POST",
-      body,
-    });
-    pushed += result.accepted;
+  // Finish a durable pending batch first, then take one fresh snapshot to
+  // catch records written while that request was in flight.
+  for (let cycle = 0; cycle < 2; cycle += 1) {
+    if (state.pendingEvents?.length) {
+      for (const body of eventBatches(state.pendingEvents)) {
+        const result = await authenticated<{ accepted: number }>(state, store, "/v1/sync/push", {
+          method: "POST",
+          body,
+        });
+        pushed += result.accepted;
+      }
+      state.records =
+        state.pendingRecords ?? manifestAfterEvents(state.records, state.pendingEvents, key);
+      state.recordsPath = state.pendingRecordsPath ?? recordsPath;
+      delete state.pendingEvents;
+      delete state.pendingRecords;
+      delete state.pendingRecordsPath;
+      writeState(state);
+      continue;
+    }
+    const records = localRecords(syncConfig);
+    const nextManifest = recordManifest(records, key);
+    const previousManifest = state.recordsPath === recordsPath ? state.records : undefined;
+    const events = localEvents(records, key, previousManifest);
+    if (!events.length) {
+      if (state.recordsPath !== recordsPath) {
+        state.records = nextManifest;
+        state.recordsPath = recordsPath;
+        writeState(state);
+      }
+      break;
+    }
+    if (state.recordsPath !== recordsPath) {
+      state.records = {};
+      state.recordsPath = recordsPath;
+    }
+    for (const body of eventBatches(events)) {
+      const batch = (JSON.parse(body) as { events: SyncEvent[] }).events;
+      // Persist only the bounded request currently in flight. A crash after
+      // the server accepts it safely retries the same operation versions.
+      state.pendingEvents = batch;
+      state.pendingRecordsPath = recordsPath;
+      writeState(state);
+      const result = await authenticated<{ accepted: number }>(state, store, "/v1/sync/push", {
+        method: "POST",
+        body,
+      });
+      pushed += result.accepted;
+      state.records = manifestAfterEvents(state.records, batch, key);
+      state.recordsPath = recordsPath;
+      delete state.pendingEvents;
+      delete state.pendingRecordsPath;
+      writeState(state);
+    }
   }
   let pulled = 0;
   let hasMore = true;
@@ -756,9 +982,11 @@ export async function syncNow(
       store,
       `/v1/sync/pull?cursor=${state.cursor}&limit=100`,
     );
-    pulled += applyEventPage(config, key, result.events);
+    const applied = applyEventPage(syncConfig, key, result.events, state.records);
+    pulled += applied.changed;
+    state.records = applied.manifest;
+    state.recordsPath = recordsPath;
     state.cursor = result.cursor;
-    state.records = recordManifest(localRecords(config), key);
     writeState(state);
     hasMore = result.hasMore;
   }
@@ -814,10 +1042,20 @@ export async function syncNow(
       state.settingsDigest = remoteDigest;
     }
   }
-  state.records = recordManifest(localRecords(config), key);
   state.lastSyncAt = new Date().toISOString();
   writeState(state);
   return { pushed, pulled };
+}
+
+export async function syncNow(
+  config: RouterConfig,
+  allowFile = false,
+): Promise<{ pushed: number; pulled: number }> {
+  return withFileLockAsync(
+    path.join(dataRootDir(), "sync-operation.lock"),
+    () => syncNowUnlocked(config, allowFile),
+    { timeoutMs: 5 * 60_000 },
+  );
 }
 
 export function syncStatus(allowFile = false): {
@@ -876,13 +1114,78 @@ export async function exportCloudData(
   const file = path.resolve(output);
   if (fs.existsSync(file) && !options.overwrite)
     throw new Error(`${file} already exists. Use --force to replace it.`);
-  const data = await authenticated<Record<string, unknown>>(
-    state,
-    credentialStoreForState(state, options.allowFile),
-    "/v1/account/export",
-  );
-  restrictedWrite(file, data);
-  return file;
+  const store = credentialStoreForState(state, options.allowFile);
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const spoolDirectory = fs.mkdtempSync(path.join(path.dirname(file), ".airo-export-"));
+  const spools = {
+    events: path.join(spoolDirectory, "events.json"),
+    devices: path.join(spoolDirectory, "devices.json"),
+    settings: path.join(spoolDirectory, "settings.json"),
+  };
+  let eventCursor = 0;
+  let deviceOffset = 0;
+  let settingOffset = 0;
+  let metadata: Record<string, unknown> | undefined;
+  let hasEvents = false;
+  let hasDevices = false;
+  let hasSettings = false;
+  let hasMore = true;
+  try {
+    for (const spool of Object.values(spools)) fs.writeFileSync(spool, "", { mode: 0o600 });
+    while (hasMore) {
+      const page = await authenticated<
+        Record<string, unknown> & {
+          events: unknown[];
+          devices: unknown[];
+          settings: unknown[];
+          eventCursor: number;
+          deviceOffset: number;
+          settingOffset: number;
+          hasMore: boolean;
+        }
+      >(
+        state,
+        store,
+        `/v1/account/export?paged=1&eventCursor=${eventCursor}&deviceOffset=${deviceOffset}&settingOffset=${settingOffset}&limit=50`,
+      );
+      if (!metadata) {
+        const {
+          eventCursor: _eventCursor,
+          deviceOffset: _deviceOffset,
+          settingOffset: _settingOffset,
+          hasMore: _hasMore,
+          events: _events,
+          devices: _devices,
+          settings: _settings,
+          ...pageMetadata
+        } = page;
+        metadata = pageMetadata;
+      }
+      hasEvents = appendJsonItems(spools.events, page.events, hasEvents);
+      hasDevices = appendJsonItems(spools.devices, page.devices, hasDevices);
+      hasSettings = appendJsonItems(spools.settings, page.settings, hasSettings);
+      if (
+        page.hasMore &&
+        page.eventCursor <= eventCursor &&
+        page.deviceOffset <= deviceOffset &&
+        page.settingOffset <= settingOffset
+      )
+        throw new Error("Cloud account export did not advance any collection cursor.");
+      eventCursor = page.eventCursor;
+      deviceOffset = page.deviceOffset;
+      settingOffset = page.settingOffset;
+      hasMore = page.hasMore;
+    }
+    if (!metadata) throw new Error("Cloud account export returned no data.");
+    writeCloudExport(file, metadata, [
+      { key: "events", spool: spools.events },
+      { key: "devices", spool: spools.devices },
+      { key: "settings", spool: spools.settings },
+    ]);
+    return file;
+  } finally {
+    fs.rmSync(spoolDirectory, { recursive: true, force: true });
+  }
 }
 
 export async function syncLogout(allowFile = false): Promise<void> {

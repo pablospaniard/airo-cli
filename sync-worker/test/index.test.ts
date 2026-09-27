@@ -250,6 +250,8 @@ describe("sync Worker", () => {
     const exported = await authorized("/v1/account/export");
     const payload = await exported.json<Record<string, unknown>>();
     expect(payload.schemaVersion).toBe(1);
+    expect(payload.hasMore).toBe(false);
+    expect(payload.eventCursor).toBe(0);
     expect(JSON.stringify(payload)).not.toContain(accessToken);
     expect(JSON.stringify(payload)).not.toContain("token_hash");
 
@@ -264,6 +266,102 @@ describe("sync Worker", () => {
     });
     expect(deleted.status).toBe(200);
     expect((await authorized("/v1/sync/status")).status).toBe(401);
+  });
+
+  it("paginates account exports instead of buffering every event", async () => {
+    const envelope = JSON.stringify({
+      version: 1,
+      algorithm: "aes-256-gcm",
+      nonce: "abcdefghijklmnop",
+      ciphertext: "opaque",
+      tag: "abcdefghijklmnop",
+    });
+    for (let offset = 0; offset < 55; offset += 25) {
+      await env.DB.batch(
+        Array.from({ length: Math.min(25, 55 - offset) }, (_, index) => {
+          const number = offset + index;
+          return env.DB.prepare(
+            `INSERT INTO sync_events(user_id, event_id, version, device_id, kind, created_at, envelope)
+             VALUES(?, ?, ?, ?, 'history', ?, ?)`,
+          ).bind(
+            "user-test",
+            `export-event-${number}`,
+            number.toString().padStart(43, "v"),
+            "device-test",
+            number,
+            envelope,
+          );
+        }),
+      );
+    }
+
+    const legacy = await authorized("/v1/account/export?cursor=0&limit=50");
+    expect(legacy.status).toBe(409);
+    expect(await legacy.json()).toMatchObject({
+      error: { code: "export_pagination_required" },
+    });
+    let cursor = 0;
+    let exported = 0;
+    let hasMore = true;
+    while (hasMore) {
+      const page = await (
+        await authorized(`/v1/account/export?paged=1&cursor=${cursor}&limit=50`)
+      ).json<{ events: unknown[]; eventCursor: number; hasMore: boolean }>();
+      expect(page.eventCursor).toBeGreaterThan(cursor);
+      exported += page.events.length;
+      cursor = page.eventCursor;
+      hasMore = page.hasMore;
+    }
+    expect(exported).toBe(55);
+  });
+
+  it("does not require pagination when an export exactly fills one row page", async () => {
+    const envelope = JSON.stringify({
+      version: 1,
+      algorithm: "aes-256-gcm",
+      nonce: "abcdefghijklmnop",
+      ciphertext: "opaque",
+      tag: "abcdefghijklmnop",
+    });
+    await env.DB.batch(
+      Array.from({ length: 10 }, (_, index) =>
+        env.DB.prepare(
+          `INSERT INTO sync_events(user_id, event_id, version, device_id, kind, created_at, envelope)
+           VALUES(?, ?, ?, ?, 'history', ?, ?)`,
+        ).bind(
+          "user-test",
+          `boundary-event-${index}`,
+          index.toString().padStart(43, "b"),
+          "device-test",
+          index,
+          envelope,
+        ),
+      ),
+    );
+
+    const response = await authorized("/v1/account/export");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ hasMore: false });
+  });
+
+  it("fails an export explicitly when one stored row cannot fit a page", async () => {
+    const envelope = JSON.stringify({
+      version: 1,
+      algorithm: "aes-256-gcm",
+      nonce: "abcdefghijklmnop",
+      ciphertext: "x".repeat(880_000),
+      tag: "abcdefghijklmnop",
+    });
+    await env.DB.prepare(
+      `INSERT INTO sync_events(user_id, event_id, version, device_id, kind, created_at, envelope)
+       VALUES(?, ?, ?, ?, 'history', ?, ?)`,
+    )
+      .bind("user-test", "oversized-export-event", "o".repeat(43), "device-test", 1, envelope)
+      .run();
+
+    const response = await authorized("/v1/account/export?paged=1");
+    expect(response.status).toBe(413);
+    expect(await response.json()).toMatchObject({ error: { code: "export_item_too_large" } });
   });
 
   it("revokes a token family when a rotated refresh token is reused", async () => {

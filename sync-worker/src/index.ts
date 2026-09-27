@@ -7,7 +7,8 @@ const JSON_HEADERS = {
 };
 const MAX_BODY_BYTES = 1_048_576;
 const MAX_EVENTS = 100;
-const MAX_PULL_EVENTS = 10;
+const MAX_PULL_EVENTS = 50;
+const MAX_EXPORT_ROWS = 10;
 const MAX_RESPONSE_BYTES = 900_000;
 const ACCESS_TTL_SECONDS = 15 * 60;
 const REFRESH_TTL_SECONDS = 30 * 24 * 60 * 60;
@@ -166,7 +167,10 @@ function object(value: unknown): Record<string, unknown> | undefined {
 
 async function rateLimit(limiter: RateLimit, key: string): Promise<Response | undefined> {
   const result = await limiter.limit({ key });
-  return result.success ? undefined : error(429, "rate_limited", "Too many requests.");
+  if (result.success) return undefined;
+  const response = error(429, "rate_limited", "Too many requests.");
+  response.headers.set("Retry-After", "60");
+  return response;
 }
 
 async function authenticate(request: Request, env: Env): Promise<AuthContext | Response> {
@@ -491,6 +495,7 @@ async function pullEvents(url: URL, env: Env, auth: AuthContext): Promise<Respon
     createdAt: number;
     envelope: EncryptedEnvelope;
   }> = [];
+  let responseBytes = new TextEncoder().encode('{"events":[]}').byteLength;
   for (const row of result.results) {
     const event = {
       cursor: row.cursor,
@@ -502,14 +507,10 @@ async function pullEvents(url: URL, env: Env, auth: AuthContext): Promise<Respon
       createdAt: row.created_at,
       envelope: JSON.parse(row.envelope) as EncryptedEnvelope,
     };
-    const candidate = [...events, event];
-    if (
-      events.length &&
-      new TextEncoder().encode(JSON.stringify({ events: candidate })).byteLength >
-        MAX_RESPONSE_BYTES
-    )
-      break;
+    const eventBytes = new TextEncoder().encode(JSON.stringify(event)).byteLength;
+    if (events.length && responseBytes + eventBytes + 1 > MAX_RESPONSE_BYTES) break;
     events.push(event);
+    responseBytes += eventBytes + (events.length > 1 ? 1 : 0);
   }
   return json({
     events,
@@ -661,38 +662,99 @@ async function status(env: Env, auth: AuthContext): Promise<Response> {
   });
 }
 
-async function exportAccount(env: Env, auth: AuthContext): Promise<Response> {
+async function exportAccount(url: URL, env: Env, auth: AuthContext): Promise<Response> {
+  const cursor = Math.max(
+    0,
+    Number(url.searchParams.get("eventCursor") ?? url.searchParams.get("cursor") ?? 0),
+  );
+  const deviceOffset = Math.max(0, Number(url.searchParams.get("deviceOffset") ?? 0));
+  const settingOffset = Math.max(0, Number(url.searchParams.get("settingOffset") ?? 0));
+  const limit = Math.min(
+    MAX_EXPORT_ROWS,
+    Math.max(1, Number(url.searchParams.get("limit") ?? MAX_EXPORT_ROWS)),
+  );
+  if (
+    !Number.isInteger(cursor) ||
+    !Number.isInteger(deviceOffset) ||
+    !Number.isInteger(settingOffset) ||
+    !Number.isInteger(limit)
+  )
+    return error(400, "invalid_cursor", "cursor and limit must be integers.");
+  const queryLimit = limit + 1;
   const [user, devices, events, settings, key] = await Promise.all([
     env.DB.prepare("SELECT id, github_login, created_at FROM users WHERE id = ?")
       .bind(auth.userId)
       .first<{ id: string; github_login: string; created_at: number }>(),
     env.DB.prepare(
-      "SELECT id, name, created_at, last_seen_at, revoked_at FROM devices WHERE user_id = ? ORDER BY created_at",
+      "SELECT id, name, created_at, last_seen_at, revoked_at FROM devices WHERE user_id = ? ORDER BY created_at, id LIMIT ? OFFSET ?",
     )
-      .bind(auth.userId)
+      .bind(auth.userId, queryLimit, deviceOffset)
       .all(),
     env.DB.prepare(
-      "SELECT cursor, event_id, version, device_id, kind, repository_id, created_at, envelope FROM sync_events WHERE user_id = ? ORDER BY cursor",
+      "SELECT cursor, event_id, version, device_id, kind, repository_id, created_at, envelope FROM sync_events WHERE user_id = ? AND cursor > ? ORDER BY cursor LIMIT ?",
     )
-      .bind(auth.userId)
+      .bind(auth.userId, cursor, queryLimit)
       .all(),
     env.DB.prepare(
-      "SELECT key, revision, envelope, updated_at FROM sync_settings WHERE user_id = ? ORDER BY key",
+      "SELECT key, revision, envelope, updated_at FROM sync_settings WHERE user_id = ? ORDER BY key LIMIT ? OFFSET ?",
     )
-      .bind(auth.userId)
+      .bind(auth.userId, queryLimit, settingOffset)
       .all(),
     env.DB.prepare("SELECT envelope, updated_at FROM account_keys WHERE user_id = ?")
       .bind(auth.userId)
       .first(),
   ]);
+  // Reserve room for the fixed response metadata, then share a byte budget
+  // across all three independently paginated collections.
+  const baseResponseBytes = 50_000;
+  let responseBytes = baseResponseBytes;
+  let oversizedItem = false;
+  const take = (rows: unknown[]): unknown[] => {
+    const selected: unknown[] = [];
+    for (const item of rows.slice(0, limit)) {
+      const itemBytes = new TextEncoder().encode(JSON.stringify(item)).byteLength;
+      if (selected.length && responseBytes + itemBytes + 1 > MAX_RESPONSE_BYTES) break;
+      if (!selected.length && responseBytes + itemBytes > MAX_RESPONSE_BYTES) {
+        if (baseResponseBytes + itemBytes > MAX_RESPONSE_BYTES) oversizedItem = true;
+        break;
+      }
+      selected.push(item);
+      responseBytes += itemBytes + (selected.length > 1 ? 1 : 0);
+    }
+    return selected;
+  };
+  const eventPage = take(events.results);
+  const devicePage = take(devices.results);
+  const settingPage = take(settings.results);
+  if (oversizedItem)
+    return error(413, "export_item_too_large", "One stored item exceeds the export page limit.");
+  const eventCursor = Number(
+    (eventPage.at(-1) as { cursor?: number } | undefined)?.cursor ?? cursor,
+  );
+  const nextDeviceOffset = deviceOffset + devicePage.length;
+  const nextSettingOffset = settingOffset + settingPage.length;
+  const hasMore =
+    eventPage.length < events.results.length ||
+    devicePage.length < devices.results.length ||
+    settingPage.length < settings.results.length;
+  if (url.searchParams.get("paged") !== "1" && hasMore)
+    return error(
+      409,
+      "export_pagination_required",
+      "This account requires a client that supports paginated exports.",
+    );
   return json({
     schemaVersion: 1,
     exportedAt: new Date().toISOString(),
     user,
-    devices: devices.results,
-    events: events.results,
-    settings: settings.results,
+    devices: devicePage,
+    events: eventPage,
+    settings: settingPage,
     accountKey: key,
+    eventCursor,
+    deviceOffset: nextDeviceOffset,
+    settingOffset: nextSettingOffset,
+    hasMore,
   });
 }
 
@@ -734,7 +796,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (limited) return limited;
   if (request.method === "GET" && url.pathname === "/v1/sync/status") return status(env, auth);
   if (request.method === "GET" && url.pathname === "/v1/account/export")
-    return exportAccount(env, auth);
+    return exportAccount(url, env, auth);
   if (request.method === "POST" && url.pathname === "/v1/sync/push")
     return pushEvents(request, env, auth);
   if (request.method === "GET" && url.pathname === "/v1/sync/pull")

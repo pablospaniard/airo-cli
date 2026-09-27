@@ -95,8 +95,8 @@ function mergeProvider(base: RouterConfig["claude"], value: any): RouterConfig["
   };
 }
 
-function mergeConfig(parsed: any): RouterConfig {
-  return {
+function mergeConfig(parsed: any, sourceFile?: string): RouterConfig {
+  const config: RouterConfig = {
     ...DEFAULT_CONFIG,
     ...parsed,
     claude: mergeProvider(DEFAULT_CONFIG.claude, parsed.claude),
@@ -114,6 +114,9 @@ function mergeConfig(parsed: any): RouterConfig {
     logging: { ...DEFAULT_CONFIG.logging, ...parsed.logging },
     rules: Array.isArray(parsed.rules) ? parsed.rules : [],
   };
+  if (config.history.path && !path.isAbsolute(config.history.path) && sourceFile)
+    config.history.path = path.resolve(path.dirname(sourceFile), config.history.path);
+  return config;
 }
 
 export function loadConfig(cwd = process.cwd()): { config: RouterConfig; path?: string } {
@@ -121,7 +124,7 @@ export function loadConfig(cwd = process.cwd()): { config: RouterConfig; path?: 
     if (!fs.existsSync(file)) continue;
     const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
     return {
-      config: mergeConfig(parsed),
+      config: mergeConfig(parsed, file),
       path: file,
     };
   }
@@ -133,7 +136,7 @@ export function loadGlobalConfig(): { config: RouterConfig; path?: string } {
   const file = globalConfigPath();
   if (!fs.existsSync(file)) return { config: DEFAULT_CONFIG };
   return {
-    config: mergeConfig(JSON.parse(fs.readFileSync(file, "utf8"))),
+    config: mergeConfig(JSON.parse(fs.readFileSync(file, "utf8")), file),
     path: file,
   };
 }

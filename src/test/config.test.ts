@@ -31,7 +31,7 @@ test("loads and deeply merges project configuration", () => {
       JSON.stringify({
         policy: "claude-heavy",
         claude: { models: { fast: { model: "custom-haiku" } } },
-        history: { enabled: false },
+        history: { enabled: false, path: "data/history.jsonl" },
         logging: { level: "compact" },
         permissions: { networkAccess: false },
         rules: "invalid",
@@ -44,6 +44,7 @@ test("loads and deeply merges project configuration", () => {
     assert.equal(loaded.config.claude.models.fast.model, "custom-haiku");
     assert.equal(loaded.config.claude.models.deep.model, DEFAULT_CONFIG.claude.models.deep.model);
     assert.equal(loaded.config.history.enabled, false);
+    assert.equal(loaded.config.history.path, path.join(dir, "data", "history.jsonl"));
     assert.equal(loaded.config.permissions.mode, "prompt");
     assert.equal(loaded.config.permissions.networkAccess, false);
     assert.deepEqual(loaded.config.rules, []);

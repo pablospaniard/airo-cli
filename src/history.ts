@@ -13,6 +13,7 @@ import type {
 import { dataRootDir } from "./paths.js";
 import { enrichHistoryRecord, extractTaskFeatures } from "./evaluation.js";
 import { resolveRepositoryIdentity } from "./repository.js";
+import { withFileLock } from "./file-lock.js";
 
 export const HISTORY_SCHEMA_VERSION = 1;
 export const FEEDBACK_SCHEMA_VERSION = 1;
@@ -67,15 +68,17 @@ export function appendHistory(config: HistoryConfig, record: HistoryRecord): voi
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const repositoryId =
     record.repositoryId ?? resolveRepositoryIdentity(record.cwd, path.dirname(file)).id;
-  fs.appendFileSync(
-    file,
-    JSON.stringify(
-      enrichHistoryRecord({
-        ...record,
-        schemaVersion: HISTORY_SCHEMA_VERSION,
-        repositoryId,
-      }),
-    ) + "\n",
+  withFileLock(`${file}.lock`, () =>
+    fs.appendFileSync(
+      file,
+      JSON.stringify(
+        enrichHistoryRecord({
+          ...record,
+          schemaVersion: HISTORY_SCHEMA_VERSION,
+          repositoryId,
+        }),
+      ) + "\n",
+    ),
   );
 }
 
@@ -107,9 +110,11 @@ export function appendFeedback(config: HistoryConfig, feedback: FeedbackRecord):
   if (!config.enabled) return;
   const file = feedbackPath(config);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.appendFileSync(
-    file,
-    JSON.stringify({ ...feedback, schemaVersion: FEEDBACK_SCHEMA_VERSION }) + "\n",
+  withFileLock(`${file}.lock`, () =>
+    fs.appendFileSync(
+      file,
+      JSON.stringify({ ...feedback, schemaVersion: FEEDBACK_SCHEMA_VERSION }) + "\n",
+    ),
   );
 }
 
@@ -201,14 +206,16 @@ export function updateHistoryRecord(
   id: string,
   update: (record: HistoryRecord) => HistoryRecord,
 ): HistoryRecord | undefined {
-  const records = readHistory(config);
-  const index = records.findIndex((record) => record.id === id);
-  if (index < 0) return undefined;
-  records[index] = update(records[index]);
   const file = historyPath(config);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, records.map((record) => JSON.stringify(record)).join("\n") + "\n");
-  return records[index];
+  return withFileLock(`${file}.lock`, () => {
+    const records = readHistory(config);
+    const index = records.findIndex((record) => record.id === id);
+    if (index < 0) return undefined;
+    records[index] = update(records[index]);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, records.map((record) => JSON.stringify(record)).join("\n") + "\n");
+    return records[index];
+  });
 }
 
 export function setFeedback(
@@ -217,32 +224,34 @@ export function setFeedback(
   id?: string,
   note?: string,
 ): HistoryRecord[] {
-  const records = readHistory(config);
-  if (!records.length) throw new Error("No routing history yet.");
-  let targets: number[] = [];
-
-  if (!id || id === "last") {
-    const last = records[records.length - 1];
-    if (last.runId)
-      targets = records.map((r, i) => (r.runId === last.runId ? i : -1)).filter((i) => i >= 0);
-    else targets = [records.length - 1];
-  } else {
-    const byRun = records.map((r, i) => (r.runId === id ? i : -1)).filter((i) => i >= 0);
-    if (byRun.length) targets = byRun;
-    else {
-      const index = records.findIndex((r) => r.id === id);
-      if (index >= 0) targets = [index];
-    }
-  }
-  if (!targets.length) throw new Error(`History item or run ${id} not found.`);
-
-  for (const index of targets) {
-    records[index] = { ...records[index], feedback: rating, feedbackNote: note };
-  }
   const file = historyPath(config);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, records.map((r) => JSON.stringify(r)).join("\n") + "\n");
-  return targets.map((i) => records[i]);
+  return withFileLock(`${file}.lock`, () => {
+    const records = readHistory(config);
+    if (!records.length) throw new Error("No routing history yet.");
+    let targets: number[] = [];
+
+    if (!id || id === "last") {
+      const last = records[records.length - 1];
+      if (last.runId)
+        targets = records.map((r, i) => (r.runId === last.runId ? i : -1)).filter((i) => i >= 0);
+      else targets = [records.length - 1];
+    } else {
+      const byRun = records.map((r, i) => (r.runId === id ? i : -1)).filter((i) => i >= 0);
+      if (byRun.length) targets = byRun;
+      else {
+        const index = records.findIndex((r) => r.id === id);
+        if (index >= 0) targets = [index];
+      }
+    }
+    if (!targets.length) throw new Error(`History item or run ${id} not found.`);
+
+    for (const index of targets) {
+      records[index] = { ...records[index], feedback: rating, feedbackNote: note };
+    }
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, records.map((r) => JSON.stringify(r)).join("\n") + "\n");
+    return targets.map((i) => records[i]);
+  });
 }
 
 function tokens(s: string): Set<string> {
@@ -473,16 +482,21 @@ export function explainLearning(
 }
 
 export function resetLearning(config: HistoryConfig): number {
-  const file = feedbackPath(config);
-  const count = readFeedback(config).length;
-  if (fs.existsSync(file)) fs.unlinkSync(file);
-  const records = readHistory(config).map(
-    ({ feedback: _feedback, feedbackNote: _note, ...record }) => record,
+  const feedbackFile = feedbackPath(config);
+  const historyFile = historyPath(config);
+  return withFileLock(`${historyFile}.lock`, () =>
+    withFileLock(`${feedbackFile}.lock`, () => {
+      const count = readFeedback(config).length;
+      if (fs.existsSync(feedbackFile)) fs.unlinkSync(feedbackFile);
+      const records = readHistory(config).map(
+        ({ feedback: _feedback, feedbackNote: _note, ...record }) => record,
+      );
+      if (records.length)
+        fs.writeFileSync(
+          historyFile,
+          records.map((record) => JSON.stringify(record)).join("\n") + "\n",
+        );
+      return count;
+    }),
   );
-  if (records.length)
-    fs.writeFileSync(
-      historyPath(config),
-      records.map((record) => JSON.stringify(record)).join("\n") + "\n",
-    );
-  return count;
 }
