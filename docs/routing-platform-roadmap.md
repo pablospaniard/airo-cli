@@ -6,7 +6,7 @@ This document records the planned product and architecture direction for AIRO. I
 
 The current published package is [`airo-ai-router`](https://www.npmjs.com/package/airo-ai-router). Current behavior is documented in [Routing rules and learning](routing-and-learning.md). None of the provider-registry, Jev-feedback, cloud-sync, or research-consent milestones below should be presented as released until their implementation, tests, security review, and user documentation are complete.
 
-Development status: the source-controlled provider registry, generic fallback, candidate generation, provider-neutral task features, versioned cold-start policy, development evaluation corpus, and exhaustive runtime, account, and model-discovery adapter contracts are implemented on the Milestone 1 development branch. Jev-assisted calibration and the remaining acceptance-gate work remain open.
+Development status: Milestone 1 is complete on the development branch. The source-controlled provider registry, generic fallback and candidate generation, provider-neutral task features, versioned cold-start policy, development evaluation corpus, exhaustive provider adapters, support audit, diagnostics, and acceptance evidence are implemented. This status does not present the work as published until it passes the release process. The Jev development evaluator is implemented as an initial Milestone 3 tool; calibration work remains optional and open.
 
 ## Architecture principles
 
@@ -36,7 +36,9 @@ A provider adapter is expected to define:
 - Test fixtures and integration coverage
 - Setup, troubleshooting, and release documentation
 
-The current adapter contracts are compile-time exhaustive over the registered provider identifiers. Their acceptance test requires every provider to have default configuration, all three model tiers, invocation construction, progress parsing, default-model detection, explicit account-inspection behavior, and a model-discovery strategy. Providers without a reliable authentication probe return an unknown authentication state rather than being treated as signed in or signed out. Invocation metadata records the prompt argument position so diagnostic logs redact task text consistently for every provider. Discovery adapters also own provider-specific cache context and optional gateway configuration, preventing a new provider from silently falling through another provider's discovery path.
+The current adapter contracts are compile-time exhaustive over the registered provider identifiers. Their acceptance test requires every provider to have default configuration, all three model tiers, invocation construction, progress parsing, provider-level failure classification, default-model detection, explicit account-inspection behavior, and a model-discovery strategy. Providers without a reliable authentication probe return an unknown authentication state rather than being treated as signed in or signed out. Invocation metadata records the prompt argument position so diagnostic logs redact task text consistently for every provider. Discovery adapters also own provider-specific cache context and optional gateway configuration, preventing a new provider from silently falling through another provider's discovery path.
+
+Provider support contract version 1 is a machine-readable audit of ten integration surfaces: registry metadata, configuration, routing policy, runtime invocation and parsing, failure classification, account inspection, model discovery, capability metadata, tests, and documentation. Test and documentation evidence is an exhaustive source-controlled map, so registering another provider cannot silently inherit a support claim. `airo doctor` reports this integration status separately from whether the configured executable is installed on the current machine.
 
 Support should not be announced until execution, permissions, authentication, models, usage reporting, fallback, and tests work together.
 
@@ -272,11 +274,21 @@ Cloud sync consent never implies research consent. Local Jev consent never impli
 
 ### Milestone 1: provider-neutral foundations
 
-- Static, source-controlled provider registry
-- Complete provider adapter contract and support checklist
-- Generic candidate generation and fallback across registered providers
-- Provider-neutral task features and capability scoring
-- Versioned routing-policy artifact
+- [x] Static, source-controlled provider registry
+- [x] Complete, exhaustive provider adapter contract and versioned support audit
+- [x] Generic candidate generation and fallback across registered providers
+- [x] Provider-neutral task features and capability scoring
+- [x] Versioned routing-policy artifact and reviewed fixture evaluation
+
+#### Milestone 1 acceptance record
+
+- **Versioning:** provider support contract version 1 and routing policy version are source controlled; routes and new history records retain policy provenance. No configuration schema change is required.
+- **Verification:** unit, integration, negative/failure-path, routing-policy evaluation, legacy path migration, and backward-compatibility tests run through `pnpm validate`; the support audit also fails closed when a required provider configuration is incomplete.
+- **Diagnostics:** `airo doctor` distinguishes source integration readiness from command availability and model discovery on the current machine. Runtime provider switches identify authentication or usage-limit failures.
+- **Documentation:** this roadmap records development status, while the README and routing documentation describe observable CLI behavior. Publication remains a separate release step.
+- **Security and privacy:** Milestone 1 adds no network service or telemetry. Provider commands remain explicitly registered, arbitrary filesystem scanning is prohibited, provider credentials are not read, and task prompt arguments are redacted from invocation diagnostics.
+- **Compatibility and migration:** existing configuration remains valid, deprecated model allowlists remain readable, historical records without a policy version remain readable, and legacy AI Router paths continue through the tested migration path.
+- **Rollback:** the policy artifact and support contract are versioned and code-reviewed. A released regression can be rolled back by pinning the prior npm package version or reverting the policy/code change; explicit routes and custom rules remain higher precedence than automatic routing.
 
 ### Milestone 2: portable local learning
 

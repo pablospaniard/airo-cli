@@ -1,5 +1,12 @@
 import { spawn, spawnSync } from "node:child_process";
-import type { Agent, AgentRunResult, RouteResult, RouterConfig, TokenUsage } from "./types.js";
+import type {
+  Agent,
+  AgentRunResult,
+  ProviderFailure,
+  RouteResult,
+  RouterConfig,
+  TokenUsage,
+} from "./types.js";
 import type { PhaseLogMeta, RunLogger } from "./logging.js";
 
 export function commandExists(command: string): boolean {
@@ -57,6 +64,17 @@ export interface ProviderRuntimeAdapter {
     elevated?: boolean,
   ) => ProviderInvocation;
   parseProgress: (event: unknown) => ParsedProviderEvent;
+  /** Classify failures that allow an automatic route to try another provider. */
+  classifyFailure: (text: string, exitCode?: number) => ProviderFailure | undefined;
+}
+
+function classifyCommonProviderFailure(
+  text: string,
+  exitCode?: number,
+): ProviderFailure | undefined {
+  if (isProviderAuthError(text, exitCode)) return "authentication";
+  if (isUsageLimitError(text, exitCode)) return "usage limit";
+  return undefined;
 }
 
 function claudeInvocation(
@@ -506,14 +524,38 @@ export function geminiProgress(event: any): ParsedProviderEvent {
 }
 
 export const PROVIDER_RUNTIME_ADAPTERS = {
-  claude: { buildInvocation: claudeInvocation, parseProgress: claudeProgress },
-  codex: { buildInvocation: codexInvocation, parseProgress: codexProgress },
-  gemini: { buildInvocation: geminiInvocation, parseProgress: geminiProgress },
-  copilot: { buildInvocation: copilotInvocation, parseProgress: genericProgress },
+  claude: {
+    buildInvocation: claudeInvocation,
+    parseProgress: claudeProgress,
+    classifyFailure: classifyCommonProviderFailure,
+  },
+  codex: {
+    buildInvocation: codexInvocation,
+    parseProgress: codexProgress,
+    classifyFailure: classifyCommonProviderFailure,
+  },
+  gemini: {
+    buildInvocation: geminiInvocation,
+    parseProgress: geminiProgress,
+    classifyFailure: classifyCommonProviderFailure,
+  },
+  copilot: {
+    buildInvocation: copilotInvocation,
+    parseProgress: genericProgress,
+    classifyFailure: classifyCommonProviderFailure,
+  },
 } satisfies Record<Agent, ProviderRuntimeAdapter>;
 
 export function providerRuntimeAdapter(agent: Agent): ProviderRuntimeAdapter {
   return PROVIDER_RUNTIME_ADAPTERS[agent];
+}
+
+export function classifyProviderFailure(
+  agent: Agent,
+  text: string,
+  exitCode?: number,
+): ProviderFailure | undefined {
+  return providerRuntimeAdapter(agent).classifyFailure(text, exitCode);
 }
 
 export function buildProviderInvocation(

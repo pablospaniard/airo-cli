@@ -216,7 +216,7 @@ airo doctor
 airo account
 ```
 
-`airo account` lists every registered provider. It reports verified sign-in status for Claude and Codex and an explicit unknown state for Gemini and Copilot. For comparison defaults, AIRO checks its own configuration first, then `ANTHROPIC_MODEL` or Claude settings for Claude Code and Codex's `config.toml` for Codex. Gemini and Copilot defaults come only from their configured `defaultModel`. A comparison default does not limit which model you can run; set it with `airo setup` or `defaultModel` in that provider's AIRO configuration.
+`airo doctor` reports two separate kinds of readiness: whether each provider satisfies AIRO's versioned source integration contract, and whether its configured command is available on the current machine. `airo account` lists every registered provider. It reports verified sign-in status for Claude and Codex and an explicit unknown state for Gemini and Copilot. For comparison defaults, AIRO checks its own configuration first, then `ANTHROPIC_MODEL` or Claude settings for Claude Code and Codex's `config.toml` for Codex. Gemini and Copilot defaults come only from their configured `defaultModel`. A comparison default does not limit which model you can run; set it with `airo setup` or `defaultModel` in that provider's AIRO configuration.
 
 ## Sessions and interactive chat
 
@@ -396,7 +396,7 @@ Claude runs use `permissionMode: "acceptEdits"` inside prompt mode so headless i
 | `airo setup` | Configure automatic model tiers. |
 | `airo models` | Print the active provider/model mapping. |
 | `airo account` | List every provider; verify Claude/Codex login status and mark other authentication states as unknown. |
-| `airo doctor` | Check provider commands and storage locations. |
+| `airo doctor` | Check the provider integration contract, local commands, model discovery, and storage locations. |
 | `airo config init` | Create a project-local `.airo.json`. |
 | `airo session` / `airo sessions` | Show the active session or list repository sessions. |
 | `airo session new ["task"]` | Start and activate a fresh session. |

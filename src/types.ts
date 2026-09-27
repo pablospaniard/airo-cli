@@ -7,6 +7,7 @@ export type PhaseKind = "analyze" | "implement" | "test" | "review" | "recover" 
 export type OrchestrationMode = "auto" | "adaptive" | "single";
 export type LogLevel = "compact" | "live" | "verbose";
 export type PermissionMode = "prompt" | "fullAccess";
+export type ProviderFailure = "usage limit" | "authentication";
 
 export interface Rule {
   name: string;

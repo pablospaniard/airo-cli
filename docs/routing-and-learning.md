@@ -92,9 +92,11 @@ Automatic fallback uses the source-controlled provider registry:
 
 Account inspection is defined by an exhaustive provider adapter contract. Gemini and Copilot do not yet have reliable account probes, so their adapters report authentication as unknown until execution. Missing-command fallback checks executable availability only. An explicitly selected provider never falls back.
 
-Every registered provider has an explicit runtime adapter for command construction and progress parsing. The adapter identifies the task-prompt argument so command diagnostics can redact task text instead of assuming that every provider places the prompt last.
+Every registered provider has an explicit runtime adapter for command construction, progress parsing, and provider-level failure classification. Shared authentication and usage-limit patterns are currently reused by all four adapters, but the exhaustive adapter boundary allows a provider to specialize those patterns without changing routing or orchestration. The adapter also identifies the task-prompt argument so command diagnostics can redact task text instead of assuming that every provider places the prompt last.
 
 Model discovery is also exhaustive across the provider registry. Each provider adapter owns its local discovery strategy, cache-invalidation inputs, and optional gateway lookup. Failed or unavailable probes retain configured and built-in model IDs instead of shrinking the selectable catalog.
+
+The versioned provider support audit verifies registry metadata, configuration, routing policy, runtime behavior, failure classification, account inspection, discovery, capabilities, tests, and documentation for every registered provider. `airo doctor` shows this source integration status separately from local command availability; an integration can be supported even when its CLI is not installed on a particular machine.
 
 ## Complexity and model tier
 

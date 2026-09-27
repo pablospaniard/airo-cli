@@ -4,10 +4,9 @@ import { appendHistory, newHistoryId, newRunId, updateHistoryRecord } from "./hi
 import { routeTask } from "./router.js";
 import {
   addTokenUsage,
+  classifyProviderFailure,
   commandExists,
   isPermissionApproval,
-  isProviderAuthError,
-  isProviderUnavailableError,
   runAgent,
 } from "./runner.js";
 import type {
@@ -17,6 +16,7 @@ import type {
   PhaseExecution,
   PhaseKind,
   PhasePlan,
+  ProviderFailure,
   RouteResult,
   RouterConfig,
   SessionState,
@@ -227,10 +227,12 @@ export function unavailableProviderError(route: RouteResult, config: RouterConfi
 }
 
 /** Reason a provider dropped out of a run, used for logs and route explanations. */
-export type ProviderFailure = "usage limit" | "authentication";
-
-export function providerFailureReason(text: string, exitCode?: number): ProviderFailure {
-  return isProviderAuthError(text, exitCode) ? "authentication" : "usage limit";
+export function providerFailureReason(
+  agent: Agent,
+  text: string,
+  exitCode?: number,
+): ProviderFailure | undefined {
+  return classifyProviderFailure(agent, text, exitCode);
 }
 
 /** Cheap per-phase check: installed, and not already ruled out earlier in this run. */
@@ -403,8 +405,10 @@ export async function orchestrate(
     });
     // A question means the provider is asking for input, not reporting that it
     // cannot serve the run, so it must not trigger a provider switch.
-    if (!result.question && isProviderUnavailableError(result.output, result.exitCode)) {
-      const failure = providerFailureReason(result.output, result.exitCode);
+    const failure = result.question
+      ? undefined
+      : providerFailureReason(route.agent, result.output, result.exitCode);
+    if (failure) {
       // Never spend another phase on a provider that cannot serve this run —
       // unless the user pinned it, in which case later phases keep using it.
       if (!route.agentPinned) ruledOut.add(route.agent);
@@ -420,8 +424,10 @@ export async function orchestrate(
           logger,
           logMeta,
         });
-        if (!result.question && isProviderUnavailableError(result.output, result.exitCode)) {
-          const fallbackFailure = providerFailureReason(result.output, result.exitCode);
+        const fallbackFailure = result.question
+          ? undefined
+          : providerFailureReason(route.agent, result.output, result.exitCode);
+        if (fallbackFailure) {
           ruledOut.add(route.agent);
           providersExhausted = true;
           result = { ...result, exitCode: result.exitCode || 1 };

@@ -43,7 +43,6 @@ import {
   commandExists,
   commandVersion,
   isPermissionApproval,
-  isProviderUnavailableError,
   runAgent,
 } from "./runner.js";
 import {
@@ -74,6 +73,7 @@ import { inspectAccounts } from "./account.js";
 import { AGENTS } from "./providers.js";
 import { buildUsageReport, nonCachedTokens, processedTokens } from "./usage.js";
 import { firstRunWelcome } from "./welcome.js";
+import { auditProviderSupport } from "./provider-support.js";
 import pathModule from "node:path";
 import { evaluateRoute, extractTaskFeatures } from "./evaluation.js";
 
@@ -384,8 +384,10 @@ async function singleRun(
     logMeta,
   });
   // A question means the provider wants input, not that it cannot serve the run.
-  if (!result.question && isProviderUnavailableError(result.output, result.exitCode)) {
-    const failure = providerFailureReason(result.output, result.exitCode);
+  const failure = result.question
+    ? undefined
+    : providerFailureReason(routed.agent, result.output, result.exitCode);
+  if (failure) {
     const fallback = fallbackProvider(routed, config, failure);
     if (fallback) {
       const message = `${routed.agent} ${failure} failure detected → falling back to ${fallback.agent}/${fallback.model}`;
@@ -877,14 +879,22 @@ async function main() {
   }
 
   if (raw[0] === "doctor") {
+    const support = auditProviderSupport(config);
     console.log(divider("Doctor"));
     console.log(`${ui.gray("Config ")} ${path ? ui.cyan(path) : ui.yellow("built-in defaults")}`);
     console.log(`${ui.gray("History")} ${ui.cyan(historyPath(config.history))}`);
+    console.log(
+      `${support.ready ? statusIcon("ok") : statusIcon("error")} ${ui.gray(`Provider integration contract v${support.contractVersion}`)} ${support.ready ? ui.cyan("ready") : ui.red("incomplete")}`,
+    );
     for (const agent of AGENTS) {
+      const integration = support.providers.find((provider) => provider.agent === agent)!;
       const command = config[agent].command;
       const exists = commandExists(command);
       console.log(
         `${exists ? statusIcon("ok") : statusIcon("error")} ${agentColor(agent, agent.padEnd(6))} ${ui.cyan(command)} ${exists ? ui.gray(`→ ${commandVersion(command)}`) : ui.red("→ not found in PATH")}`,
+      );
+      console.log(
+        `         ${ui.gray("integration")} ${integration.ready ? ui.cyan("ready") : ui.red("incomplete")}`,
       );
       if (!exists) continue;
       const catalog = await discoverCatalog(agent, config, { refresh: true, online: true });
