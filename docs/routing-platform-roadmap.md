@@ -6,7 +6,7 @@ This document records the planned product and architecture direction for AIRO. I
 
 The current published package is [`airo-ai-router`](https://www.npmjs.com/package/airo-ai-router). Current behavior is documented in [Routing rules and learning](routing-and-learning.md). None of the provider-registry, Jev-feedback, cloud-sync, or research-consent milestones below should be presented as released until their implementation, tests, security review, and user documentation are complete.
 
-Development status: the source-controlled provider registry, generic fallback, candidate generation, provider-neutral task features, cold-start capability scoring, and an exhaustive runtime invocation/progress adapter contract are implemented on the Milestone 1 development branch. Provider account/model-discovery adapters, policy calibration, and the complete acceptance gate remain open.
+Development status: the source-controlled provider registry, generic fallback, candidate generation, provider-neutral task features, cold-start capability scoring, and exhaustive runtime and account adapter contracts are implemented on the Milestone 1 development branch. Provider model-discovery adapters, policy calibration, and the complete acceptance gate remain open.
 
 ## Architecture principles
 
@@ -36,7 +36,7 @@ A provider adapter is expected to define:
 - Test fixtures and integration coverage
 - Setup, troubleshooting, and release documentation
 
-The current runtime contract is compile-time exhaustive over the registered provider identifiers. Its acceptance test requires every provider to have default configuration, all three model tiers, invocation construction, and progress parsing. Invocation metadata records the prompt argument position so diagnostic logs redact task text consistently for every provider. Account inspection and model discovery still need to move behind similarly exhaustive contracts.
+The current adapter contracts are compile-time exhaustive over the registered provider identifiers. Their acceptance test requires every provider to have default configuration, all three model tiers, invocation construction, progress parsing, default-model detection, and explicit account-inspection behavior. Providers without a reliable authentication probe return an unknown authentication state rather than being treated as signed in or signed out. Invocation metadata records the prompt argument position so diagnostic logs redact task text consistently for every provider. Model discovery still needs to move behind a similarly exhaustive contract.
 
 Support should not be announced until execution, permissions, authentication, models, usage reporting, fallback, and tests work together.
 

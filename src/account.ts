@@ -15,6 +15,13 @@ export interface ProviderAccount {
   defaultModel?: string;
 }
 
+export interface ProviderAccountAdapter {
+  /** Whether the provider exposes a deterministic authentication probe. */
+  authInspection: boolean;
+  detectDefaultModel: (config: RouterConfig, cwd: string) => string | undefined;
+  inspect: (command: string, defaultModel?: string) => ProviderAccount;
+}
+
 /**
  * `Not logged in` contains `logged in`, so a plain match reports an
  * unauthenticated provider as ready. Check the negation first.
@@ -37,19 +44,6 @@ function claudeSettingsModel(cwd: string): string | undefined {
     if (typeof value === "string" && value.trim()) model = value.trim();
   }
   return model;
-}
-
-export function detectDefaultModels(
-  config: RouterConfig,
-  cwd = process.cwd(),
-): Partial<Record<Agent, string>> {
-  const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
-  return {
-    claude: config.claude.defaultModel || process.env.ANTHROPIC_MODEL || claudeSettingsModel(cwd),
-    codex: config.codex.defaultModel || readTomlValue(path.join(codexHome, "config.toml"), "model"),
-    gemini: config.gemini.defaultModel,
-    copilot: config.copilot.defaultModel,
-  };
 }
 
 function inspectClaude(command: string, defaultModel?: string): ProviderAccount {
@@ -95,6 +89,63 @@ function inspectClaude(command: string, defaultModel?: string): ProviderAccount 
   };
 }
 
+function inspectWithoutAuthProbe(
+  agent: Agent,
+  command: string,
+  defaultModel?: string,
+): ProviderAccount {
+  const available = commandExists(command);
+  return {
+    agent,
+    available,
+    authenticated: undefined,
+    status: available ? "authentication not inspected" : `${command} not found in PATH`,
+    defaultModel,
+  };
+}
+
+function unprobedAccountAdapter(agent: Agent): ProviderAccountAdapter {
+  return {
+    authInspection: false,
+    detectDefaultModel: (config) => config[agent].defaultModel,
+    inspect: (command, defaultModel) => inspectWithoutAuthProbe(agent, command, defaultModel),
+  };
+}
+
+export const PROVIDER_ACCOUNT_ADAPTERS: Record<Agent, ProviderAccountAdapter> = {
+  claude: {
+    authInspection: true,
+    detectDefaultModel: (config, cwd) =>
+      config.claude.defaultModel || process.env.ANTHROPIC_MODEL || claudeSettingsModel(cwd),
+    inspect: inspectClaude,
+  },
+  codex: {
+    authInspection: true,
+    detectDefaultModel: (config) => {
+      const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+      return (
+        config.codex.defaultModel || readTomlValue(path.join(codexHome, "config.toml"), "model")
+      );
+    },
+    inspect: inspectCodex,
+  },
+  gemini: unprobedAccountAdapter("gemini"),
+  copilot: unprobedAccountAdapter("copilot"),
+};
+
+export function providerAccountAdapter(agent: Agent): ProviderAccountAdapter {
+  return PROVIDER_ACCOUNT_ADAPTERS[agent];
+}
+
+export function detectDefaultModels(
+  config: RouterConfig,
+  cwd = process.cwd(),
+): Partial<Record<Agent, string>> {
+  return Object.fromEntries(
+    PROVIDERS.map(({ id }) => [id, providerAccountAdapter(id).detectDefaultModel(config, cwd)]),
+  );
+}
+
 function inspectCodex(command: string, defaultModel?: string): ProviderAccount {
   const checked = runProviderCommand(command, ["login", "status"]);
   if (!checked.result)
@@ -137,19 +188,8 @@ export function inspectAccount(
   config: RouterConfig,
   cwd = process.cwd(),
 ): ProviderAccount {
-  const defaults = detectDefaultModels(config, cwd);
-  if (agent === "claude") return inspectClaude(config.claude.command, defaults.claude);
-  if (agent === "codex") return inspectCodex(config.codex.command, defaults.codex);
-  const available = commandExists(config[agent].command);
-  return {
-    agent,
-    available,
-    authenticated: undefined,
-    status: available
-      ? "authentication not inspected"
-      : `${config[agent].command} not found in PATH`,
-    defaultModel: defaults[agent],
-  };
+  const adapter = providerAccountAdapter(agent);
+  return adapter.inspect(config[agent].command, adapter.detectDefaultModel(config, cwd));
 }
 
 export function inspectAccounts(config: RouterConfig, cwd = process.cwd()): ProviderAccount[] {

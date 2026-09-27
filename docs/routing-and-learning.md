@@ -88,7 +88,7 @@ Automatic fallback uses the source-controlled provider registry:
 4. Skip commands that are not available.
 5. After authentication or usage-limit failure, also skip a candidate whose adapter confirms that it is signed out.
 
-Gemini and Copilot do not yet have account probes, so their authentication state is unknown until execution. Missing-command fallback checks executable availability only. An explicitly selected provider never falls back.
+Account inspection is defined by an exhaustive provider adapter contract. Gemini and Copilot do not yet have reliable account probes, so their adapters report authentication as unknown until execution. Missing-command fallback checks executable availability only. An explicitly selected provider never falls back.
 
 Every registered provider has an explicit runtime adapter for command construction and progress parsing. The adapter identifies the task-prompt argument so command diagnostics can redact task text instead of assuming that every provider places the prompt last.
 

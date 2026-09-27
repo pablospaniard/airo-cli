@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { PROVIDER_ACCOUNT_ADAPTERS, providerAccountAdapter } from "../account.js";
 import { DEFAULT_CONFIG } from "../config.js";
 import {
   AGENTS,
@@ -36,16 +37,21 @@ test("records provider capabilities used by generic policy", () => {
   assert.equal(effectiveEffort("copilot", "high"), "auto");
 });
 
-test("requires every registered provider to have config and a runtime adapter", () => {
+test("requires every registered provider to have config, runtime, and account adapters", () => {
   assert.deepEqual(Object.keys(PROVIDER_RUNTIME_ADAPTERS), [...AGENTS]);
+  assert.deepEqual(Object.keys(PROVIDER_ACCOUNT_ADAPTERS), [...AGENTS]);
 
   for (const provider of PROVIDERS) {
     const configured = DEFAULT_CONFIG[provider.id];
-    const adapter = providerRuntimeAdapter(provider.id);
+    const runtimeAdapter = providerRuntimeAdapter(provider.id);
+    const accountAdapter = providerAccountAdapter(provider.id);
     assert.ok(configured.command);
     assert.deepEqual(Object.keys(configured.models), ["fast", "balanced", "deep"]);
-    assert.equal(typeof adapter.buildInvocation, "function");
-    assert.equal(typeof adapter.parseProgress, "function");
+    assert.equal(typeof runtimeAdapter.buildInvocation, "function");
+    assert.equal(typeof runtimeAdapter.parseProgress, "function");
+    assert.equal(typeof accountAdapter.detectDefaultModel, "function");
+    assert.equal(typeof accountAdapter.inspect, "function");
+    assert.equal(accountAdapter.authInspection, provider.capabilities.accountInspection);
   }
 });
 
