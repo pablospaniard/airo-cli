@@ -1,5 +1,5 @@
 import { learningHints } from "./history.js";
-import { AGENTS } from "./providers.js";
+import { AGENTS, effectiveEffort } from "./providers.js";
 import type { Agent, Effort, ModelTier, RouteResult, RouterConfig, ScoreReason } from "./types.js";
 
 const CLAUDE_SIGNALS: Array<[RegExp, number, string]> = [
@@ -350,7 +350,7 @@ export function routeTask(task: string, config: RouterConfig): RouteResult {
   if (!userRequestedTier && !forcedTier && !explicitModel && config.history.learningEnabled) {
     const candidates = (["fast", "balanced", "deep"] as ModelTier[]).map((tier) => {
       const candidate = config[agent].models[tier];
-      const effort = candidate.effort ?? effortForTier(tier);
+      const effort = effectiveEffort(agent, candidate.effort ?? effortForTier(tier));
       const key = `${agent}/${candidate.model}/${effort}`;
       return {
         tier,
@@ -378,7 +378,10 @@ export function routeTask(task: string, config: RouterConfig): RouteResult {
   }
 
   const profile = config[agent].models[modelTier];
-  const effort = forcedEffort ?? profile.effort ?? effortForTier(modelTier);
+  const requestedEffort = forcedEffort ?? profile.effort ?? effortForTier(modelTier);
+  const effort = effectiveEffort(agent, requestedEffort);
+  if (effort !== requestedEffort)
+    modelReasons.push(`${agent} does not expose an AIRO effort control → using auto`);
   const routeKey = `${agent}/${explicitModel?.model ?? profile.model}/${effort}`;
   modelReasons.unshift(`complexity ${complexity}/5 → ${modelTier} tier`);
   if (userRequestedTier)

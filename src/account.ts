@@ -3,11 +3,12 @@ import path from "node:path";
 import type { Agent, RouterConfig } from "./types.js";
 import { PROVIDERS } from "./providers.js";
 import { readJson, readTomlValue, runProviderCommand } from "./provider-shell.js";
+import { commandExists } from "./runner.js";
 
 export interface ProviderAccount {
   agent: Agent;
   available: boolean;
-  authenticated: boolean;
+  authenticated?: boolean;
   authMethod?: string;
   identity?: string;
   status: string;
@@ -128,22 +129,29 @@ function inspectCodex(command: string, defaultModel?: string): ProviderAccount {
 }
 
 /**
- * Inspect one provider account. Returns undefined for providers without a
- * sign-in probe, so callers can treat them as "unknown" rather than broken.
+ * Inspect one provider account. Providers without a sign-in probe report an
+ * explicit unknown state rather than being omitted or treated as signed out.
  */
 export function inspectAccount(
   agent: Agent,
   config: RouterConfig,
   cwd = process.cwd(),
-): ProviderAccount | undefined {
+): ProviderAccount {
   const defaults = detectDefaultModels(config, cwd);
   if (agent === "claude") return inspectClaude(config.claude.command, defaults.claude);
   if (agent === "codex") return inspectCodex(config.codex.command, defaults.codex);
-  return undefined;
+  const available = commandExists(config[agent].command);
+  return {
+    agent,
+    available,
+    authenticated: undefined,
+    status: available
+      ? "authentication not inspected"
+      : `${config[agent].command} not found in PATH`,
+    defaultModel: defaults[agent],
+  };
 }
 
 export function inspectAccounts(config: RouterConfig, cwd = process.cwd()): ProviderAccount[] {
-  return PROVIDERS.filter((provider) => provider.capabilities.accountInspection)
-    .map((provider) => inspectAccount(provider.id, config, cwd))
-    .filter((account): account is ProviderAccount => Boolean(account));
+  return PROVIDERS.map((provider) => inspectAccount(provider.id, config, cwd));
 }

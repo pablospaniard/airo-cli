@@ -207,7 +207,7 @@ For example, a project using custom locations can contain:
 
 You can also put the provider directories on `PATH`. This is usually easiest for terminal use, but GUI-launched VS Code processes may not load the same shell startup files. In that case, configure absolute provider paths in `.airo.json` or the global config, and configure the absolute AIRO CLI path separately in **AIRO: Command**. AIRO does not scan arbitrary directories automatically. The configured provider command may be a wrapper script, as long as it accepts that provider CLI's normal arguments.
 
-AIRO has explicit sign-in probes for Claude Code and Codex CLI. Gemini and Copilot may expose command availability and model catalogs, but AIRO does not currently inspect their sign-in status or account identity. Provider CLIs may intentionally omit an email address or complete subscription entitlements. AIRO never reads or decodes stored credentials.
+AIRO has explicit sign-in probes for Claude Code and Codex CLI. Gemini and Copilot expose command availability and model catalogs, but AIRO reports their authentication as `not inspected` because it does not currently probe their sign-in status or account identity. Provider CLIs may intentionally omit an email address or complete subscription entitlements. AIRO never reads or decodes stored credentials.
 
 Use these commands to see what AIRO can see:
 
@@ -216,7 +216,7 @@ airo doctor
 airo account
 ```
 
-`airo account` reports only Claude and Codex because those are the providers with account probes. For their comparison defaults, AIRO checks its own configuration first, then `ANTHROPIC_MODEL` or Claude settings for Claude Code and Codex's `config.toml` for Codex. Gemini and Copilot comparison defaults come only from their configured `defaultModel` and are used by `airo usage`, not `airo account`. A comparison default does not limit which model you can run; set it with `airo setup` or `defaultModel` in that provider's AIRO configuration.
+`airo account` lists every registered provider. It reports verified sign-in status for Claude and Codex and an explicit unknown state for Gemini and Copilot. For comparison defaults, AIRO checks its own configuration first, then `ANTHROPIC_MODEL` or Claude settings for Claude Code and Codex's `config.toml` for Codex. Gemini and Copilot defaults come only from their configured `defaultModel`. A comparison default does not limit which model you can run; set it with `airo setup` or `defaultModel` in that provider's AIRO configuration.
 
 ## Sessions and interactive chat
 
@@ -372,7 +372,7 @@ Claude runs use `permissionMode: "acceptEdits"` inside prompt mode so headless i
 | The VS Code sidebar cannot start AIRO | Install or link `airo-ai-router`, then set **AIRO: Command** to the absolute `airo` executable path if `airo` is not on VS Code’s `PATH`. |
 | A dev server cannot bind to localhost | Approve AIRO's permission prompt with `yes`, `approve`, or the sidebar's **Approve** button. AIRO retries that continuation with elevated access and requires the agent to verify the local URL before reporting it. |
 | A generated image is missing | Ask the agent to generate it again. AIRO requires generated files to be persisted and verified, and the VS Code sidebar previews existing image artifacts inline. |
-| AIRO cannot tell whether I am signed in | `airo account` probes only Claude and Codex. For Gemini or Copilot, check sign-in with the provider's own CLI. Provider CLIs may not reveal an email address or subscription name; that is expected. |
+| AIRO cannot tell whether I am signed in | `airo account` verifies Claude and Codex but reports Gemini and Copilot as `not inspected`; check those with the provider's own CLI. Provider CLIs may not reveal an email address or subscription name; that is expected. |
 | My model is rejected | Confirm the model is available to the selected provider subscription, then include `--agent <provider>` with `--model <model>`. Use `airo setup` to update automatic tier defaults. |
 | The comparison default is missing | Run `airo setup` and enter the provider's usual model when prompted, or set that provider's `defaultModel` in AIRO configuration. This only affects `airo usage` comparisons. |
 | Node will not run AIRO | Check `node --version`; AIRO requires Node.js 22 or newer. Upgrade Node, reinstall AIRO, and run `airo doctor` again. |
@@ -395,7 +395,7 @@ Claude runs use `permissionMode: "acceptEdits"` inside prompt mode so headless i
 | `airo --log <compact\|live\|verbose> "task"` | Control terminal progress detail. |
 | `airo setup` | Configure automatic model tiers. |
 | `airo models` | Print the active provider/model mapping. |
-| `airo account` | Show Claude and Codex login status and detected defaults. |
+| `airo account` | List every provider; verify Claude/Codex login status and mark other authentication states as unknown. |
 | `airo doctor` | Check provider commands and storage locations. |
 | `airo config init` | Create a project-local `.airo.json`. |
 | `airo session` / `airo sessions` | Show the active session or list repository sessions. |

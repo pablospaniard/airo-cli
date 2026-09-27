@@ -1,4 +1,4 @@
-import type { Agent } from "./types.js";
+import type { Agent, Effort } from "./types.js";
 
 export interface ProviderCapabilities {
   accountInspection: boolean;
@@ -70,4 +70,8 @@ export const AGENTS: readonly Agent[] = PROVIDERS.map((provider) => provider.id)
 
 export function providerDefinition(agent: Agent): ProviderDefinition {
   return PROVIDERS.find((provider) => provider.id === agent)!;
+}
+
+export function effectiveEffort(agent: Agent, effort: Effort): Effort {
+  return providerDefinition(agent).capabilities.effortControl ? effort : "auto";
 }

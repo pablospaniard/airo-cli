@@ -654,10 +654,14 @@ async function chatLoop(config: any, path?: string) {
             "Provider accounts",
             inspectAccounts(config).map((account) => {
               const icon =
-                account.available && account.authenticated ? statusIcon("ok") : statusIcon("error");
+                account.available && account.authenticated === true
+                  ? statusIcon("ok")
+                  : account.available && account.authenticated === undefined
+                    ? statusIcon("info")
+                    : statusIcon("error");
               const identity =
                 account.identity ??
-                (account.authenticated ? "identity not exposed by CLI" : account.status);
+                (account.authenticated === true ? "identity not exposed by CLI" : account.status);
               return `${icon} ${agentColor(account.agent, account.agent.padEnd(6))} ${ui.bold(identity)} ${ui.gray(`· default ${account.defaultModel ?? "not detected"}`)}`;
             }),
           ),
@@ -847,10 +851,14 @@ async function main() {
     console.log(divider("Provider accounts"));
     for (const account of inspectAccounts(config)) {
       const icon =
-        account.available && account.authenticated ? statusIcon("ok") : statusIcon("error");
+        account.available && account.authenticated === true
+          ? statusIcon("ok")
+          : account.available && account.authenticated === undefined
+            ? statusIcon("info")
+            : statusIcon("error");
       const identity =
         account.identity ??
-        (account.authenticated ? "identity not exposed by CLI" : account.status);
+        (account.authenticated === true ? "identity not exposed by CLI" : account.status);
       console.log(
         `${icon} ${agentColor(account.agent, account.agent.padEnd(6))} ${ui.bold(identity)}`,
       );

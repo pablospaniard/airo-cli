@@ -65,9 +65,14 @@ test("detects layered provider defaults and authenticated accounts", () => {
     });
     const accounts = inspectAccounts(config, repo);
     assert.deepEqual(
-      accounts.map((account) => account.authenticated),
+      accounts.slice(0, 2).map((account) => account.authenticated),
       [true, true],
     );
+    assert.deepEqual(
+      accounts.slice(2).map((account) => account.authenticated),
+      [undefined, undefined],
+    );
+    assert.match(accounts[2].status, /authentication not inspected|not found in PATH/);
     assert.equal(accounts[0].identity, "user@example.com");
     assert.equal(accounts[1].authMethod, "ChatGPT");
   } finally {
@@ -93,7 +98,7 @@ test("does not read a negated sign-in message as an authenticated account", () =
     config.codex.command = codex;
     const accounts = inspectAccounts(config, dir);
     assert.deepEqual(
-      accounts.map((account) => account.authenticated),
+      accounts.slice(0, 2).map((account) => account.authenticated),
       [false, false],
     );
     assert.equal(accounts[1].status, "Not logged in");

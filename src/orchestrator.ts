@@ -1,5 +1,5 @@
 import { inspectAccount } from "./account.js";
-import { AGENTS, providerDefinition } from "./providers.js";
+import { AGENTS, effectiveEffort, providerDefinition } from "./providers.js";
 import { appendHistory, newHistoryId, newRunId, updateHistoryRecord } from "./history.js";
 import { routeTask } from "./router.js";
 import {
@@ -169,10 +169,12 @@ export function applyPhasePreference(
     route.modelTier = p.preferredTier;
   const profile = config[route.agent].models[route.modelTier];
   if (!route.userRequestedModel) route.model = profile.model;
-  route.effort =
+  route.effort = effectiveEffort(
+    route.agent,
     route.userRequestedTier || route.userRequestedModel
       ? (profile.effort ?? route.effort)
-      : (p.preferredEffort ?? profile.effort ?? route.effort);
+      : (p.preferredEffort ?? profile.effort ?? route.effort),
+  );
   route.modelReasons.push(`phase ${p.kind} → ${route.agent}/${route.modelTier}`);
   return route;
 }
@@ -210,8 +212,9 @@ export function applyRouteOverrides(
   const profile = config[route.agent].models[route.modelTier];
   if (overrides.agent || overrides.tier) route.model = profile.model;
   if (overrides.model) route.model = overrides.model;
-  if (overrides.agent || overrides.tier) route.effort = profile.effort ?? route.effort;
-  if (overrides.effort) route.effort = overrides.effort;
+  if (overrides.agent || overrides.tier)
+    route.effort = effectiveEffort(route.agent, profile.effort ?? route.effort);
+  if (overrides.effort) route.effort = effectiveEffort(route.agent, overrides.effort);
   if (overrides.agent || overrides.tier || overrides.model)
     route.modelReasons.push(`explicit flags → ${route.agent}/${route.model} (${route.modelTier})`);
   return route;
@@ -275,7 +278,7 @@ export function fallbackIfMissing(
     ...route,
     agent: fallback,
     model: p.model,
-    effort: p.effort ?? route.effort,
+    effort: effectiveEffort(fallback, p.effort ?? route.effort),
     modelReasons: [...route.modelReasons, `provider missing → fallback ${fallback}`],
   };
 }
@@ -300,7 +303,7 @@ export function fallbackProvider(
     ...route,
     agent: fallback,
     model: profile.model,
-    effort: profile.effort ?? route.effort,
+    effort: effectiveEffort(fallback, profile.effort ?? route.effort),
     modelReasons: [...route.modelReasons, `provider ${failure} → fallback ${fallback}`],
   };
 }

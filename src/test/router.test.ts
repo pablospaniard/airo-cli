@@ -141,9 +141,26 @@ test("understands human-style provider, model, and tier overrides", () => {
   assert.equal(gemini.agent, "gemini");
   assert.equal(gemini.modelTier, "fast");
   assert.equal(gemini.model, current.gemini.models.fast.model);
+  assert.equal(gemini.effort, "auto");
   assert.equal(codex.agent, "codex");
   assert.equal(codex.modelTier, "deep");
   assert.equal(codex.model, current.codex.models.deep.model);
+});
+
+test("normalizes unsupported provider effort overrides", () => {
+  const current = config();
+  const route = applyRouteOverrides(
+    routeTask("implement this endpoint", current),
+    {
+      agent: "copilot",
+      tier: "deep",
+      effort: "high",
+    },
+    current,
+  );
+
+  assert.equal(route.agent, "copilot");
+  assert.equal(route.effort, "auto");
 });
 
 test("pins the provider only when the user chose it", () => {
