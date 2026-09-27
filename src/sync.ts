@@ -58,6 +58,24 @@ class SyncApiError extends Error {
   }
 }
 
+async function retryTransientFetch(
+  request: () => Promise<Response>,
+  attempts = 3,
+): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await request();
+    } catch (error) {
+      lastError = error;
+      if (attempt + 1 < attempts) {
+        await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
+      }
+    }
+  }
+  throw lastError;
+}
+
 export interface CredentialStore {
   load(): Credentials | undefined;
   save(value: Credentials): void;
@@ -276,15 +294,18 @@ async function api<T>(
   init: RequestInit = {},
   token?: string,
 ): Promise<T> {
-  const response = await fetch(`${state.server}${route}`, {
-    ...init,
-    signal: AbortSignal.timeout(15_000),
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...init.headers,
-    },
-  });
+  const request = () =>
+    fetch(`${state.server}${route}`, {
+      ...init,
+      signal: AbortSignal.timeout(15_000),
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...init.headers,
+      },
+    });
+  const retryable = (init.method ?? "GET").toUpperCase() === "GET" || route === "/v1/auth/github";
+  const response = retryable ? await retryTransientFetch(request) : await request();
   const body = (await response.json()) as T & { error?: { message?: string } };
   if (!response.ok)
     throw new SyncApiError(
@@ -341,45 +362,91 @@ export async function syncLogin(options: {
   };
   if (options.server) state.server = options.server.replace(/\/$/, "");
   const store = credentialStore(options.allowCredentialFile, root);
-  const started = await api<{
-    challenge: string;
-    userCode: string;
-    verificationUri: string;
-    expiresIn: number;
-    interval: number;
-  }>(state, "/v1/auth/device/start", {
-    method: "POST",
-    body: JSON.stringify({ deviceId: state.deviceId, deviceName: os.hostname().slice(0, 80) }),
-  });
-  options.onChallenge(started.verificationUri, started.userCode);
-  const deadline = Date.now() + started.expiresIn * 1000;
+  const authConfig = await api<{ provider: "github"; clientId: string }>(state, "/v1/auth/config");
+  const githubResponse = await retryTransientFetch(() =>
+    fetch("https://github.com/login/device/code", {
+      method: "POST",
+      signal: AbortSignal.timeout(15_000),
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "airo-cli",
+      },
+      body: new URLSearchParams({ client_id: authConfig.clientId, scope: "read:user" }),
+    }),
+  );
+  const started = (await githubResponse.json()) as {
+    device_code?: string;
+    user_code?: string;
+    verification_uri?: string;
+    expires_in?: number;
+    interval?: number;
+    error?: string;
+  };
+  if (
+    !githubResponse.ok ||
+    !started.device_code ||
+    !started.user_code ||
+    !started.verification_uri ||
+    !started.expires_in ||
+    !started.interval
+  )
+    throw new Error(
+      `GitHub device authorization failed (${started.error ?? githubResponse.status}).`,
+    );
+  options.onChallenge(started.verification_uri, started.user_code);
+  const deadline = Date.now() + started.expires_in * 1000;
   let delay = started.interval;
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, delay * 1000));
-    const response = await fetch(`${state.server}/v1/auth/device/poll`, {
-      method: "POST",
-      signal: AbortSignal.timeout(15_000),
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ challenge: started.challenge }),
-    });
-    const result = (await response.json()) as {
-      status?: string;
-      retryAfter?: number;
-      accessToken?: string;
-      refreshToken?: string;
-      user?: { id: string; login: string };
-      error?: { message?: string };
-    };
-    if (response.status === 202) {
-      delay = Math.max(1, result.retryAfter ?? delay);
+    let response: Response;
+    try {
+      response = await fetch("https://github.com/login/oauth/access_token", {
+        method: "POST",
+        signal: AbortSignal.timeout(15_000),
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/x-www-form-urlencoded",
+          "User-Agent": "airo-cli",
+        },
+        body: new URLSearchParams({
+          client_id: authConfig.clientId,
+          device_code: started.device_code,
+          grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+        }),
+      });
+    } catch {
+      // A temporary GitHub/network failure must not invalidate an otherwise
+      // active device challenge. The next poll can safely continue it.
       continue;
     }
-    if (!response.ok || !result.accessToken || !result.refreshToken || !result.user)
-      throw new Error(result.error?.message ?? "Device authorization failed.");
-    store.save({ accessToken: result.accessToken, refreshToken: result.refreshToken });
-    state.user = result.user;
+    const result = (await response.json()) as {
+      access_token?: string;
+      error?: string;
+    };
+    if (result.error === "authorization_pending") continue;
+    if (result.error === "slow_down") {
+      delay += 5;
+      continue;
+    }
+    if (!response.ok || !result.access_token)
+      throw new Error(`GitHub device authorization failed (${result.error ?? response.status}).`);
+    const authorized = await api<{
+      accessToken: string;
+      refreshToken: string;
+      user: { id: string; login: string };
+    }>(state, "/v1/auth/github", {
+      method: "POST",
+      body: JSON.stringify({
+        deviceId: state.deviceId,
+        deviceName: os.hostname().slice(0, 80),
+        githubAccessToken: result.access_token,
+      }),
+    });
+    store.save({ accessToken: authorized.accessToken, refreshToken: authorized.refreshToken });
+    state.user = authorized.user;
     writeState(state, root);
-    return { login: result.user.login, credentialStore: store.description };
+    return { login: authorized.user.login, credentialStore: store.description };
   }
   throw new Error("Device authorization expired.");
 }

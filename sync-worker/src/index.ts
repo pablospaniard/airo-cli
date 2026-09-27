@@ -245,11 +245,15 @@ async function startDeviceFlow(request: Request, env: Env): Promise<Response> {
   if (!deviceName) return error(400, "invalid_request", "deviceName cannot be empty.");
   const limited = await rateLimit(env.AUTH_RATE_LIMITER, `device-start:${body.deviceId}`);
   if (limited) return limited;
-  if (env.GITHUB_CLIENT_ID === "REPLACE_WITH_GITHUB_OAUTH_CLIENT_ID")
+  if (env.GITHUB_CLIENT_ID.startsWith("REPLACE_"))
     return error(503, "not_configured", "GitHub OAuth is not configured.");
   const github = await fetch("https://github.com/login/device/code", {
     method: "POST",
-    headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
+      "User-Agent": "airo-sync-worker",
+    },
     body: new URLSearchParams({ client_id: env.GITHUB_CLIENT_ID, scope: "read:user" }),
   });
   if (!github.ok) return error(502, "github_unavailable", "GitHub device authorization failed.");
@@ -312,14 +316,17 @@ async function pollDeviceFlow(request: Request, env: Env): Promise<Response> {
     .run();
   const github = await fetch("https://github.com/login/oauth/access_token", {
     method: "POST",
-    headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
+      "User-Agent": "airo-sync-worker",
+    },
     body: new URLSearchParams({
       client_id: env.GITHUB_CLIENT_ID,
       device_code: challenge.github_device_code,
       grant_type: "urn:ietf:params:oauth:grant-type:device_code",
     }),
   });
-  if (!github.ok) return error(502, "github_unavailable", "GitHub authorization check failed.");
   const token: GithubDeviceResponse = await github.json();
   if (token.error === "authorization_pending")
     return json({ status: "pending", retryAfter: challenge.interval_seconds }, 202);
@@ -331,6 +338,13 @@ async function pollDeviceFlow(request: Request, env: Env): Promise<Response> {
       .bind(interval, time + interval, idHash)
       .run();
     return json({ status: "pending", retryAfter: interval }, 202);
+  }
+  if (!github.ok) {
+    const oauthError =
+      typeof token.error === "string" && /^[a-z_]{1,64}$/.test(token.error)
+        ? token.error
+        : "unknown";
+    return error(502, `github_${oauthError}`, `GitHub authorization check failed (${oauthError}).`);
   }
   if (typeof token.access_token !== "string")
     return error(401, "authorization_denied", "GitHub authorization was denied or expired.");
@@ -420,6 +434,77 @@ async function refreshSession(request: Request, env: Env): Promise<Response> {
     .bind(now(), row.family_id)
     .run();
   return json(await issueTokens(env, row.user_id, row.device_id));
+}
+
+async function exchangeGithubToken(request: Request, env: Env): Promise<Response> {
+  const body = object(await readJson(request));
+  if (
+    !body ||
+    !validId(body.deviceId) ||
+    typeof body.deviceName !== "string" ||
+    typeof body.githubAccessToken !== "string" ||
+    body.githubAccessToken.length < 20 ||
+    body.githubAccessToken.length > 512
+  )
+    return error(400, "invalid_request", "A valid device and GitHub access token are required.");
+  const deviceName = body.deviceName.trim().slice(0, 80);
+  if (!deviceName) return error(400, "invalid_request", "deviceName cannot be empty.");
+  const limited = await rateLimit(env.AUTH_RATE_LIMITER, `github-exchange:${body.deviceId}`);
+  if (limited) return limited;
+  const profileResponse = await fetch("https://api.github.com/user", {
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${body.githubAccessToken}`,
+      "User-Agent": "airo-sync-worker",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+  if (!profileResponse.ok)
+    return error(401, "github_token_invalid", "GitHub identity verification failed.");
+  const profile: GithubUser = await profileResponse.json();
+  if (
+    (typeof profile.id !== "number" && typeof profile.id !== "string") ||
+    typeof profile.login !== "string"
+  )
+    return error(502, "github_invalid", "GitHub returned an invalid profile.");
+  const time = now();
+  const githubUserId = String(profile.id);
+  let user = await env.DB.prepare("SELECT id FROM users WHERE github_user_id = ?")
+    .bind(githubUserId)
+    .first<{ id: string }>();
+  if (!user) {
+    user = { id: crypto.randomUUID() };
+    await env.DB.prepare(
+      "INSERT INTO users(id, github_user_id, github_login, created_at) VALUES(?, ?, ?, ?)",
+    )
+      .bind(user.id, githubUserId, profile.login, time)
+      .run();
+  } else {
+    await env.DB.prepare("UPDATE users SET github_login = ? WHERE id = ?")
+      .bind(profile.login, user.id)
+      .run();
+  }
+  await env.DB.prepare(
+    `INSERT INTO devices(id, user_id, name, created_at, last_seen_at, revoked_at)
+     VALUES(?, ?, ?, ?, ?, NULL)
+     ON CONFLICT(user_id, id) DO UPDATE SET name = excluded.name, last_seen_at = excluded.last_seen_at, revoked_at = NULL`,
+  )
+    .bind(body.deviceId, user.id, deviceName, time, time)
+    .run();
+  // Make the exchange safe for client retries. If the response to an earlier
+  // attempt was lost, its token family is revoked before replacements are
+  // issued for this device.
+  await env.DB.prepare(
+    "UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND device_id = ? AND revoked_at IS NULL",
+  )
+    .bind(time, user.id, body.deviceId)
+    .run();
+  return json({
+    status: "authorized",
+    user: { id: user.id, login: profile.login },
+    deviceId: body.deviceId,
+    ...(await issueTokens(env, user.id, body.deviceId)),
+  });
 }
 
 function eventInput(value: unknown): EventInput | undefined {
@@ -678,6 +763,10 @@ async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   if (request.method === "GET" && url.pathname === "/health")
     return json({ status: "ok", service: "airo-sync", schemaVersion: 1 });
+  if (request.method === "GET" && url.pathname === "/v1/auth/config")
+    return json({ provider: "github", clientId: env.GITHUB_CLIENT_ID });
+  if (request.method === "POST" && url.pathname === "/v1/auth/github")
+    return exchangeGithubToken(request, env);
   if (request.method === "POST" && url.pathname === "/v1/auth/device/start")
     return startDeviceFlow(request, env);
   if (request.method === "POST" && url.pathname === "/v1/auth/device/poll")

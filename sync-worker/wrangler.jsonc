@@ -5,13 +5,13 @@
   "compatibility_date": "2026-09-27",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
-    "GITHUB_CLIENT_ID": "REPLACE_WITH_GITHUB_OAUTH_CLIENT_ID",
+    "GITHUB_CLIENT_ID": "Ov23li72JP3433SbMpe7",
   },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "airo-sync",
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "database_id": "e44b08c1-0b8e-4f8e-be25-74c179498d30",
       "migrations_dir": "migrations",
     },
   ],

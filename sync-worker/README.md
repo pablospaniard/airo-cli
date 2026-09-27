@@ -2,7 +2,9 @@
 
 This directory contains the optional Cloudflare Worker used by AIRO's development-branch sync milestone. The npm package does not need this service for routing, orchestration, portable archives, or local learning.
 
-The Worker authenticates devices with GitHub's device flow, stores only hashes of AIRO session tokens, and persists opaque encrypted event and setting envelopes in D1. Encryption and recovery-key handling happen in the CLI. Provider credentials, API keys, executable paths, permission settings, and Jev consent are outside the sync schema.
+The CLI completes GitHub's device flow directly. It sends the resulting short-lived GitHub token once to the Worker, which validates the account with GitHub and discards the token. The Worker stores only hashes of AIRO session tokens and persists opaque encrypted event and setting envelopes in D1. Encryption and recovery-key handling happen in the CLI. Provider credentials, API keys, executable paths, permission settings, and Jev consent are outside the sync schema.
+
+The development deployment is available at `https://airo-sync.pablospaniard.workers.dev`. This does not make sync part of the currently published npm package.
 
 ## Provisioning
 
@@ -22,7 +24,7 @@ The Worker authenticates devices with GitHub's device flow, stores only hashes o
    pnpm exec wrangler deploy --config sync-worker/wrangler.jsonc
    ```
 
-The GitHub client ID is public OAuth configuration, not a secret. Do not add a GitHub client secret: this implementation deliberately uses the device flow and never persists GitHub access tokens.
+The GitHub client ID is public OAuth configuration, not a secret. Do not add a GitHub client secret: this implementation deliberately uses the device flow. GitHub access tokens exist only in CLI and Worker memory during identity exchange and are never persisted.
 
 ## Local verification
 
@@ -39,6 +41,7 @@ The tests run in Cloudflare's Workers runtime integration with an isolated local
 - Access tokens expire after 15 minutes; refresh tokens expire after 30 days and rotate as a family.
 - Reuse of a rotated refresh token revokes the remaining family.
 - Devices can be listed and individually revoked.
+- Retried GitHub exchanges revoke prior token families for that device before issuing replacements.
 - Requests are size-bounded, validated, and rate-limited before storage.
 - History events are append-only and idempotent by account and event ID.
 - Settings use optimistic per-key revisions.

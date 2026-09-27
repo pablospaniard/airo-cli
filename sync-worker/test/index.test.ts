@@ -55,6 +55,19 @@ describe("sync Worker", () => {
       schemaVersion: 1,
     });
     expect((await SELF.fetch("https://example.com/v1/sync/status")).status).toBe(401);
+    expect(await (await SELF.fetch("https://example.com/v1/auth/config")).json()).toEqual({
+      provider: "github",
+      clientId: "Ov23li72JP3433SbMpe7",
+    });
+    expect(
+      (
+        await SELF.fetch("https://example.com/v1/auth/github", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ deviceId: "invalid" }),
+        })
+      ).status,
+    ).toBe(400);
   });
 
   it("stores opaque events idempotently and advances a cursor", async () => {

@@ -151,9 +151,9 @@ Repositories without a remote receive a random project ID. Linking another check
 
 ## Optional Cloudflare sync
 
-Cloud sync is an opt-in development-branch convenience for migration and multi-device continuity. Local data remains authoritative, routing continues offline, and sync is invoked explicitly rather than as part of a provider run, so failure never changes a task's exit status.
+Cloud sync is an opt-in development-branch convenience for migration and multi-device continuity. The development service is deployed at `https://airo-sync.pablospaniard.workers.dev`; the client remains unreleased on npm. Local data remains authoritative, routing continues offline, and sync is invoked explicitly rather than as part of a provider run, so failure never changes a task's exit status.
 
-The proposed platform is:
+The implemented platform is:
 
 - A [Cloudflare Worker](https://developers.cloudflare.com/workers/) for authentication, authorization, validation, rate limiting, and sync endpoints
 - [Cloudflare D1](https://developers.cloudflare.com/d1/) for users, devices, encrypted settings, append-only sync events, cursors, and tombstones
@@ -162,14 +162,15 @@ The proposed platform is:
 
 ### Authentication
 
-The initial user flow should be browser-assisted GitHub authentication suitable for local terminals, remote shells, and containers:
+The initial user flow is browser-assisted GitHub authentication suitable for local terminals, remote shells, and containers:
 
 ```text
 airo sync login
   -> receive verification URL and short-lived device challenge
   -> authenticate with GitHub in the browser
-  -> CLI polls until approved
-  -> receive short-lived access and rotating refresh credentials
+  -> CLI polls GitHub directly until approved
+  -> Worker validates the one-time GitHub token and discards it
+  -> receive short-lived AIRO access and rotating refresh credentials
 ```
 
 End users do not need Cloudflare accounts. Device sessions must be individually revocable. Refresh tokens are stored in the operating-system credential store when possible, with a permission-restricted local file only as an explicit fallback; the server stores only token hashes.
@@ -352,7 +353,7 @@ Cloud sync consent never implies research consent. Local Jev consent never impli
 
 - **Versioning:** encrypted event envelopes, wrapped account keys, local sync state, account exports, and the D1 schema start at version 1. The Worker uses a pinned compatibility date and generated runtime types.
 - **Verification:** package tests cover authenticated encryption, recovery wrapping, account-key-separated repository indexes, and setting exclusions. Workers-runtime integration tests apply real D1 migrations and cover authentication, idempotent events, cursors, immutable account-key setup, and optimistic revisions. Wrangler's dry-run build and the full `pnpm validate` gate are required.
-- **Authentication and devices:** GitHub's browser-assisted device flow issues short access tokens and rotating refresh-token families. Only token hashes reach D1. A detected refresh-token replay revokes its family, and users can list or revoke devices independently.
+- **Authentication and devices:** the CLI completes GitHub's browser-assisted device flow directly. It sends the resulting short-lived GitHub token once to the Worker, which verifies the account through GitHub and never persists the token. AIRO then issues short access tokens and rotating refresh-token families; only their hashes reach D1. Login retries revoke earlier token families for the same device before issuing replacements. A detected refresh-token replay revokes its family, and users can list or revoke devices independently.
 - **Security and privacy:** AES-256-GCM payload encryption and scrypt recovery wrapping happen locally. D1 receives ciphertext, a wrapped account key, keyed repository indexes, and operational metadata. Provider credentials, API keys, executable paths, permission settings, Jev consent, and recovery passphrases never sync. Existing local history uploads only when the user explicitly runs `airo sync now`.
 - **Conflict and recovery behavior:** immutable event IDs are inserted once, pulls advance an account cursor, and divergent local immutable records fail closed. Settings use per-key optimistic revisions; simultaneous local and remote edits stop without overwriting either side. Losing the recovery passphrase and every authorized device makes cloud data unrecoverable.
 - **Operations and rollback:** the service supports encrypted account export, per-device revocation, logout, and cascading cloud-data deletion. Sync remains optional and can be disabled by signing out; local evidence remains authoritative and portable encrypted archives remain available without the service.
