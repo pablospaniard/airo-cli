@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   cleanDroppedPath,
+  INTERACTIVE_SHELL_HELP,
   isSupportedAttachmentPath,
   parseFeedbackAnswer,
   parseInteractiveInput,
@@ -94,6 +95,15 @@ test("returns guidance for invalid interactive commands", () => {
   assert.match(parseInteractiveInput("/feedback maybe").kind, /error/);
   assert.match(parseInteractiveInput("/learning explain").kind, /error/);
   assert.match(parseInteractiveInput("/wat").kind, /error/);
+});
+
+test("advertises shell-only Jev and sync command families from interactive help", () => {
+  const commands = INTERACTIVE_SHELL_HELP.map(([command]) => command).join("\n");
+  assert.match(commands, /airo feedback jev status\|enable\|disable/);
+  assert.match(commands, /airo feedback jev inspect\|reset/);
+  assert.match(commands, /airo sync login\|enable\|now\|status/);
+  assert.match(commands, /airo sync devices\|export\|logout/);
+  assert.match(commands, /airo sync delete-cloud-data --yes/);
 });
 
 test("builds minimal CLI arguments for automatic preferences", () => {
