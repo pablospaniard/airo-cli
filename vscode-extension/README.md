@@ -31,6 +31,9 @@ The extension runs the CLI in the currently opened workspace; it does not upload
 attached files or store provider credentials.
 
 The extension uses the same local routing, history, and learning behavior as the
-CLI. Future Jev feedback, encrypted sync, and research-consent work is documented
-in [`docs/routing-platform-roadmap.md`](../docs/routing-platform-roadmap.md) and is
-not part of the current extension release.
+CLI. If optional Jev feedback is enabled from the shell, completed extension runs
+can produce the same bounded post-run evidence. Encrypted sync is also managed
+from the shell rather than the extension UI. Both features are implemented only
+on the development branch until a newer npm package is published. Research
+consent remains unimplemented and is documented separately in
+[`docs/routing-platform-roadmap.md`](../docs/routing-platform-roadmap.md).

@@ -1,6 +1,6 @@
 # Routing rules and learning
 
-This document describes routing behavior in the source tree; the roadmap distinguishes development-branch milestones from the current npm release. For provider registration, portable learning, optional Jev feedback, encrypted sync, and research consent, see [Routing platform roadmap](routing-platform-roadmap.md). [Jev and AIRO](jev-and-airo.md) records Jev's narrower role.
+This document describes routing behavior in the current source tree. Published `airo-ai-router@0.7.1` predates the completed development-branch Milestones 1–5 additions; the roadmap tracks that release boundary. For provider registration, portable learning, optional Jev feedback, encrypted sync, and research consent, see [Routing platform roadmap](routing-platform-roadmap.md). [Jev and AIRO](jev-and-airo.md) records Jev's narrower role.
 
 AIRO makes a routing decision in two parts:
 
@@ -98,6 +98,16 @@ Model discovery is also exhaustive across the provider registry. Each provider a
 
 The versioned provider support audit verifies registry metadata, configuration, routing policy, runtime behavior, failure classification, account inspection, discovery, capabilities, tests, and documentation for every registered provider. `airo doctor` shows this source integration status separately from local command availability; an integration can be supported even when its CLI is not installed on a particular machine.
 
+Current capability differences are explicit adapter metadata rather than different support levels:
+
+| Capability                     | Claude | Codex | Gemini                                  | Copilot                                 |
+| ------------------------------ | ------ | ----- | --------------------------------------- | --------------------------------------- |
+| Task execution/model selection | Yes    | Yes   | Yes                                     | Yes                                     |
+| Model discovery strategy       | Yes    | Yes   | CLI when advertised, otherwise fallback | CLI when advertised, otherwise fallback |
+| Deterministic account probe    | Yes    | Yes   | No; state is unknown                    | No; state is unknown                    |
+| Explicit effort control        | Yes    | Yes   | No; uses `auto`                         | No; uses `auto`                         |
+| Structured progress            | Yes    | Yes   | Yes                                     | Limited                                 |
+
 ## Complexity and model tier
 
 Complexity begins at `2` and is clamped to the range `1` through `5`.
@@ -143,7 +153,7 @@ These preferences do not replace a provider, model, or tier explicitly selected 
 
 Learning is local, file-based, and repository-scoped by default. AIRO does not train a provider model or maintain a separate learned-weights file.
 
-The published npm release does not sync history between machines. The development branch implements portable encrypted export/import and optional end-to-end encrypted Cloudflare sync; these must not be presented as released npm behavior until the release process completes. Without explicitly enabling and invoking sync, the files below remain local.
+Published `airo-ai-router@0.7.1` does not sync history between machines. The development branch implements portable encrypted export/import and optional end-to-end encrypted Cloudflare sync; these must not be presented as released npm behavior until the release process completes. Without explicitly enabling and invoking sync, the files below remain local.
 
 Unless `history.path` is configured, records are stored at:
 
