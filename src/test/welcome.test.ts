@@ -5,7 +5,8 @@ import { VERSION } from "../version.js";
 import { firstRunWelcome } from "../welcome.js";
 
 test("introduces automatic discovery and permission setup on first run", () => {
-  const welcome = plainText(firstRunWelcome());
+  const width = 72;
+  const welcome = plainText(firstRunWelcome(width));
 
   assert.match(welcome, /█████╗/);
   assert.match(welcome, /Adaptive Intelligence Routing & Orchestration/);
@@ -31,4 +32,10 @@ test("introduces automatic discovery and permission setup on first run", () => {
   assert.ok(logoLine && subtitleLine);
   assert.ok(Math.abs(midpoint(logoLine) - midpoint(sectionTitles[0])) <= 0.5);
   assert.ok(Math.abs(midpoint(subtitleLine) - midpoint(sectionTitles[0])) <= 0.5);
+
+  const contentLines = lines.filter((line) => line.trim());
+  const copyLines = contentLines.filter((line) => !/[█╔╚║╗╝═]/.test(line));
+  assert.ok(contentLines.every((line) => line.length <= width));
+  assert.ok(copyLines.every((line) => Math.abs(midpoint(line) - width / 2) <= 0.5));
+  assert.ok(lines.some((line) => line.includes("GitHub Copilot CLI")));
 });
