@@ -15,10 +15,10 @@ test("launches permission setup only before a first interactive provider run", (
   assert.equal(shouldRunInitialSetup(["setup"], true, false), false);
 });
 
-test("shows welcome only before the first interactive configuration", () => {
+test("shows the branded welcome before every interactive invocation", () => {
   assert.equal(shouldShowWelcome([], true), true);
   assert.equal(shouldShowWelcome(["doctor"], true), true);
-  assert.equal(shouldShowWelcome([], true, true), false);
+  assert.equal(shouldShowWelcome(["review this change"], true), true);
   assert.equal(shouldShowWelcome([], false), false);
   assert.equal(shouldShowWelcome(["--help"], true), false);
   assert.equal(shouldShowWelcome(["--version"], true), false);
