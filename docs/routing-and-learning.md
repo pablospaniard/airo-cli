@@ -44,13 +44,13 @@ Custom rules are user-authored entries in the active AIRO configuration. They ar
 
 Each rule supports:
 
-| Field | Meaning |
-| --- | --- |
-| `name` | Human-readable name shown in the routing explanation. |
-| `pattern` | Case-insensitive JavaScript regular expression tested against the task. |
-| `agent` | Optional provider selection. |
-| `modelTier` | Optional `fast`, `balanced`, or `deep` selection. |
-| `effort` | Optional reasoning-effort override. |
+| Field       | Meaning                                                                 |
+| ----------- | ----------------------------------------------------------------------- |
+| `name`      | Human-readable name shown in the routing explanation.                   |
+| `pattern`   | Case-insensitive JavaScript regular expression tested against the task. |
+| `agent`     | Optional provider selection.                                            |
+| `modelTier` | Optional `fast`, `balanced`, or `deep` selection.                       |
+| `effort`    | Optional reasoning-effort override.                                     |
 
 Rules are evaluated in array order, and only the first match is applied. A malformed regular expression is ignored. A rule that selects an agent also gives that provider 100 scoring points, so it is decisive unless a stronger explicit selection overrides it.
 
@@ -118,24 +118,24 @@ It decreases for signals such as:
 
 The result maps to a tier:
 
-| Complexity | Tier |
-| --- | --- |
-| 1–2 | `fast` |
-| 3 | `balanced` |
-| 4–5 | `deep` |
+| Complexity | Tier       |
+| ---------- | ---------- |
+| 1–2        | `fast`     |
+| 3          | `balanced` |
+| 4–5        | `deep`     |
 
-The selected provider's configuration maps that tier to a concrete model and an optional effort value. Claude and Codex currently receive their configured effort controls; Gemini and Copilot do not, so their tiers differ by model selection and retain `auto` effort. A tier is an automatic profile, not a model allowlist.
+In dynamic mode, the selected provider's discovered catalog is mapped onto that tier at runtime. AIRO uses provider-neutral family signals when available and may spread an authoritative CLI or gateway catalog across the three tiers. A model found only in provider settings or the environment changes the tier it identifies but is not treated as the provider's complete entitlement catalog. Reviewed built-in profiles remain the fallback when discovery is incomplete. Setting `modelRouting.mode` to `manual` pins the configured tier profiles. Claude and Codex currently receive their resolved effort controls; Gemini and Copilot do not, so their tiers differ by model selection and retain `auto` effort. A tier is an automatic profile, not a model allowlist.
 
 ## Adaptive phase preferences
 
 When orchestration is active, the phase plan supplies defaults suited to each type of work:
 
-| Phase | Default provider | Typical tier |
-| --- | --- | --- |
-| Analyze | Claude | `balanced`, or `deep` for critical work |
-| Implement | Codex | `fast`, `balanced`, or `deep` according to scope |
-| Validate | Codex | Usually `fast` |
-| Review | Claude | `balanced`, or `deep` for critical work |
+| Phase     | Default provider | Typical tier                                     |
+| --------- | ---------------- | ------------------------------------------------ |
+| Analyze   | Claude           | `balanced`, or `deep` for critical work          |
+| Implement | Codex            | `fast`, `balanced`, or `deep` according to scope |
+| Validate  | Codex            | Usually `fast`                                   |
+| Review    | Claude           | `balanced`, or `deep` for critical work          |
 
 These preferences do not replace a provider, model, or tier explicitly selected by the user.
 
@@ -199,13 +199,13 @@ For each new task, AIRO calculates learning hints from existing records at routi
 
 Task similarity combines:
 
-| Component | Weight |
-| --- | --- |
-| Lexical token overlap | 60% |
-| Hashed-vector cosine similarity | 30% |
-| Matching task category | Up to 6% |
-| Matching language | Up to 2% |
-| Matching risk | Up to 2% |
+| Component                       | Weight   |
+| ------------------------------- | -------- |
+| Lexical token overlap           | 60%      |
+| Hashed-vector cosine similarity | 30%      |
+| Matching task category          | Up to 6% |
+| Matching language               | Up to 2% |
+| Matching risk                   | Up to 2% |
 
 Route utility primarily reflects the observed reward, with smaller penalties for token use and duration. Explicit feedback is the strongest evidence. Automatic evaluation uses process success, reported verification, missing verification, retries, recoveries, and later regression findings with lower confidence.
 

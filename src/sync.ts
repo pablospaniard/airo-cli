@@ -385,6 +385,7 @@ export function safeSyncSettings(config: RouterConfig): Record<string, unknown> 
   return {
     policy: config.policy,
     defaultAgent: config.defaultAgent,
+    modelRouting: config.modelRouting,
     history: {
       learningEnabled: config.history.learningEnabled,
       similarityThreshold: config.history.similarityThreshold,
@@ -412,6 +413,11 @@ export function applySafeSettings(
     ...config,
     policy: validPolicy(value.policy) ? value.policy : DEFAULT_CONFIG.policy,
     defaultAgent: validAgent(value.defaultAgent) ? value.defaultAgent : DEFAULT_CONFIG.defaultAgent,
+    modelRouting: ["dynamic", "manual"].includes(
+      String((value.modelRouting as { mode?: unknown } | undefined)?.mode),
+    )
+      ? (value.modelRouting as RouterConfig["modelRouting"])
+      : DEFAULT_CONFIG.modelRouting,
     // safeSyncSettings always writes a *complete* snapshot of these
     // sections, never a partial diff. So a field missing from a pulled
     // `value` means another device removed it, not that this device should

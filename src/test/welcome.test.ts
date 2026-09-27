@@ -1,33 +1,26 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DEFAULT_CONFIG } from "../config.js";
 import { plainText } from "../ui.js";
 import { VERSION } from "../version.js";
 import { firstRunWelcome } from "../welcome.js";
 
-test("introduces AIRO and its initial model setup on first run", () => {
+test("introduces automatic discovery and permission setup on first run", () => {
   const welcome = plainText(firstRunWelcome());
 
   assert.match(welcome, /█████╗/);
   assert.match(welcome, /Adaptive Intelligence Routing & Orchestration/);
   assert.match(welcome, new RegExp(`Version ${VERSION.replaceAll(".", "\\.")}`));
   assert.match(welcome, /existing provider CLI logins/);
-  assert.match(welcome, /Provider\s+Tier\s+Model\s+Effort/);
-  assert.match(welcome, /codex\s+fast\s+gpt-5\.6-luna\s+low/);
-  assert.match(welcome, /claude\s+fast\s+haiku\s+low/);
-  assert.match(welcome, /Tie-break provider: codex/);
-  assert.match(
-    welcome,
-    /Choose models for these tiers, or press Enter to keep the displayed defaults/,
-  );
+  assert.match(welcome, /detects installed supported providers/);
+  assert.match(welcome, /fast, balanced, and deep tiers/);
+  assert.match(welcome, /execution permissions/);
   assert.doesNotMatch(welcome, /Next/);
-  assert.match(welcome, /~\/.config\/airo\/config\.json/);
   assert.match(welcome, /airo setup/);
   assert.match(welcome, /airo models/);
 
   const sectionTitles = welcome
     .split("\n")
-    .filter((line) => /(?:Welcome|Initial defaults)/.test(line));
+    .filter((line) => /(?:Welcome|Automatic discovery)/.test(line));
   assert.equal(sectionTitles.length, 2);
   assert.equal(new Set(sectionTitles.map((line) => line.length)).size, 1);
 
@@ -38,14 +31,4 @@ test("introduces AIRO and its initial model setup on first run", () => {
   assert.ok(logoLine && subtitleLine);
   assert.ok(Math.abs(midpoint(logoLine) - midpoint(sectionTitles[0])) <= 0.5);
   assert.ok(Math.abs(midpoint(subtitleLine) - midpoint(sectionTitles[0])) <= 0.5);
-});
-
-test("uses the supplied configuration when documenting defaults", () => {
-  const config = structuredClone(DEFAULT_CONFIG);
-  config.defaultAgent = "claude";
-  config.codex.models.fast.model = "custom-fast";
-
-  const welcome = plainText(firstRunWelcome(config));
-  assert.match(welcome, /custom-fast/);
-  assert.match(welcome, /Tie-break provider: claude/);
 });

@@ -2,10 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import type { Agent, RouterConfig } from "./types.js";
+import type { Agent, Effort, ModelProfile, ModelTier, RouterConfig } from "./types.js";
 import { DEFAULT_CONFIG } from "./config.js";
 import { dataRootDir } from "./paths.js";
-import { AGENTS } from "./providers.js";
+import { AGENTS, providerDefinition } from "./providers.js";
 import {
   loginShellEnvironment,
   readJson,
@@ -25,6 +25,8 @@ export interface CatalogModel {
 export interface ProviderCatalog {
   agent: Agent;
   models: CatalogModel[];
+  /** Models returned by the provider probe, before configured fallbacks are appended. */
+  detectedModels: CatalogModel[];
   /** Where the ids came from. `builtin` means every probe came back empty. */
   source: CatalogSource;
   /** How the probe was performed, for `airo doctor`. */
@@ -43,6 +45,8 @@ export interface CatalogOptions {
   refresh?: boolean;
   /** Allow the gateway HTTP probe. Off during a run so routing stays free. */
   online?: boolean;
+  /** Re-run the provider executable to verify its version before reusing cache. */
+  verifyExecutable?: boolean;
   ttlMs?: number;
   cwd?: string;
 }
@@ -59,7 +63,7 @@ export interface ProviderCatalogAdapter {
   gateway?: () => { base: string; token?: string } | undefined;
 }
 
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 export { AGENTS } from "./providers.js";
 
@@ -418,6 +422,7 @@ function finish(
     // The configured and built-in ids are always offered: a probe that fails
     // must never shrink what AIRO can route to.
     models: unique([...discovered, ...configuredModels(agent, config)]),
+    detectedModels: unique(discovered),
     source: discovered.length ? (probe.source ?? "cli") : "builtin",
     via: discovered.length ? probe.via : undefined,
     note: discovered.length ? undefined : probe.note,
@@ -435,6 +440,10 @@ export function cachedCatalog(agent: Agent): ProviderCatalog | undefined {
     entry.agent !== agent ||
     !Array.isArray(entry.models) ||
     !entry.models.every((model) => model && typeof model.id === "string" && model.id.trim()) ||
+    !Array.isArray(entry.detectedModels) ||
+    !entry.detectedModels.every(
+      (model) => model && typeof model.id === "string" && model.id.trim(),
+    ) ||
     typeof entry.fingerprint !== "string" ||
     typeof entry.contextFingerprint !== "string" ||
     !Number.isFinite(Date.parse(entry.probedAt))
@@ -455,16 +464,21 @@ export async function discoverCatalog(
 ): Promise<ProviderCatalog> {
   const ttl = options.ttlMs ?? DEFAULT_TTL_MS;
   const cwd = options.cwd ?? process.cwd();
-  const fingerprint = fingerprintFor(config[agent].command);
   const contextFingerprint = contextFingerprintFor(agent, config, cwd);
   const cached = cachedCatalog(agent);
-  if (
+  const reusable =
     !options.refresh &&
     cached &&
-    cached.fingerprint === fingerprint &&
     cached.contextFingerprint === contextFingerprint &&
     (!options.online || cached.source !== "builtin") &&
-    Date.now() - Date.parse(cached.probedAt) < ttl
+    Date.now() - Date.parse(cached.probedAt) < ttl;
+  if (reusable && options.verifyExecutable === false) return cached;
+
+  const fingerprint = fingerprintFor(config[agent].command);
+  if (
+    reusable &&
+    cached.fingerprint === fingerprint &&
+    cached.contextFingerprint === contextFingerprint
   )
     return cached;
 
@@ -493,6 +507,98 @@ export async function discoverCatalogs(
 export function candidateModels(agent: Agent, config: RouterConfig): CatalogModel[] {
   const cached = cachedCatalog(agent);
   return unique([...(cached?.models ?? []), ...configuredModels(agent, config)]);
+}
+
+const TIER_SIGNALS: Record<ModelTier, RegExp> = {
+  fast: /(?:^|[-_.\s])(fast|flash|haiku|luna|lite|mini|nano|small)(?:$|[-_.\s])/i,
+  balanced: /(?:^|[-_.\s])(auto|balanced|standard|sonnet|terra|medium)(?:$|[-_.\s])/i,
+  deep: /(?:^|[-_.\s])(astra|deep|large|max|opus|pro|reasoning|sol|ultra)(?:$|[-_.\s])/i,
+};
+
+const EFFORTS: readonly Effort[] = [
+  "auto",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+];
+
+function supportsEffort(model: CatalogModel, effort: Effort): boolean {
+  return !model.efforts?.length || model.efforts.includes(effort);
+}
+
+function tierEffort(tier: ModelTier, current: Effort | undefined, model: CatalogModel): Effort {
+  const requested = current ?? (tier === "fast" ? "low" : tier === "balanced" ? "medium" : "high");
+  if (supportsEffort(model, requested)) return requested;
+  const supported = (model.efforts ?? []).filter((value): value is Effort =>
+    EFFORTS.includes(value as Effort),
+  );
+  if (!supported.length) return requested;
+  const preferred =
+    tier === "fast"
+      ? ["low", "minimal", "medium", "high", "xhigh", "max", "ultra", "auto"]
+      : tier === "balanced"
+        ? ["medium", "high", "low", "xhigh", "minimal", "max", "ultra", "auto"]
+        : ["ultra", "max", "xhigh", "high", "medium", "low", "minimal", "auto"];
+  return preferred.find((effort) => supported.includes(effort as Effort)) as Effort;
+}
+
+function modelText(model: CatalogModel): string {
+  return `${model.id} ${model.label ?? ""}`;
+}
+
+function selectDetectedModel(
+  catalog: ProviderCatalog,
+  tier: ModelTier,
+  current: ModelProfile,
+): CatalogModel | undefined {
+  const detected = catalog.detectedModels;
+  if (!detected.length) return undefined;
+  const signaled = detected.find((model) => TIER_SIGNALS[tier].test(modelText(model)));
+  if (signaled) return signaled;
+  const currentDetected = detected.find((model) => model.id === current.model);
+  if (currentDetected) return currentDetected;
+  // Settings and environment probes reveal configured choices, not the full
+  // entitlement catalogue. Do not stretch one configured model across tiers.
+  if (catalog.source === "environment" || catalog.source === "provider-config") return undefined;
+  const index =
+    tier === "deep"
+      ? 0
+      : tier === "fast"
+        ? detected.length - 1
+        : Math.floor((detected.length - 1) / 2);
+  return detected[index];
+}
+
+/**
+ * Overlay provider-discovered models onto the reviewed tier profiles used by
+ * the synchronous router. Explicit manual mode keeps configuration untouched.
+ */
+export function resolveDynamicModels(
+  config: RouterConfig,
+  catalogs: Record<Agent, ProviderCatalog>,
+): RouterConfig {
+  if (config.modelRouting.mode === "manual") return config;
+  const resolved = structuredClone(config);
+  for (const agent of AGENTS) {
+    for (const tier of ["fast", "balanced", "deep"] as const) {
+      const fallback = DEFAULT_CONFIG[agent].models[tier];
+      const selected = selectDetectedModel(catalogs[agent], tier, fallback);
+      const effort = providerDefinition(agent).capabilities.effortControl
+        ? selected
+          ? tierEffort(tier, fallback.effort, selected)
+          : fallback.effort
+        : "auto";
+      resolved[agent].models[tier] = {
+        model: selected?.id ?? fallback.model,
+        effort,
+      };
+    }
+  }
+  return resolved;
 }
 
 export function catalogAge(entry: ProviderCatalog, now = Date.now()): string {

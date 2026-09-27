@@ -39,6 +39,7 @@ test("loads and deeply merges project configuration", () => {
     const loaded = loadConfig(dir);
     assert.equal(loaded.path, path.join(dir, ".airo.json"));
     assert.equal(loaded.config.policy, "claude-heavy");
+    assert.equal(loaded.config.modelRouting.mode, "dynamic");
     assert.equal(loaded.config.claude.models.fast.model, "custom-haiku");
     assert.equal(loaded.config.claude.models.deep.model, DEFAULT_CONFIG.claude.models.deep.model);
     assert.equal(loaded.config.history.enabled, false);
@@ -93,6 +94,7 @@ test("writes project and global configuration safely", () => {
     const global = writeGlobalConfig(DEFAULT_CONFIG);
     assert.equal(global, globalConfigPath());
     assert.equal(JSON.parse(fs.readFileSync(global, "utf8")).defaultAgent, "codex");
+    assert.equal(JSON.parse(fs.readFileSync(global, "utf8")).modelRouting.mode, "dynamic");
   } finally {
     if (previousHome === undefined) delete process.env.HOME;
     else process.env.HOME = previousHome;
