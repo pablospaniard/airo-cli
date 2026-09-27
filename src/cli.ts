@@ -78,6 +78,19 @@ import { exportLearningArchive, importLearningArchive } from "./history-archive.
 import { linkRepositoryIdentity, resolveRepositoryIdentity } from "./repository.js";
 import pathModule from "node:path";
 import { evaluateRoute, extractTaskFeatures } from "./evaluation.js";
+import {
+  disableJev,
+  enableJev,
+  evaluateRunWithJev,
+  isJevEnabled,
+  JEV_DISCLOSURE,
+  JEV_MODEL,
+  jevConsentPath,
+  jevFeedbackPath,
+  readJevConsent,
+  readJevFeedback,
+  resetJevFeedback,
+} from "./jev-feedback.js";
 
 function requireText(file: string): string {
   return fs.readFileSync(file, "utf8");
@@ -148,6 +161,9 @@ function help() {
     `  ${commandColor("airo feedback good|bad ...")}              ${ui.gray("rate the latest run")}`,
   );
   console.log(
+    `  ${commandColor("airo feedback jev status|enable|disable")}  ${ui.gray("control optional local Jev feedback")}`,
+  );
+  console.log(
     `  ${commandColor("airo learning status|explain|reset")}       ${ui.gray("inspect or reset adaptive routing")}`,
   );
   console.log("");
@@ -197,7 +213,8 @@ function parseArgs(argv: string[]) {
     explain = false,
     adaptive = false,
     single = false,
-    continueMode = false;
+    continueMode = false,
+    noJev = false;
   let logLevel: LogLevel | undefined;
   let sessionId: string | undefined;
   const taskParts: string[] = [];
@@ -214,6 +231,7 @@ function parseArgs(argv: string[]) {
     else if (arg === "--adaptive") adaptive = true;
     else if (arg === "--single") single = true;
     else if (arg === "--continue") continueMode = true;
+    else if (arg === "--no-jev") noJev = true;
     else if (arg === "--session") sessionId = argv[++i];
     else if (arg === "--log") {
       const v = argv[++i] as LogLevel;
@@ -239,6 +257,7 @@ function parseArgs(argv: string[]) {
     adaptive,
     single,
     continueMode,
+    noJev,
     sessionId,
     logLevel,
     task: taskParts.join(" ").trim(),
@@ -521,6 +540,17 @@ async function execute(
       routePreferences: { agent: args.preferredAgent, tier: args.preferredTier },
       routeOverrides: routeOverrides(args, config),
     });
+    if (!args.dryRun && !args.noJev && config.permissions.networkAccess) {
+      const feedback = await evaluateRunWithJev(config.history, result.runId);
+      if (feedback.status === "saved")
+        console.log(
+          `${statusIcon("ok")} ${ui.gray("Jev feedback saved locally for")} ${ui.bold(String(feedback.records.length))} ${ui.gray("phase(s)")}`,
+        );
+      else if (feedback.status === "error")
+        console.error(
+          `${statusIcon("error")} ${ui.yellow(`${feedback.reason}; run result is unchanged`)}`,
+        );
+    }
     if (session && !args.dryRun)
       appendTurn(session, {
         turnId: result.runId + "-turn",
@@ -538,6 +568,15 @@ async function execute(
     return result.exitCode;
   }
   const r = await singleRun(args, config, path, session, askUser);
+  if (!args.dryRun && !args.noJev && config.permissions.networkAccess) {
+    const feedback = await evaluateRunWithJev(config.history, r.runId);
+    if (feedback.status === "saved")
+      console.log(`${statusIcon("ok")} ${ui.gray("Jev feedback saved locally")}`);
+    else if (feedback.status === "error")
+      console.error(
+        `${statusIcon("error")} ${ui.yellow(`${feedback.reason}; run result is unchanged`)}`,
+      );
+  }
   if (session && !args.dryRun)
     appendTurn(session, {
       turnId: r.runId + "-turn",
@@ -1036,6 +1075,86 @@ async function main() {
     return;
   }
   if (raw[0] === "feedback") {
+    if (raw[1] === "jev") {
+      const action = raw[2] ?? "status";
+      if (action === "status") {
+        const consent = readJevConsent(config.history);
+        const enabled = isJevEnabled(config.history);
+        console.log(divider("Optional local Jev feedback"));
+        console.log(
+          `${ui.bold("Status")} ${enabled ? ui.green("enabled") : ui.yellow("disabled")}`,
+        );
+        console.log(
+          `${ui.bold("API key")} ${process.env.TYPESAFE_API_KEY ? ui.green("available in environment") : ui.yellow("not set")}`,
+        );
+        console.log(`${ui.bold("Model")} ${ui.cyan(JEV_MODEL)}`);
+        console.log(
+          `${ui.bold("Records")} ${ui.cyan(String(readJevFeedback(config.history).length))}`,
+        );
+        console.log(`${ui.bold("Consent")} ${ui.cyan(jevConsentPath(config.history))}`);
+        console.log(`${ui.bold("Feedback")} ${ui.cyan(jevFeedbackPath(config.history))}`);
+        if (consent?.enabled && !enabled)
+          console.log(
+            `${statusIcon("info")} ${ui.yellow("Consent notice changed; review and enable again before another request.")}`,
+          );
+        return;
+      }
+      if (action === "enable") {
+        if (!config.history.enabled)
+          throw new Error("Enable local history before enabling Jev feedback.");
+        console.log(divider("Jev data-sharing consent"));
+        for (const line of JEV_DISCLOSURE) console.log(`${ui.gray("•")} ${line}`);
+        let accepted = raw.includes("--accept-data-sharing");
+        if (!accepted && process.stdin.isTTY) {
+          console.log(
+            `${statusIcon("info")} ${ui.yellow('Type "ENABLE JEV" to accept this disclosure.')}`,
+          );
+          accepted = (await askTerminal("Jev consent")) === "ENABLE JEV";
+        }
+        if (!accepted)
+          throw new Error(
+            "Consent was not recorded. Review the disclosure and re-run with --accept-data-sharing, or enable interactively.",
+          );
+        enableJev(config.history);
+        console.log(`${statusIcon("ok")} ${ui.green("Optional local Jev feedback enabled.")}`);
+        if (!process.env.TYPESAFE_API_KEY)
+          console.log(
+            `${statusIcon("info")} ${ui.yellow("Set TYPESAFE_API_KEY in your environment before running a task.")}`,
+          );
+        return;
+      }
+      if (action === "disable") {
+        disableJev(config.history);
+        console.log(
+          `${statusIcon("ok")} ${ui.gray("Jev feedback disabled; existing local records were preserved.")}`,
+        );
+        return;
+      }
+      if (action === "inspect") {
+        const limitArg = raw.find((_value: string, index: number) => raw[index - 1] === "--limit");
+        const limit = Math.max(1, Number(limitArg ?? 20));
+        const records = readJevFeedback(config.history).slice(-limit).reverse();
+        console.log(divider("Local Jev feedback"));
+        if (!records.length)
+          console.log(`${statusIcon("info")} ${ui.gray("No Jev feedback yet.")}`);
+        for (const record of records)
+          console.log(
+            `${record.id} ${record.selected.agent}/${record.selected.tier} → ${record.suggested.agent}/${record.suggested.tier} ${record.acceptedIntoLearning ? ui.green("accepted") : ui.yellow("observed")} ${ui.gray(`confidence=${Math.min(record.provider.confidence, record.tier.confidence).toFixed(2)} model=${record.model}`)}`,
+          );
+        return;
+      }
+      if (action === "reset") {
+        if (!raw.includes("--yes"))
+          throw new Error(
+            "Jev reset removes local Jev feedback. Re-run with: airo feedback jev reset --yes",
+          );
+        console.log(
+          `${statusIcon("ok")} ${ui.gray("removed")} ${ui.bold(String(resetJevFeedback(config.history)))} ${ui.gray("Jev feedback record(s); consent was preserved")}`,
+        );
+        return;
+      }
+      throw new Error("Use: airo feedback jev status|enable|disable|inspect|reset");
+    }
     const phase = raw[1] === "phase";
     const targetId = phase ? raw[2] : undefined;
     const rating = raw[phase ? 3 : 1] as FeedbackRating;

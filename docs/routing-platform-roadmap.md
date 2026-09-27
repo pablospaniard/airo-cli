@@ -4,9 +4,9 @@
 
 This document records the planned product and architecture direction for AIRO. It is a roadmap, not a description of functionality available in the current release.
 
-The current published package is [`airo-ai-router`](https://www.npmjs.com/package/airo-ai-router). Current behavior is documented in [Routing rules and learning](routing-and-learning.md). None of the provider-registry, Jev-feedback, cloud-sync, or research-consent milestones below should be presented as released until their implementation, tests, security review, and user documentation are complete.
+The current published package is [`airo-ai-router`](https://www.npmjs.com/package/airo-ai-router). Current behavior is documented in [Routing rules and learning](routing-and-learning.md). No development milestone below should be presented as part of the npm release until it completes the release process.
 
-Development status: Milestones 1, 2, and 3 are complete on the development branch. Provider-neutral foundations and portable local learning are implemented, and the unpublished Jev development evaluator now has versioned synthetic calibration and held-out datasets, privacy checks, comparison metrics, and a human policy-review gate. This status does not present the work as published until it passes the release process. Live pinned-model reports remain regenerable development evidence rather than committed runtime artifacts.
+Development status: Milestones 1, 2, 3, and 4 are complete on the development branch. Provider-neutral foundations, portable local learning, the unpublished Jev development evaluator, and consented local post-run Jev feedback are implemented. This status does not present the work as published until it passes the release process. Live pinned-model reports remain regenerable development evidence rather than committed runtime artifacts.
 
 ## Architecture principles
 
@@ -103,7 +103,7 @@ The development evaluator lives outside the published runtime, uses a fake Jev e
 
 ### Optional production feedback
 
-Production AIRO may later offer optional, post-run Jev feedback. This feature must:
+The development branch offers optional, post-run Jev feedback. It:
 
 - Be disabled by default
 - Require a dedicated consent flow
@@ -325,11 +325,19 @@ Cloud sync consent never implies research consent. Local Jev consent never impli
 
 ### Milestone 4: optional local Jev feedback
 
-- Explicit security and data-sharing consent
-- User-supplied API key
-- Post-run bounded evaluation
-- Local feedback storage and learning controls
-- Inspection, disable, reset, and per-run opt-out
+- [x] Explicit security and data-sharing consent
+- [x] User-supplied, environment-only API key
+- [x] Post-run bounded evaluation with typed response validation and fail-open errors
+- [x] Separate local feedback storage and confidence-gated learning controls
+- [x] Inspection, disable, reset, and per-run opt-out
+
+#### Milestone 4 acceptance record
+
+- **Versioning:** consent schema 1, feedback schema 1, question set 1.0.0, and pinned model `jev-1.13.0` are recorded locally.
+- **Verification:** tests cover default-off consent, restrictive permissions, the ID-keyed HTTP request contract, payload exclusions, response validation, model mismatch, API failure, deduplication, sample gates, bounded influence, and CLI controls.
+- **Security and privacy:** consent is invalidated if its disclosure changes. `TYPESAFE_API_KEY` is read only from the environment. Task text and a bounded journey state are sent only after provider execution; prohibited fields and secrets are excluded and no request occurs with `--no-jev`.
+- **Compatibility and migration:** the feature adds separate adjacent files and does not change existing history or feedback schemas. Missing consent and missing Jev records are valid legacy states.
+- **Rollback:** `disable` immediately removes Jev influence without deleting evidence; `reset --yes` removes Jev evidence while preserving consent and ordinary routing history.
 
 ### Milestone 5: encrypted cloud sync
 

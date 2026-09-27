@@ -103,7 +103,7 @@ Generated reports stay under the ignored `.airo-dev/` directory because they con
 
 ## Optional production feedback
 
-The future production integration is post-run feedback, not live route selection:
+The development-branch production integration is post-run feedback, not live route selection:
 
 ```text
 AIRO selects locally
@@ -120,19 +120,19 @@ Live advisory routing was rejected for the initial production integration becaus
 
 ### Consent and API key
 
-The feature must be disabled by default and enabled through a dedicated consent flow. Before the first request, AIRO must state that selected task information will leave the machine and be processed by TypeSafe.
+The feature is disabled by default and enabled through `airo feedback jev enable`. Before recording consent, AIRO states that selected task information will leave the machine and be processed by TypeSafe. Non-interactive enablement additionally requires `--accept-data-sharing`. A changed disclosure invalidates older consent until the user reviews and enables it again.
 
-The user supplies `TYPESAFE_API_KEY` or a future operating-system credential-store entry. AIRO must not write the key to project configuration, history, logs, synchronized settings, or research records.
+The user supplies `TYPESAFE_API_KEY`. AIRO reads it from the process environment and does not write the key to project configuration, consent, history, logs, synchronized settings, or research records.
 
 Consent for local Jev feedback is distinct from cloud-sync consent and research consent. Enabling one never enables the others.
 
 ### Bounded payload
 
-The first production payload may contain:
+The production payload contains:
 
 - Task text
 - Phase and semantic task features
-- Eligible and selected route identifiers
+- Selected provider and tier identifiers
 - Completion, verification, retry, recovery, duration, and token buckets
 - Explicit user rating or route correction when the user chose to record one
 
@@ -145,15 +145,15 @@ It excludes by default:
 - Credentials and environment variables
 - Session transcripts
 
-Task text can itself contain sensitive information. The consent prompt must show the categories sent, and AIRO should provide a per-run opt-out.
+Task text can itself contain sensitive information. The consent prompt shows the categories sent, and `--no-jev` provides a per-run opt-out.
 
 ### Local storage and influence
 
-Jev feedback should be stored separately from execution history and user feedback. A record includes the source history ID, model and question-set versions, answers, probabilities, confidence, and whether it was accepted into learning.
+Jev feedback is stored in `history.jev-feedback.jsonl`, separately from execution history and user feedback. A record includes the source history ID, model and question-set versions, answers, probabilities, confidence, local task features, and whether it was accepted into learning. Task text is not duplicated into this file.
 
-Jev feedback may influence only future unpinned automatic routes. Apply a minimum confidence, minimum similar sample count, bounded adjustment, recency decay, and complete reset. Explicit current choices, custom rules, explicit historical feedback, and verified local outcomes take precedence.
+Jev feedback influences only future unpinned automatic routes. Provider and tier answers each require confidence of at least 0.70. Reinforcement additionally requires route agreement and an appropriateness probability of at least 0.65; correction requires disagreement and an appropriateness probability no higher than 0.35. Similar evidence must meet the configured history sample threshold, decays with the configured half-life, and is capped at `1.25` provider points and `0.75` tier points. Explicit current choices, custom rules, explicit historical feedback, and verified local outcomes take precedence.
 
-Suggested controls are:
+Controls are:
 
 ```text
 airo feedback jev status
@@ -164,7 +164,7 @@ airo feedback jev reset
 airo --no-jev "task"
 ```
 
-Command names are illustrative until the milestone is designed and implemented.
+`disable` preserves the local records but immediately removes their routing influence. `reset --yes` deletes those records while preserving consent. Jev requests time out after five seconds and all network, authentication, rate-limit, model-version, and validation failures leave the completed provider run and its exit status unchanged.
 
 ## Cloud sync interaction
 

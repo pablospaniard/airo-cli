@@ -1,6 +1,6 @@
 # Routing rules and learning
 
-This document describes behavior in the current `airo-ai-router` release. For the planned provider registry, portable learning, Jev feedback, encrypted sync, and research-consent milestones, see [Routing platform roadmap](routing-platform-roadmap.md). [Jev and AIRO](jev-and-airo.md) records the planned narrower role for Jev.
+This document describes routing behavior in the source tree; the roadmap distinguishes development-branch milestones from the current npm release. For provider registration, portable learning, optional Jev feedback, encrypted sync, and research consent, see [Routing platform roadmap](routing-platform-roadmap.md). [Jev and AIRO](jev-and-airo.md) records Jev's narrower role.
 
 AIRO makes a routing decision in two parts:
 
@@ -264,6 +264,24 @@ Reset feedback-derived learning evidence:
 ```bash
 airo learning reset --yes
 ```
+
+## Optional local Jev feedback
+
+On the development branch, Jev can evaluate a completed journey and provide a lower-priority signal for future automatic routes. It never selects the current route, is disabled by default, and is not required for core operation.
+
+```bash
+airo feedback jev enable
+export TYPESAFE_API_KEY="..."
+airo feedback jev status
+airo feedback jev inspect
+airo feedback jev disable
+airo feedback jev reset --yes
+airo --no-jev "task"
+```
+
+Enablement records versioned consent in a permission-restricted local file. The API key remains in the environment. After provider execution and ordinary history recording, AIRO sends one batched request containing task text, phase/task features, selected provider and tier, bucketed outcomes, and an explicit rating when present. It does not copy provider output, source, diffs, configuration, repository metadata, paths, feedback notes, environment variables, or transcripts into the structured request. Because any text supplied by a user can itself contain sensitive values, use `--no-jev` for a task that should remain entirely local.
+
+Typed answers are schema-validated and stored separately in `history.jev-feedback.jsonl`; task text is not duplicated there. Only internally consistent provider/tier judgments at or above the confidence threshold can enter learning. They must meet the same repository scope, similarity sample floor, and recency rules as ordinary evidence, and are capped below the maximum ordinary-history adjustment. Explicit current choices and custom rules remain authoritative. `permissions.networkAccess: false` suppresses the optional request. Network, authentication, rate-limit, timeout, malformed-response, and model-version failures are fail-open and do not alter the completed run's exit status.
 
 ## Portable history and stable repository identity
 

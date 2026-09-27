@@ -133,7 +133,7 @@ airo --dry-run --explain "migrate this legacy module"
 
 AIRO extracts provider-neutral task features, generates every registered provider/tier candidate, and scores each candidate using reviewed capability profiles, tier suitability, configuration rules, and feedback from similar prior work. A `fast`, `balanced`, or `deep` tier is a default choice, not a restriction.
 
-See [Routing rules and learning](docs/routing-and-learning.md) for the complete current decision precedence, custom-rule behavior, history format, and learning algorithm. [Jev and AIRO](docs/jev-and-airo.md) records the planned development-evaluation and optional local-feedback boundaries. The [routing platform roadmap](docs/routing-platform-roadmap.md) covers provider-neutral routing, portable learning, encrypted cloud sync, and the deferred research-consent architecture.
+See [Routing rules and learning](docs/routing-and-learning.md) for the complete current decision precedence, custom-rule behavior, history format, and learning algorithm. [Jev and AIRO](docs/jev-and-airo.md) records the development-evaluation and optional local-feedback boundaries. The [routing platform roadmap](docs/routing-platform-roadmap.md) covers provider-neutral routing, portable learning, encrypted cloud sync, and the deferred research-consent architecture.
 
 The roadmap is not released functionality. The current package keeps history and learning local, does not require Jev or an AIRO account, and does not upload routing journeys to an AIRO service.
 
@@ -144,6 +144,17 @@ pnpm evaluate:jev -- --model jev-1.13.0 --dataset all --output .airo-dev/jev-rou
 ```
 
 The report compares AIRO and Jev against reviewed labels and identifies human-review candidates; it cannot modify the production routing policy. See [Jev and AIRO](docs/jev-and-airo.md) for the privacy boundary and review protocol.
+
+On the development branch, users can also enable optional post-run Jev feedback. It is off by default and requires dedicated data-sharing consent plus the user's own environment-only key:
+
+```bash
+airo feedback jev enable
+export TYPESAFE_API_KEY="..."
+airo "task"                    # local route and execution happen before Jev
+airo --no-jev "sensitive task" # one-run opt-out
+```
+
+Use `airo feedback jev status|inspect|disable` to control it and `airo feedback jev reset --yes` to remove its separate local evidence. The consent screen lists the bounded fields sent to TypeSafe. Task text leaves the machine; AIRO does not add source, diffs, provider output, repository metadata, paths, credentials, environment variables, notes, or transcripts as separate fields. Because task text may itself contain sensitive values, use `--no-jev` whenever the task must remain entirely local. Jev failure never changes the completed run's exit status, and accepted feedback can only add a confidence-gated, decayed, bounded hint to future unpinned routes.
 
 Out of the box, the automatic defaults are:
 
@@ -473,9 +484,9 @@ The hook runs `pnpm run validate`, which checks formatting, linting, types, and 
 
 ## Architecture roadmap
 
-Future work includes optional post-run Jev feedback and private multi-device sync. Research participation remains a separate, deferred opt-in.
+Milestones 1–4 are implemented on the development branch: provider-neutral routing foundations, portable local learning, the development Jev evaluator, and optional local Jev feedback. Private multi-device sync is next. Research participation remains a separate, deferred opt-in.
 
-See the [routing platform roadmap](docs/routing-platform-roadmap.md) and [Jev decision record](docs/jev-and-airo.md) for the planned boundaries and acceptance gates. None of those roadmap capabilities should be inferred from the current npm release.
+See the [routing platform roadmap](docs/routing-platform-roadmap.md) and [Jev decision record](docs/jev-and-airo.md) for boundaries and acceptance gates. Development-branch status must not be inferred as functionality in the current npm release until a new version is published.
 
 ## Compatibility aliases
 
