@@ -6,7 +6,7 @@ This document records the planned product and architecture direction for AIRO. I
 
 The current published package is [`airo-ai-router`](https://www.npmjs.com/package/airo-ai-router). Current behavior is documented in [Routing rules and learning](routing-and-learning.md). No development milestone below should be presented as part of the npm release until it completes the release process.
 
-Development status: Milestones 1, 2, 3, and 4 are complete on the development branch. Provider-neutral foundations, portable local learning, the unpublished Jev development evaluator, and consented local post-run Jev feedback are implemented. This status does not present the work as published until it passes the release process. Live pinned-model reports remain regenerable development evidence rather than committed runtime artifacts.
+Development status: Milestones 1 through 5 are complete on the development branch. Provider-neutral foundations, portable local learning, the unpublished Jev development evaluator, consented local post-run Jev feedback, and optional end-to-end encrypted Cloudflare sync are implemented. This status does not present the work as published until it passes the release process. Live pinned-model reports remain regenerable development evidence rather than committed runtime artifacts.
 
 ## Architecture principles
 
@@ -151,7 +151,7 @@ Repositories without a remote receive a random project ID. Linking another check
 
 ## Optional Cloudflare sync
 
-Cloud sync is a future opt-in convenience for migration and multi-device continuity. Local data remains authoritative, routing continues offline, and sync failure never changes a task's exit status.
+Cloud sync is an opt-in development-branch convenience for migration and multi-device continuity. Local data remains authoritative, routing continues offline, and sync is invoked explicitly rather than as part of a provider run, so failure never changes a task's exit status.
 
 The proposed platform is:
 
@@ -341,12 +341,21 @@ Cloud sync consent never implies research consent. Local Jev consent never impli
 
 ### Milestone 5: encrypted cloud sync
 
-- Cloudflare Worker and D1 service
-- Browser/device authentication and revocable device sessions
-- End-to-end encryption and recovery flow
-- Append-only push/pull synchronization
-- Settings classification and secret exclusion
-- Account export and cloud-data deletion
+- [x] Cloudflare Worker and D1 service
+- [x] Browser/device authentication and revocable device sessions
+- [x] End-to-end encryption and recovery flow
+- [x] Append-only push/pull synchronization
+- [x] Settings classification and secret exclusion
+- [x] Account export and cloud-data deletion
+
+#### Milestone 5 acceptance record
+
+- **Versioning:** encrypted event envelopes, wrapped account keys, local sync state, account exports, and the D1 schema start at version 1. The Worker uses a pinned compatibility date and generated runtime types.
+- **Verification:** package tests cover authenticated encryption, recovery wrapping, account-key-separated repository indexes, and setting exclusions. Workers-runtime integration tests apply real D1 migrations and cover authentication, idempotent events, cursors, immutable account-key setup, and optimistic revisions. Wrangler's dry-run build and the full `pnpm validate` gate are required.
+- **Authentication and devices:** GitHub's browser-assisted device flow issues short access tokens and rotating refresh-token families. Only token hashes reach D1. A detected refresh-token replay revokes its family, and users can list or revoke devices independently.
+- **Security and privacy:** AES-256-GCM payload encryption and scrypt recovery wrapping happen locally. D1 receives ciphertext, a wrapped account key, keyed repository indexes, and operational metadata. Provider credentials, API keys, executable paths, permission settings, Jev consent, and recovery passphrases never sync. Existing local history uploads only when the user explicitly runs `airo sync now`.
+- **Conflict and recovery behavior:** immutable event IDs are inserted once, pulls advance an account cursor, and divergent local immutable records fail closed. Settings use per-key optimistic revisions; simultaneous local and remote edits stop without overwriting either side. Losing the recovery passphrase and every authorized device makes cloud data unrecoverable.
+- **Operations and rollback:** the service supports encrypted account export, per-device revocation, logout, and cascading cloud-data deletion. Sync remains optional and can be disabled by signing out; local evidence remains authoritative and portable encrypted archives remain available without the service.
 
 ### Milestone 6: research consent and global improvement
 

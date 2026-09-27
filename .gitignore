@@ -3,3 +3,6 @@ dist/
 *.vsix
 .ai-router-history.jsonl
 .airo-dev/
+.wrangler/
+.dev.vars
+.dev.vars.*

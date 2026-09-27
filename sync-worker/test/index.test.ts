@@ -1,0 +1,168 @@
+import { env, SELF } from "cloudflare:test";
+import { beforeEach, describe, expect, it } from "vitest";
+
+const accessToken = "test-access-token-that-is-long-enough-for-validation";
+
+async function hash(value: string): Promise<string> {
+  const bytes = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)),
+  );
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+beforeEach(async () => {
+  const timestamp = Math.floor(Date.now() / 1000);
+  await env.DB.prepare("DELETE FROM users").run();
+  await env.DB.batch([
+    env.DB.prepare(
+      "INSERT INTO users(id, github_user_id, github_login, created_at) VALUES(?, ?, ?, ?)",
+    ).bind("user-test", "42", "tester", timestamp),
+    env.DB.prepare(
+      "INSERT INTO devices(id, user_id, name, created_at, last_seen_at) VALUES(?, ?, ?, ?, ?)",
+    ).bind("device-test", "user-test", "test", timestamp, timestamp),
+    env.DB.prepare(
+      "INSERT INTO sessions(id, family_id, user_id, device_id, token_hash, kind, expires_at, created_at) VALUES(?, ?, ?, ?, ?, 'access', ?, ?)",
+    ).bind(
+      "session-test",
+      "family-test",
+      "user-test",
+      "device-test",
+      await hash(accessToken),
+      timestamp + 3600,
+      timestamp,
+    ),
+  ]);
+});
+
+function authorized(path: string, init: RequestInit = {}): Promise<Response> {
+  return SELF.fetch(`https://example.com${path}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+      ...init.headers,
+    },
+  });
+}
+
+describe("sync Worker", () => {
+  it("reports health and rejects unauthenticated sync", async () => {
+    expect(await (await SELF.fetch("https://example.com/health")).json()).toEqual({
+      status: "ok",
+      service: "airo-sync",
+      schemaVersion: 1,
+    });
+    expect((await SELF.fetch("https://example.com/v1/sync/status")).status).toBe(401);
+  });
+
+  it("stores opaque events idempotently and advances a cursor", async () => {
+    const event = {
+      id: "event-test",
+      kind: "history",
+      repositoryId: "sync-v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      createdAt: 1,
+      envelope: {
+        version: 1,
+        algorithm: "aes-256-gcm",
+        nonce: "abcdefghijklmnop",
+        ciphertext: "opaque",
+        tag: "abcdefghijklmnop",
+      },
+    };
+    const first = await authorized("/v1/sync/push", {
+      method: "POST",
+      body: JSON.stringify({ events: [event] }),
+    });
+    expect(await first.json()).toEqual({ accepted: 1, total: 1 });
+    const duplicate = await authorized("/v1/sync/push", {
+      method: "POST",
+      body: JSON.stringify({ events: [event] }),
+    });
+    expect(await duplicate.json()).toEqual({ accepted: 0, total: 1 });
+    const pulled = await authorized("/v1/sync/pull?cursor=0");
+    const body = await pulled.json<{ events: unknown[]; cursor: number }>();
+    expect(body.events).toHaveLength(1);
+    expect(body.cursor).toBeGreaterThan(0);
+  });
+
+  it("uses optimistic revisions and never replaces an account key", async () => {
+    const envelope = { version: 1, opaque: "wrapped" };
+    expect(
+      (await authorized("/v1/account-key", { method: "PUT", body: JSON.stringify({ envelope }) }))
+        .status,
+    ).toBe(200);
+    expect(
+      (await authorized("/v1/account-key", { method: "PUT", body: JSON.stringify({ envelope }) }))
+        .status,
+    ).toBe(409);
+    const setting = {
+      version: 1,
+      algorithm: "aes-256-gcm",
+      nonce: "abcdefghijklmnop",
+      ciphertext: "opaque",
+      tag: "abcdefghijklmnop",
+    };
+    const saved = await authorized("/v1/settings", {
+      method: "PUT",
+      body: JSON.stringify({ key: "routing", expectedRevision: 0, envelope: setting }),
+    });
+    expect(await saved.json()).toEqual({ key: "routing", revision: 1 });
+    expect(
+      (
+        await authorized("/v1/settings", {
+          method: "PUT",
+          body: JSON.stringify({ key: "routing", expectedRevision: 0, envelope: setting }),
+        })
+      ).status,
+    ).toBe(409);
+  });
+
+  it("exports opaque account data and deletes it with explicit confirmation", async () => {
+    const exported = await authorized("/v1/account/export");
+    const payload = await exported.json<Record<string, unknown>>();
+    expect(payload.schemaVersion).toBe(1);
+    expect(JSON.stringify(payload)).not.toContain(accessToken);
+    expect(JSON.stringify(payload)).not.toContain("token_hash");
+
+    const refused = await authorized("/v1/account", {
+      method: "DELETE",
+      body: JSON.stringify({ confirmation: "no" }),
+    });
+    expect(refused.status).toBe(400);
+    const deleted = await authorized("/v1/account", {
+      method: "DELETE",
+      body: JSON.stringify({ confirmation: "DELETE" }),
+    });
+    expect(deleted.status).toBe(200);
+    expect((await authorized("/v1/sync/status")).status).toBe(401);
+  });
+
+  it("revokes a token family when a rotated refresh token is reused", async () => {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const refreshToken = "test-refresh-token-that-is-long-enough-for-validation";
+    await env.DB.prepare(
+      "INSERT INTO sessions(id, family_id, user_id, device_id, token_hash, kind, expires_at, created_at, revoked_at) VALUES(?, ?, ?, ?, ?, 'refresh', ?, ?, ?)",
+    )
+      .bind(
+        "refresh-test",
+        "family-test",
+        "user-test",
+        "device-test",
+        await hash(refreshToken),
+        timestamp + 3600,
+        timestamp,
+        timestamp,
+      )
+      .run();
+    const response = await SELF.fetch("https://example.com/v1/auth/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refreshToken }),
+    });
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({ error: { code: "refresh_reused" } });
+    expect((await authorized("/v1/sync/status")).status).toBe(401);
+  });
+});

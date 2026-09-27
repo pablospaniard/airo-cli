@@ -135,7 +135,7 @@ AIRO extracts provider-neutral task features, generates every registered provide
 
 See [Routing rules and learning](docs/routing-and-learning.md) for the complete current decision precedence, custom-rule behavior, history format, and learning algorithm. [Jev and AIRO](docs/jev-and-airo.md) records the development-evaluation and optional local-feedback boundaries. The [routing platform roadmap](docs/routing-platform-roadmap.md) covers provider-neutral routing, portable learning, encrypted cloud sync, and the deferred research-consent architecture.
 
-The roadmap is not released functionality. The current package keeps history and learning local, does not require Jev or an AIRO account, and does not upload routing journeys to an AIRO service.
+Development milestones are not automatically released functionality. The current npm package keeps history and learning local, does not require Jev or an AIRO account, and does not upload routing journeys to an AIRO service. The development branch now includes optional encrypted sync, described below, pending a future package release and service deployment.
 
 Developers can run the unpublished Jev evaluation harness against versioned synthetic calibration and held-out cases. It requires a separately installed Jev CLI, an exact model ID, and the CLI's own TypeSafe credential configuration:
 
@@ -348,7 +348,27 @@ airo history import backup.airo
 
 For automation, `--passphrase-file <path>` reads the passphrase from a permission-restricted file. AIRO deliberately does not accept passphrases directly as command arguments. Import merges immutable history and feedback IDs, ignores identical duplicates, rejects conflicting IDs, and creates timestamped backups before changing existing files. Repeating the same import is safe. The archive contains routing evidence—including task text and excerpts—so keep both the archive and passphrase private.
 
-Repository-scoped learning uses a stable repository ID instead of requiring the same absolute checkout path. Git repositories with an `origin` derive a local ID from the normalized remote. Repositories without one receive a random ID; run `airo repository id` on the source and `airo repository link <id>` in the destination checkout when you want both to share learning. Remote-derived IDs are stored only locally or inside encrypted archives; future cloud sync must replace them with keyed account identifiers.
+Repository-scoped learning uses a stable repository ID instead of requiring the same absolute checkout path. Git repositories with an `origin` derive a local ID from the normalized remote. Repositories without one receive a random ID; run `airo repository id` on the source and `airo repository link <id>` in the destination checkout when you want both to share learning. Remote-derived IDs are stored only locally or inside encrypted payloads; sync metadata uses an account-key-derived HMAC identifier.
+
+### Optional encrypted sync (development branch)
+
+Milestone 5 adds an optional Cloudflare Worker and D1 service for moving learning evidence and safe routing settings between machines. Core routing stays account-free and offline-capable. Nothing uploads during `login` or `enable`; the user must explicitly run `airo sync now`.
+
+```bash
+airo sync login --server https://your-sync-worker.example
+AIRO_SYNC_PASSPHRASE="..." airo sync enable
+airo sync now
+airo sync status
+airo sync devices
+```
+
+The browser-assisted GitHub login identifies the sync account. AIRO stores short-lived access and rotating refresh credentials in macOS Keychain or a Secret Service keyring when available. `--allow-credential-file` is an explicit fallback that writes a mode-`0600` local file. The recovery passphrase can also be read with `--passphrase-file`; it is never accepted as a command argument or sent to the service.
+
+History, user feedback, optional Jev feedback, and classified routing settings are encrypted locally with AES-256-GCM. The account data key is wrapped locally with a scrypt-derived recovery key. The service sees ciphertext, keyed repository indexes, cursors, device metadata, and GitHub account identity. It cannot decrypt the private records.
+
+Provider credentials and API keys, the Jev API key and consent record, executable paths, local history paths, and machine-specific permission settings never sync. Losing the recovery passphrase and every device that still holds the account key makes the synchronized data unrecoverable.
+
+Use `airo sync devices revoke <device-id>` to revoke another device, `airo sync export <file>` for a permission-restricted encrypted server-data export, `airo sync logout` to remove local credentials, and `airo sync delete-cloud-data --yes` to permanently delete the sync account. Research participation remains separate, unimplemented, and disabled by default.
 
 For every new phase, AIRO stores task features, a local hashed feature embedding, route/model/effort, latency and token telemetry, and a deterministic evaluation. Successful provider exit, reported verification, missing verification, retries, recovery, and later regression-review findings contribute with different confidence levels. Explicit feedback remains the strongest signal. AIRO does not train provider models or let a producing model award itself an unverified success.
 
@@ -439,6 +459,12 @@ Claude runs use `permissionMode: "acceptEdits"` inside prompt mode so headless i
 | `airo history [limit]` | Show recent routing history. |
 | `airo history export --encrypted <file>` | Export versioned history and feedback as an encrypted archive. |
 | `airo history import <file>` | Idempotently merge an encrypted learning archive. |
+| `airo sync login [--server <url>]` | Authenticate a device with the optional sync service. |
+| `airo sync enable` | Create or recover the local end-to-end encryption key. |
+| `airo sync now` | Explicitly push and pull encrypted evidence and safe settings. |
+| `airo sync status\|devices\|logout` | Inspect or manage the local sync account and devices. |
+| `airo sync export <file>` | Export the encrypted server-side account representation. |
+| `airo sync delete-cloud-data --yes` | Permanently delete the cloud sync account and data. |
 | `airo repository id` / `airo repository link <id>` | Inspect or link the stable repository learning scope. |
 | `airo usage [limit]` | Show provider-reported tokens and the historical default-model comparison. |
 | `airo feedback <good\|bad> [note]` | Teach the router from the latest completed run. |
@@ -484,7 +510,7 @@ The hook runs `pnpm run validate`, which checks formatting, linting, types, and 
 
 ## Architecture roadmap
 
-Milestones 1–4 are implemented on the development branch: provider-neutral routing foundations, portable local learning, the development Jev evaluator, and optional local Jev feedback. Private multi-device sync is next. Research participation remains a separate, deferred opt-in.
+Milestones 1–5 are implemented on the development branch: provider-neutral routing foundations, portable local learning, the development Jev evaluator, optional local Jev feedback, and private end-to-end encrypted multi-device sync. Research participation remains a separate, deferred opt-in.
 
 See the [routing platform roadmap](docs/routing-platform-roadmap.md) and [Jev decision record](docs/jev-and-airo.md) for boundaries and acceptance gates. Development-branch status must not be inferred as functionality in the current npm release until a new version is published.
 

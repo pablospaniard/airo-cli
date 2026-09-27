@@ -143,7 +143,7 @@ These preferences do not replace a provider, model, or tier explicitly selected 
 
 Learning is local, file-based, and repository-scoped by default. AIRO does not train a provider model or maintain a separate learned-weights file.
 
-The current release does not sync history between machines. Portable encrypted export/import and optional end-to-end encrypted cloud sync are roadmap items, not current commands. Until those milestones ship, users must treat the files below as local data and migrate them manually if needed.
+The published npm release does not sync history between machines. The development branch implements portable encrypted export/import and optional end-to-end encrypted Cloudflare sync; these must not be presented as released npm behavior until the release process completes. Without explicitly enabling and invoking sync, the files below remain local.
 
 Unless `history.path` is configured, records are stored at:
 
