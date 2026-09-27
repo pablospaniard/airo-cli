@@ -684,14 +684,26 @@ export function syncStatus(allowFile = false): {
   }
 }
 
-export async function syncDevices(
-  allowFile = false,
-): Promise<Array<{ id: string; name: string; lastSeenAt: number; current: boolean }>> {
+export async function syncDevices(allowFile = false): Promise<
+  Array<{
+    id: string;
+    name: string;
+    lastSeenAt: number;
+    revokedAt: number | null;
+    current: boolean;
+  }>
+> {
   const state = readState();
   if (!state) throw new Error("Sync is not configured.");
   return (
     await authenticated<{
-      devices: Array<{ id: string; name: string; lastSeenAt: number; current: boolean }>;
+      devices: Array<{
+        id: string;
+        name: string;
+        lastSeenAt: number;
+        revokedAt: number | null;
+        current: boolean;
+      }>;
     }>(state, credentialStore(allowFile), "/v1/devices")
   ).devices;
 }

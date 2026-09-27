@@ -178,4 +178,23 @@ describe("sync Worker", () => {
     expect(await response.json()).toMatchObject({ error: { code: "refresh_reused" } });
     expect((await authorized("/v1/sync/status")).status).toBe(401);
   });
+
+  it("retains revoked devices for an auditable device list", async () => {
+    await env.DB.prepare(
+      "INSERT INTO devices(id, user_id, name, created_at, last_seen_at) VALUES(?, ?, ?, ?, ?)",
+    )
+      .bind("device-secondary", "user-test", "secondary", 1, 1)
+      .run();
+    expect((await authorized("/v1/devices/device-secondary", { method: "DELETE" })).status).toBe(
+      200,
+    );
+    const response = await authorized("/v1/devices");
+    const body = await response.json<{
+      devices: Array<{ id: string; revokedAt: number | null; current: boolean }>;
+    }>();
+    expect(body.devices.find((device) => device.id === "device-secondary")).toMatchObject({
+      current: false,
+      revokedAt: expect.any(Number),
+    });
+  });
 });

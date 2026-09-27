@@ -1056,11 +1056,17 @@ async function main() {
         return;
       }
       const devices = await syncDevices(allowFile);
-      console.log(divider("Authorized sync devices"));
-      for (const device of devices)
+      console.log(divider("Sync devices"));
+      for (const device of devices) {
+        const state = device.revokedAt
+          ? ui.red("revoked")
+          : device.current
+            ? ui.cyan("current")
+            : ui.green("authorized");
         console.log(
-          `${device.current ? statusIcon("ok") : statusIcon("info")} ${ui.bold(device.name)} ${ui.gray(device.id)} ${device.current ? ui.cyan("current") : ""}`,
+          `${statusIcon(device.revokedAt ? "error" : device.current ? "ok" : "info")} ${ui.bold(device.name)} ${ui.gray(device.id)} ${state}`,
         );
+      }
       return;
     }
     if (action === "export") {
