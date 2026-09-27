@@ -6,6 +6,7 @@ import {
   brand,
   command as commandColor,
   divider,
+  outputWidth,
   panel,
   promptLabel,
   statusIcon,
@@ -61,6 +62,7 @@ import { VERSION } from "./version.js";
 import {
   cleanDroppedPath,
   INTERACTIVE_COMMANDS,
+  INTERACTIVE_SHELL_HELP,
   isSupportedAttachmentPath,
   parseInteractiveInput,
   taskArgs,
@@ -182,10 +184,19 @@ function help() {
     `  ${commandColor("airo feedback jev status|enable|disable")}  ${ui.gray("control optional local Jev feedback")}`,
   );
   console.log(
+    `  ${commandColor("airo feedback jev inspect|reset")}          ${ui.gray("inspect or clear local Jev evidence")}`,
+  );
+  console.log(
     `  ${commandColor("airo learning status|explain|reset")}       ${ui.gray("inspect or reset adaptive routing")}`,
   );
   console.log(
     `  ${commandColor("airo sync login|enable|now|status")}        ${ui.gray("manage optional encrypted cloud sync")}`,
+  );
+  console.log(
+    `  ${commandColor("airo sync devices|export|logout")}          ${ui.gray("manage sync devices and encrypted data")}`,
+  );
+  console.log(
+    `  ${commandColor("airo sync delete-cloud-data --yes")}        ${ui.gray("permanently delete the sync account data")}`,
   );
   console.log("");
   console.log(ui.bold("Sessions"));
@@ -666,13 +677,18 @@ function interactiveStatus(
 }
 
 function interactiveHelp(): string {
+  const shellCommands = INTERACTIVE_SHELL_HELP.map(
+    ([usage, description]) => `${commandColor(usage)}  ${ui.gray(description)}`,
+  );
   return panel(
-    "Interactive commands",
+    "Command reference",
     [
+      ui.bold("Interactive commands"),
+      `${commandColor("/help, /?")}          ${ui.gray("show this reference")}`,
       `${commandColor("/new [title]")}        ${ui.gray("start a fresh session")}`,
       `${commandColor("/status")}             ${ui.gray("show session and run preferences")}`,
       `${commandColor("/mode auto|adaptive|single")} ${ui.gray("set workflow mode")}`,
-      `${commandColor("/agent auto|claude|codex|gemini|copilot")} ${ui.gray("pin or auto-select a provider")}`,
+      `${commandColor("/agent auto|claude|codex|gemini|copilot")} ${ui.gray("select provider")}`,
       `${commandColor("/tier auto|fast|balanced|deep")} ${ui.gray("set model tier")}`,
       `${commandColor("/log compact|live|verbose")}  ${ui.gray("set output detail")}`,
       `${commandColor("/models")}             ${ui.gray("show active model mapping")}`,
@@ -683,12 +699,16 @@ function interactiveHelp(): string {
       `${commandColor("/no-jev <task>")}       ${ui.gray("run one task without sending it to Jev")}`,
       `${commandColor("/feedback good|bad [note]")} ${ui.gray("rate the latest run")}`,
       `${commandColor("/feedback phase <id> good|bad [note]")} ${ui.gray("rate one phase")}`,
-      `${commandColor("/learning status|explain <id>")} ${ui.gray("inspect learned routing")}`,
+      `${commandColor("/learning status|explain <id>|reset --yes")} ${ui.gray("inspect or reset learning")}`,
       `${commandColor("/sessions")}           ${ui.gray("list repository sessions")}`,
       `${commandColor("/clear")}              ${ui.gray("clear the screen")}`,
-      `${commandColor("/exit")}               ${ui.gray("exit interactive mode")}`,
+      `${commandColor("/exit, /quit")}        ${ui.gray("exit interactive mode")}`,
+      "",
+      ui.bold("Shell commands (exit the workspace first)"),
+      ...shellCommands,
+      `${commandColor("airo --help")}  ${ui.gray("show the full CLI reference")}`,
     ],
-    76,
+    outputWidth(),
   );
 }
 
