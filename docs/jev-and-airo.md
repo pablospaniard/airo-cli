@@ -4,12 +4,12 @@
 
 Jev is not planned as a required production routing dependency or as a replacement for AIRO's router. The planned direction has two bounded uses:
 
-1. An unpublished development evaluator that supplies semantic labels and decision feedback for improving AIRO's shipped routing policy.
+1. An unpublished development evaluator that supplies semantic labels and decision feedback for improving AIRO's shipped routing policy. This is implemented on the development branch for reviewed fixtures only.
 2. A future optional production feedback integration that uses the user's API key, runs after a task, stores feedback locally, and may improve later automatic decisions.
 
-Neither use is implemented in the current release. The complete provider, learning, sync, and research roadmap is recorded in [Routing platform roadmap](routing-platform-roadmap.md).
+The development evaluator is not part of the published runtime and does not run in CI against the external service. Optional production feedback remains unimplemented. The complete provider, learning, sync, and research roadmap is recorded in [Routing platform roadmap](routing-platform-roadmap.md).
 
-The findings here are based on TypeSafe's public documentation as reviewed on September 27, 2026. Jev is an external, evolving service, so its API, model versions, data practices, and limitations must be verified again before implementation.
+The findings and development CLI interface here are based on public documentation reviewed on September 27, 2026. Jev is an external, evolving service, so its API, model versions, data practices, and limitations must be verified again before future integration changes or production use.
 
 Primary references:
 
@@ -20,6 +20,7 @@ Primary references:
 - [API reference](https://docs.typesafe.ai/api)
 - [Models](https://docs.typesafe.ai/models)
 - [Known Jev 1.13 limitations](https://docs.typesafe.ai/model-jaggedness/jev-1.13)
+- [`@y0usaf/typesafe-cli`](https://github.com/y0usaf/typesafe-cli), the separately installed development CLI
 
 ## Complementary responsibilities
 
@@ -70,6 +71,14 @@ Jev feedback is supporting evidence. Actual verified completion, regressions, re
 The evaluator may help calibrate a generic routing-policy artifact, but it must never edit production weights automatically. Proposed policy changes require a held-out comparison, regression review, and normal source review.
 
 Tests must use recorded fixtures or a fake transport. CI must not require a TypeSafe credential or spend external quota.
+
+The development command uses the separately installed `jev` CLI without adding it to AIRO's runtime dependencies:
+
+```bash
+pnpm evaluate:jev -- --model jev-EXACT-VERSION --output .airo-dev/jev-routing-report.json
+```
+
+The exact model is mandatory; aliases such as `jev-latest` are rejected. The CLI resolves `TYPESAFE_API_KEY` itself, so AIRO never accepts, prints, or stores the key. For every reviewed fixture, the evaluator sends only the fixture task and AIRO's provider, tier, complexity, and policy version. It asks versioned Choice and Noul questions for category, risk, provider, tier, and route appropriateness. Reports retain the full typed answers, distributions, confidence values, returned model, CLI version, usage, question-set version, and fixture identifier, but omit task text. Reports never update routing weights. CI exercises the same parser and failure boundary through a fake Jev executable.
 
 ## Optional production feedback
 

@@ -97,7 +97,7 @@ An unpublished development tool may use Jev to:
 
 Jev labels are supporting evidence, not ground truth. Actual completion, verification, regressions, user corrections, and explicit feedback remain stronger evidence. Jev cannot prove that an unexecuted alternative provider would have succeeded.
 
-The development evaluator should live outside the published runtime, use fixtures in CI, pin the evaluated Jev model, record the question-set version, and require human review before changing a shipped policy.
+The development evaluator lives outside the published runtime, uses a fake Jev executable in CI, requires an explicitly pinned model, records the returned model and question-set version, and never changes a shipped policy. `pnpm evaluate:jev -- --model jev-EXACT-VERSION --output .airo-dev/jev-routing-report.json` runs it manually against the reviewed routing fixtures. Human review and the routing-policy evaluation gate remain mandatory before changing shipped weights.
 
 ### Optional production feedback
 
