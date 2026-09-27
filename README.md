@@ -14,6 +14,10 @@ AIRO accepts a task, chooses the right provider and model tier, and can coordina
 
 The official npm package is [`airo-ai-router`](https://www.npmjs.com/package/airo-ai-router). Install it globally to use the `airo` command; `ai-router`, `airoute`, and `ai-route` are retained as compatibility aliases.
 
+### Capability status
+
+The latest published package is `airo-ai-router@0.7.1`. This repository's development branch is ahead of that package: it contains the completed Milestones 1–5 work for the provider registry, portable learning, optional local Jev feedback, encrypted multi-device sync, and subsequent dynamic model mapping. Sections labeled **development branch** require a source build until a newer package is published. Research participation is Milestone 6; it is documented but not implemented.
+
 ```text
 request → route → analyze → implement → test → review
                     Claude     Codex      Codex   Claude
@@ -131,7 +135,7 @@ AIRO extracts provider-neutral task features, generates every registered provide
 
 See [Routing rules and learning](docs/routing-and-learning.md) for the complete current decision precedence, custom-rule behavior, history format, and learning algorithm. [Jev and AIRO](docs/jev-and-airo.md) records the development-evaluation and optional local-feedback boundaries. The [routing platform roadmap](docs/routing-platform-roadmap.md) covers provider-neutral routing, portable learning, encrypted cloud sync, and the deferred research-consent architecture.
 
-Development milestones are not automatically released functionality. The current npm package keeps history and learning local, does not require Jev or an AIRO account, and does not upload routing journeys to an AIRO service. The development branch now includes optional encrypted sync, described below. Its development service is deployed, but the client functionality remains pending a future package release.
+Development milestones are not automatically released functionality. Published `airo-ai-router@0.7.1` keeps history and learning local, does not require Jev or an AIRO account, and does not upload routing journeys to an AIRO service. The development branch includes optional local Jev feedback and encrypted sync, described below; the sync service is deployed, but the corresponding client remains pending a future package release.
 
 Developers can run the unpublished Jev evaluation harness against versioned synthetic calibration and held-out cases. It requires a separately installed Jev CLI, an exact model ID, and the CLI's own TypeSafe credential configuration:
 
@@ -195,7 +199,7 @@ Copilot hosts models from several vendors, so a `gpt-*` or `claude-*` name alone
 
 ### Provider coverage
 
-Claude Code and Codex CLI have explicit account probes, model-specific effort forwarding, and the broadest integration coverage. Gemini CLI and GitHub Copilot CLI provide execution, configured or discovered models, permissions, explicit routing, and automatic fallback eligibility, but they do not yet have account probes or receive AIRO effort settings. The roadmap defines the remaining contract they must meet before all providers have equivalent behavior.
+All four providers satisfy AIRO's versioned support contract for configuration, routing, execution, permissions, failure classification, model discovery with reviewed fallbacks, tests, and documentation. Claude Code and Codex CLI additionally expose deterministic account probes and model-specific effort controls. Gemini CLI and GitHub Copilot CLI report authentication as unknown until execution and keep effort at `auto`; Copilot also exposes less structured progress. These are explicit capability differences in otherwise supported adapters, not incomplete provider integrations.
 
 ### How AIRO detects your access
 
@@ -260,6 +264,7 @@ airo session clear                            # clear the active repository sess
 Run `airo` (or `airo chat`) to stay in a terminal workspace and send several tasks without retyping the command. The choices below last for that running workspace; use configuration or explicit command flags for persistent or one-off routing overrides.
 
 ```text
+/help, /?
 /mode auto|adaptive|single
 /agent auto|claude|codex|gemini|copilot
 /tier auto|fast|balanced|deep
@@ -267,12 +272,19 @@ Run `airo` (or `airo chat`) to stay in a terminal workspace and send several tas
 /status
 /new [title]
 /models
+/account
+/usage [limit]
+/logs
+/attach <file-path>
+/feedback good|bad [note]
+/feedback phase <id> good|bad [note]
+/learning status|explain <id>|reset --yes
 /sessions
 /clear
-/exit
+/exit, /quit
 ```
 
-Type `/help` in the workspace for the complete command list. Tab completion is available for slash commands.
+Type `/help` in the workspace for the complete command list. It also shows shell-only management families such as `airo feedback jev …` and `airo sync …`; exit the workspace before running those commands. Tab completion is available for slash commands.
 
 ### Attach a file or answer a question
 
@@ -432,6 +444,8 @@ Claude runs use `permissionMode: "acceptEdits"` inside prompt mode so headless i
 
 ## CLI command reference
 
+The table describes the current source tree. Encrypted history export/import, stable repository linking, Jev feedback, and `airo sync` are development-branch commands that are not present in published `airo-ai-router@0.7.1`.
+
 | Command                                                                              | What it does                                                                                                  |
 | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
 | `airo` / `airo chat`                                                                 | Open the interactive workspace.                                                                               |
@@ -460,11 +474,17 @@ Claude runs use `permissionMode: "acceptEdits"` inside prompt mode so headless i
 | `airo sync enable --passphrase <string>`                                             | Create or recover the local end-to-end encryption key. Environment-variable and file inputs remain supported. |
 | `airo sync now`                                                                      | Explicitly push and pull encrypted evidence and safe settings.                                                |
 | `airo sync status\|devices\|logout`                                                  | Inspect or manage the local sync account and devices.                                                         |
+| `airo sync devices revoke <device-id>`                                               | Revoke an authorized sync device.                                                                             |
 | `airo sync export <file>`                                                            | Export the encrypted server-side account representation.                                                      |
 | `airo sync delete-cloud-data --yes`                                                  | Permanently delete the cloud sync account and data.                                                           |
 | `airo repository id` / `airo repository link <id>`                                   | Inspect or link the stable repository learning scope.                                                         |
 | `airo usage [limit]`                                                                 | Show provider-reported tokens and the historical default-model comparison.                                    |
 | `airo feedback <good\|bad> [note]`                                                   | Teach the router from the latest completed run.                                                               |
+| `airo feedback phase <id> <good\|bad> [note]`                                        | Rate one phase of a completed run.                                                                            |
+| `airo feedback jev status\|enable\|disable`                                          | Manage optional local Jev feedback and consent.                                                               |
+| `airo feedback jev inspect\|reset`                                                   | Inspect or remove local Jev evidence.                                                                         |
+| `airo learning status\|explain <id>\|reset --yes`                                    | Inspect or reset evidence-driven routing adjustments.                                                         |
+| `airo --no-jev "task"`                                                               | Skip optional Jev feedback for one run.                                                                       |
 | `airo --help` / `airo --version`                                                     | Show help or the installed version.                                                                           |
 
 Set `NO_COLOR=1` to disable ANSI colors.
@@ -507,7 +527,7 @@ The hook runs `pnpm run validate`, which checks formatting, linting, types, and 
 
 ## Architecture roadmap
 
-Milestones 1–5 are implemented on the development branch: provider-neutral routing foundations, portable local learning, the development Jev evaluator, optional local Jev feedback, and private end-to-end encrypted multi-device sync. Research participation remains a separate, deferred opt-in.
+Milestones 1–5 are implemented on the development branch: provider-neutral routing foundations, portable local learning, the development Jev evaluator, optional local Jev feedback, and private end-to-end encrypted multi-device sync. They are not part of published `airo-ai-router@0.7.1`. Research participation remains a separate, deferred opt-in.
 
 See the [routing platform roadmap](docs/routing-platform-roadmap.md) and [Jev decision record](docs/jev-and-airo.md) for boundaries and acceptance gates. Development-branch status must not be inferred as functionality in the current npm release until a new version is published.
 
