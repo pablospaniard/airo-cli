@@ -131,6 +131,16 @@ export interface ScoreReason {
   reason: string;
 }
 
+export interface RouteCandidate {
+  agent: Agent;
+  modelTier: ModelTier;
+  model: string;
+  effort: Effort;
+  providerScore: number;
+  tierScore: number;
+  totalScore: number;
+}
+
 export interface RouteResult {
   agent: Agent;
   modelTier: ModelTier;

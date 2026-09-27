@@ -131,7 +131,7 @@ airo --dry-run --explain "migrate this legacy module"
 
 ## Models and routing
 
-AIRO scores each request for provider and complexity signals, applies matching configuration rules, and can incorporate feedback from similar prior work. It then maps the work to a `fast`, `balanced`, or `deep` tier. A tier is a default choice, not a restriction.
+AIRO extracts provider-neutral task features, generates every registered provider/tier candidate, and scores each candidate using reviewed capability profiles, tier suitability, configuration rules, and feedback from similar prior work. A `fast`, `balanced`, or `deep` tier is a default choice, not a restriction.
 
 See [Routing rules and learning](docs/routing-and-learning.md) for the complete current decision precedence, custom-rule behavior, history format, and learning algorithm. [Jev and AIRO](docs/jev-and-airo.md) records the planned development-evaluation and optional local-feedback boundaries. The [routing platform roadmap](docs/routing-platform-roadmap.md) covers provider-neutral routing, portable learning, encrypted cloud sync, and the deferred research-consent architecture.
 

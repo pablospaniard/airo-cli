@@ -1,62 +1,15 @@
+import { extractTaskFeatures } from "./evaluation.js";
 import { learningHints } from "./history.js";
-import { AGENTS, effectiveEffort } from "./providers.js";
-import type { Agent, Effort, ModelTier, RouteResult, RouterConfig, ScoreReason } from "./types.js";
-
-const CLAUDE_SIGNALS: Array<[RegExp, number, string]> = [
-  [
-    /\b(root cause|investigat(e|ion)|diagnos(e|is)|why does|why is|unknown bug)\b/i,
-    4,
-    "investigation/root-cause task",
-  ],
-  [
-    /\b(architecture|architectural|design|trade-?off|strategy)\b/i,
-    4,
-    "architecture/design reasoning",
-  ],
-  [
-    /\b(race condition|deadlock|concurrency|intermittent|flaky|occasionally|nondeterministic)\b/i,
-    5,
-    "hard-to-reproduce/concurrency issue",
-  ],
-  [
-    /\b(legacy|migration|migrate|cross[- ]module|cross[- ]cutting)\b/i,
-    3,
-    "migration or cross-cutting change",
-  ],
-  [/\b(large refactor|major refactor|re-?architect|rewrite)\b/i, 4, "large refactor"],
-  [/\b(ios|android|xcode|gradle|swift|objective-c|kotlin|jni)\b/i, 2, "native/mobile context"],
-  [
-    /\b(performance|memory leak|profil(e|ing)|security|vulnerability)\b/i,
-    3,
-    "performance/security investigation",
-  ],
-  [
-    /\b(analyze|analyse|explore|understand|audit|review architecture)\b/i,
-    2,
-    "repo exploration/review",
-  ],
-];
-
-const CODEX_SIGNALS: Array<[RegExp, number, string]> = [
-  [/\b(implement|add|create|write|build)\b/i, 2, "clear implementation request"],
-  [/\b(unit test|integration test|tests|test coverage)\b/i, 3, "test implementation"],
-  [
-    /\b(rename|lint|format|typing|type error|typescript error|interface|types)\b/i,
-    3,
-    "mechanical/types task",
-  ],
-  [
-    /\b(component|hook|endpoint|api client|schema|serializer|dto)\b/i,
-    2,
-    "well-scoped implementation",
-  ],
-  [
-    /\b(boilerplate|scaffold|generate|dependency update|upgrade package)\b/i,
-    3,
-    "mechanical/scaffolding task",
-  ],
-  [/\b(fix this|change this|update this|replace this)\b/i, 2, "direct localized change"],
-];
+import { AGENTS, effectiveEffort, routingCapabilityScore } from "./providers.js";
+import type {
+  Agent,
+  Effort,
+  ModelTier,
+  RouteCandidate,
+  RouteResult,
+  RouterConfig,
+  ScoreReason,
+} from "./types.js";
 
 const DEEP_SIGNALS: Array<[RegExp, number, string]> = [
   [
@@ -99,6 +52,36 @@ function tierFromComplexity(c: number): ModelTier {
 }
 function effortForTier(tier: ModelTier): Effort {
   return tier === "fast" ? "low" : tier === "balanced" ? "medium" : "high";
+}
+
+const MODEL_TIERS: readonly ModelTier[] = ["fast", "balanced", "deep"];
+
+function tierScore(tier: ModelTier, complexity: number): number {
+  const target = tierFromComplexity(complexity);
+  const distance = Math.abs(MODEL_TIERS.indexOf(tier) - MODEL_TIERS.indexOf(target));
+  return distance === 0 ? 2 : distance === 1 ? 0 : -1;
+}
+
+export function generateRouteCandidates(
+  config: RouterConfig,
+  agentScores: Record<Agent, number>,
+  complexity: number,
+): RouteCandidate[] {
+  return AGENTS.flatMap((agent) =>
+    MODEL_TIERS.map((modelTier) => {
+      const profile = config[agent].models[modelTier];
+      const suitability = tierScore(modelTier, complexity);
+      return {
+        agent,
+        modelTier,
+        model: profile.model,
+        effort: effectiveEffort(agent, profile.effort ?? effortForTier(modelTier)),
+        providerScore: agentScores[agent],
+        tierScore: suitability,
+        totalScore: agentScores[agent] + suitability,
+      };
+    }),
+  );
 }
 
 const MOST_POWERFUL_MODEL =
@@ -282,17 +265,32 @@ export function routeTask(task: string, config: RouterConfig): RouteResult {
     }
   }
 
-  for (const [pattern, points, reason] of CLAUDE_SIGNALS)
-    if (pattern.test(task)) add(reasons, "claude", points, reason);
-  for (const [pattern, points, reason] of CODEX_SIGNALS)
-    if (pattern.test(task)) add(reasons, "codex", points, reason);
-
   const words = task.trim().split(/\s+/).filter(Boolean).length;
-  if (words >= 45) add(reasons, "claude", 2, "long/compound request");
-  if (words <= 12) add(reasons, "codex", 1, "short/well-scoped request");
   const compounds = (task.match(/\b(and|also|while|without|across|then|after|before)\b/gi) ?? [])
     .length;
-  if (compounds >= 3) add(reasons, "claude", 2, "multiple constraints/subtasks");
+
+  let complexity = 2;
+  if (words >= 20) complexity += 1;
+  if (words >= 55) complexity += 1;
+  for (const [pattern, points, reason] of DEEP_SIGNALS)
+    if (pattern.test(task)) {
+      complexity += points;
+      modelReasons.push(reason);
+    }
+  for (const [pattern, points, reason] of FAST_SIGNALS)
+    if (pattern.test(task)) {
+      complexity -= points;
+      modelReasons.push(reason);
+    }
+  if (compounds >= 3) complexity += 1;
+  complexity = clampComplexity(complexity);
+
+  const taskFeatures = extractTaskFeatures(task, complexity);
+  for (const candidate of AGENTS) {
+    const capability = routingCapabilityScore(candidate, taskFeatures);
+    if (capability.points)
+      add(reasons, candidate, capability.points, capability.reasons.join(" + "));
+  }
   if (config.policy === "claude-heavy") add(reasons, "claude", 2, "claude-heavy policy");
   if (config.policy === "codex-heavy") add(reasons, "codex", 2, "codex-heavy policy");
 
@@ -320,24 +318,12 @@ export function routeTask(task: string, config: RouterConfig): RouteResult {
     ? config.defaultAgent
     : highestScoringAgents[0];
   const agent = explicitModel?.agent ?? naturalRequest.agent ?? forcedAgent ?? learnedAgent;
+  const candidates = generateRouteCandidates(config, scores, complexity);
+  const automaticCandidate = candidates
+    .filter((candidate) => candidate.agent === agent)
+    .sort((a, b) => b.totalScore - a.totalScore)[0];
 
-  let complexity = 2;
-  if (words >= 20) complexity += 1;
-  if (words >= 55) complexity += 1;
-  for (const [pattern, points, reason] of DEEP_SIGNALS)
-    if (pattern.test(task)) {
-      complexity += points;
-      modelReasons.push(reason);
-    }
-  for (const [pattern, points, reason] of FAST_SIGNALS)
-    if (pattern.test(task)) {
-      complexity -= points;
-      modelReasons.push(reason);
-    }
-  if (compounds >= 3) complexity += 1;
-  complexity = clampComplexity(complexity);
-
-  let modelTier = userRequestedTier ?? forcedTier ?? tierFromComplexity(complexity);
+  let modelTier = userRequestedTier ?? forcedTier ?? automaticCandidate.modelTier;
   if (!userRequestedTier && !forcedTier && config.history.learningEnabled) {
     const scores = learned.tierBoosts;
     const best = (Object.keys(scores) as ModelTier[]).sort((a, b) => scores[b] - scores[a])[0];
@@ -383,6 +369,13 @@ export function routeTask(task: string, config: RouterConfig): RouteResult {
   if (effort !== requestedEffort)
     modelReasons.push(`${agent} does not expose an AIRO effort control → using auto`);
   const routeKey = `${agent}/${explicitModel?.model ?? profile.model}/${effort}`;
+  const selectedCandidate = candidates.find(
+    (candidate) => candidate.agent === agent && candidate.modelTier === modelTier,
+  );
+  if (selectedCandidate)
+    modelReasons.unshift(
+      `candidate score ${selectedCandidate.totalScore.toFixed(1)} = provider ${selectedCandidate.providerScore.toFixed(1)} + tier ${selectedCandidate.tierScore.toFixed(1)}`,
+    );
   modelReasons.unshift(`complexity ${complexity}/5 → ${modelTier} tier`);
   if (userRequestedTier)
     modelReasons.unshift(`user explicitly requested the ${userRequestedTier} tier`);

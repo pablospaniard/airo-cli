@@ -63,16 +63,18 @@ AIRO loads the first configuration file it finds in this order:
 
 It does not merge rule arrays from several configuration files.
 
-## Built-in task signals
+## Task features and provider capabilities
 
-Built-in signals are regular expressions defined in `src/router.ts`. Unlike custom rules, a signal adds or subtracts scoring or complexity points rather than forcing an entire route.
+AIRO first extracts provider-neutral task features: category, risk, complexity, language, and local hashed tokens. The source-controlled provider registry declares reviewed cold-start weights for task categories, high-risk work, and fast or complex tasks. There are no separate Claude and Codex keyword-scoring tables.
 
-Provider signals broadly favor:
+For every decision, AIRO generates a candidate for each registered provider and each `fast`, `balanced`, and `deep` tier. A candidate's initial score combines:
 
-- Claude for investigation, root-cause analysis, architecture, concurrency, security, migrations, large refactors, and long compound requests.
-- Codex for implementation, tests, typing, formatting, scaffolding, components, endpoints, and localized changes.
+- The provider's capability score for the task features
+- Tier suitability for the calculated complexity
+- An optional configured policy bias
+- Time-decayed evidence learned from similar local outcomes
 
-The configured routing policy can add a small Claude or Codex bias. Historical evidence can add positive or negative points for all providers. Gemini and Copilot do not currently have dedicated built-in keyword tables; they can be selected explicitly, by a custom rule, by learned evidence, or as the configured default.
+Custom rules and explicit choices retain their higher precedence. Cold-start capability values are versioned source data, not self-modifying production weights; they require tests and review when changed.
 
 The provider with the highest total score wins. If several providers tie and `defaultAgent` is among them, `defaultAgent` wins; otherwise AIRO uses the first highest-scoring provider in its candidate order.
 

@@ -17,6 +17,7 @@ import {
 } from "../orchestrator.js";
 import {
   agentForModel,
+  generateRouteCandidates,
   requestedModel,
   requestedModelTier,
   routeTask,
@@ -47,6 +48,29 @@ test("routes a small test implementation to Codex with a fast model", () => {
   assert.equal(route.agent, "codex");
   assert.equal(route.modelTier, "fast");
   assert.equal(route.model, DEFAULT_CONFIG.codex.models.fast.model);
+  assert.ok(route.reasons.some((reason) => /test capability/.test(reason.reason)));
+});
+
+test("generates and scores every registered provider and tier candidate", () => {
+  const current = config();
+  const scores = { claude: 4, codex: 2, gemini: 1, copilot: 0 };
+  const candidates = generateRouteCandidates(current, scores, 5);
+
+  assert.equal(candidates.length, 12);
+  assert.deepEqual(
+    new Set(candidates.map((candidate) => candidate.agent)),
+    new Set(["claude", "codex", "gemini", "copilot"]),
+  );
+  assert.equal(
+    candidates.find((candidate) => candidate.agent === "claude" && candidate.modelTier === "deep")
+      ?.totalScore,
+    6,
+  );
+  assert.equal(
+    candidates.find((candidate) => candidate.agent === "gemini" && candidate.modelTier === "deep")
+      ?.effort,
+    "auto",
+  );
 });
 
 test("falls back across every registered provider using route scores", () => {

@@ -6,7 +6,7 @@ This document records the planned product and architecture direction for AIRO. I
 
 The current published package is [`airo-ai-router`](https://www.npmjs.com/package/airo-ai-router). Current behavior is documented in [Routing rules and learning](routing-and-learning.md). None of the provider-registry, Jev-feedback, cloud-sync, or research-consent milestones below should be presented as released until their implementation, tests, security review, and user documentation are complete.
 
-Development status: the source-controlled provider registry and generic fallback are the first Milestone 1 implementation slice. The rest of the provider-adapter contract and acceptance gate remain open.
+Development status: the source-controlled provider registry, generic fallback, candidate generation, provider-neutral task features, and cold-start capability scoring are implemented on the Milestone 1 development branch. The rest of the provider-adapter contract, policy calibration, and acceptance gate remain open.
 
 ## Architecture principles
 
@@ -54,7 +54,7 @@ Executable discovery must remain deterministic. AIRO should not scan arbitrary f
 
 ## Generic routing evolution
 
-The current provider-specific keyword signals are useful bootstrap behavior, but they should evolve toward provider-neutral task features. Examples include:
+The first implementation uses provider-neutral task features rather than provider-specific keyword scoring. Current features include:
 
 - Task category: investigation, implementation, validation, review, or research
 - Risk: low, medium, or high
@@ -64,7 +64,7 @@ The current provider-specific keyword signals are useful bootstrap behavior, but
 - Workflow phase
 - Verification requirements
 
-Each supported provider supplies a reviewed capability profile. A generic policy scores every eligible provider/tier candidate using task features, provider capabilities, tier suitability, shipped policy weights, and repository-local outcomes.
+Each supported provider supplies a reviewed cold-start capability profile. The generic policy generates every provider/tier candidate and scores it using task features, provider capabilities, tier suitability, shipped policy weights, and repository-local outcomes.
 
 The target calculation is conceptually:
 
@@ -332,7 +332,7 @@ A milestone is not complete until it has:
 
 ## Open implementation decisions
 
-- Exact provider capability schema and cold-start values
+- Calibration and future versioning of provider capability weights
 - Routing-policy training or calibration method
 - Portable archive format and key derivation parameters
 - Git remote fingerprinting and non-Git project linking UX
