@@ -1065,7 +1065,6 @@ async function main() {
       console.log(
         `${ui.bold("Status")} ${result.state?.enabled ? ui.green("enabled") : ui.yellow("disabled")}`,
       );
-      console.log(`${ui.bold("Server")} ${ui.cyan(result.state?.server ?? "not configured")}`);
       console.log(`${ui.bold("Account")} ${ui.cyan(result.state?.user?.login ?? "signed out")}`);
       console.log(
         `${ui.bold("Credentials")} ${result.credentials ? ui.green(result.credentialStore ?? "available") : ui.yellow("missing")}`,

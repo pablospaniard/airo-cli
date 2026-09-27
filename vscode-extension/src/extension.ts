@@ -5,6 +5,8 @@ import path from "node:path";
 import os from "node:os";
 import { renderWebview } from "./webview";
 
+const DEFAULT_SYNC_SERVER = "https://airo-sync.pablospaniard.workers.dev";
+
 let loginShellEnvironmentPromise: Promise<NodeJS.ProcessEnv> | undefined;
 
 function loginShellEnvironment(): Promise<NodeJS.ProcessEnv> {
@@ -511,21 +513,10 @@ class SidebarProvider implements vscode.WebviewViewProvider, vscode.Disposable {
       return;
     }
     if (action === "login") {
-      const suppliedServer = parts.slice(1).find((part) => !part.startsWith("--"));
-      const server =
-        suppliedServer ??
-        (await vscode.window.showInputBox({
-          title: "AIRO Sync server",
-          prompt: "Enter the trusted HTTPS sync service URL.",
-          value: "https://airo-sync.pablospaniard.workers.dev",
-          ignoreFocusOut: true,
-          validateInput: validateServerUrl,
-        }));
-      if (!server) return;
-      const serverError = validateServerUrl(server);
-      if (serverError) return this.notice(serverError, chatId);
+      const unsupported = parts.slice(1).filter((part) => part !== "--allow-credential-file");
+      if (unsupported.length > 0) return this.notice("Usage: /sync login", chatId);
       await this.run(
-        ["sync", "login", "--server", server, ...credentialFlag],
+        ["sync", "login", "--server", DEFAULT_SYNC_SERVER, ...credentialFlag],
         true,
         "Sync login",
         chatId,
@@ -601,7 +592,7 @@ class SidebarProvider implements vscode.WebviewViewProvider, vscode.Disposable {
       return;
     }
     this.notice(
-      "Usage: /sync status|login [server]|enable|now|devices|devices revoke <id>|export|logout|delete-cloud-data",
+      "Usage: /sync status|login|enable|now|devices|devices revoke <id>|export|logout|delete-cloud-data",
       chatId,
     );
   }
@@ -1322,18 +1313,6 @@ function shortDescription(value: string): string {
 function chatTitle(value: string): string {
   const title = shortDescription(value);
   return /^(?:new session|airo sidebar session)$/i.test(title) ? "New chat" : title;
-}
-
-function validateServerUrl(value: string): string | undefined {
-  try {
-    const url = new URL(value);
-    if (url.protocol === "https:") return undefined;
-    if (url.protocol === "http:" && ["localhost", "127.0.0.1", "::1"].includes(url.hostname))
-      return undefined;
-  } catch {
-    // Return the same actionable validation message for malformed URLs.
-  }
-  return "Use an HTTPS URL (HTTP is allowed only for localhost development).";
 }
 
 function listSessionSummaries(): Promise<SessionSummary[]> {

@@ -4,7 +4,7 @@ This directory contains the optional Cloudflare Worker used by AIRO's developmen
 
 The CLI completes GitHub's device flow directly. It sends the resulting short-lived GitHub token once to the Worker, which validates the account with GitHub and discards the token. The Worker stores only hashes of AIRO session tokens and persists opaque encrypted event and setting envelopes in D1. Encryption and recovery-key handling happen in the CLI. Provider credentials, API keys, executable paths, permission settings, and Jev consent are outside the sync schema.
 
-The development deployment is available at `https://airo-sync.pablospaniard.workers.dev`. This does not make sync part of the currently published npm package.
+Deploy the Worker under an application-owned HTTPS URL and configure that URL explicitly in the client. This does not make sync part of the currently published npm package.
 
 ## Provisioning
 

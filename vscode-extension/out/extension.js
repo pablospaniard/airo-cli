@@ -43,6 +43,7 @@ const node_fs_1 = __importDefault(require("node:fs"));
 const node_path_1 = __importDefault(require("node:path"));
 const node_os_1 = __importDefault(require("node:os"));
 const webview_1 = require("./webview");
+const DEFAULT_SYNC_SERVER = "https://airo-sync.pablospaniard.workers.dev";
 let loginShellEnvironmentPromise;
 function loginShellEnvironment() {
     if (loginShellEnvironmentPromise)
@@ -460,21 +461,10 @@ class SidebarProvider {
             return;
         }
         if (action === "login") {
-            const suppliedServer = parts.slice(1).find((part) => !part.startsWith("--"));
-            const server = suppliedServer ??
-                (await vscode.window.showInputBox({
-                    title: "AIRO Sync server",
-                    prompt: "Enter the trusted HTTPS sync service URL.",
-                    value: "https://airo-sync.pablospaniard.workers.dev",
-                    ignoreFocusOut: true,
-                    validateInput: validateServerUrl,
-                }));
-            if (!server)
-                return;
-            const serverError = validateServerUrl(server);
-            if (serverError)
-                return this.notice(serverError, chatId);
-            await this.run(["sync", "login", "--server", server, ...credentialFlag], true, "Sync login", chatId);
+            const unsupported = parts.slice(1).filter((part) => part !== "--allow-credential-file");
+            if (unsupported.length > 0)
+                return this.notice("Usage: /sync login", chatId);
+            await this.run(["sync", "login", "--server", DEFAULT_SYNC_SERVER, ...credentialFlag], true, "Sync login", chatId);
             return;
         }
         if (action === "enable") {
@@ -523,7 +513,7 @@ class SidebarProvider {
             await this.run(["sync", "delete-cloud-data", "--yes", ...credentialFlag], true, "Delete cloud sync data", chatId);
             return;
         }
-        this.notice("Usage: /sync status|login [server]|enable|now|devices|devices revoke <id>|export|logout|delete-cloud-data", chatId);
+        this.notice("Usage: /sync status|login|enable|now|devices|devices revoke <id>|export|logout|delete-cloud-data", chatId);
     }
     async jev(parts, chatId) {
         const action = (parts[0] ?? "status").toLowerCase();
@@ -1169,19 +1159,6 @@ function shortDescription(value) {
 function chatTitle(value) {
     const title = shortDescription(value);
     return /^(?:new session|airo sidebar session)$/i.test(title) ? "New chat" : title;
-}
-function validateServerUrl(value) {
-    try {
-        const url = new URL(value);
-        if (url.protocol === "https:")
-            return undefined;
-        if (url.protocol === "http:" && ["localhost", "127.0.0.1", "::1"].includes(url.hostname))
-            return undefined;
-    }
-    catch {
-        // Return the same actionable validation message for malformed URLs.
-    }
-    return "Use an HTTPS URL (HTTP is allowed only for localhost development).";
 }
 function listSessionSummaries() {
     return runCommand(["sessions", "--json"]).then((result) => {
