@@ -65,7 +65,7 @@ It does not merge rule arrays from several configuration files.
 
 ## Task features and provider capabilities
 
-AIRO first extracts provider-neutral task features: category, risk, complexity, language, and local hashed tokens. The source-controlled provider registry declares reviewed cold-start weights for task categories, high-risk work, and fast or complex tasks. There are no separate Claude and Codex keyword-scoring tables.
+AIRO first extracts provider-neutral task features: category, risk, complexity, language, and local hashed tokens. A versioned, source-controlled routing-policy artifact declares reviewed cold-start weights for task categories, high-risk work, fast or complex tasks, tier suitability, and configured policy biases. There are no separate Claude and Codex keyword-scoring tables.
 
 For every decision, AIRO generates a candidate for each registered provider and each `fast`, `balanced`, and `deep` tier. A candidate's initial score combines:
 
@@ -75,6 +75,8 @@ For every decision, AIRO generates a candidate for each registered provider and 
 - Time-decayed evidence learned from similar local outcomes
 
 Custom rules and explicit choices retain their higher precedence. Cold-start capability values are versioned source data, not self-modifying production weights; they require tests and review when changed.
+
+Every route and new history record includes the routing-policy version that produced it. Historical records without this optional field remain readable. Developers can run `pnpm evaluate:routing-policy` against the reviewed fixture corpus; the fixture data and evaluator are development-only and are not inputs to production routing.
 
 The provider with the highest total score wins. If several providers tie and `defaultAgent` is among them, `defaultAgent` wins; otherwise AIRO uses the first highest-scoring provider in its candidate order.
 

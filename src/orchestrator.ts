@@ -504,6 +504,7 @@ export async function orchestrate(
       model: route.model,
       effort: route.effort,
       complexity: route.complexity,
+      routingPolicyVersion: route.routingPolicyVersion,
       exitCode: result.exitCode,
       durationMs: execution.durationMs,
       outputExcerpt: tail(result.output, config.orchestration.outputTailChars),

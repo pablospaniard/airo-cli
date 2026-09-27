@@ -6,7 +6,7 @@ This document records the planned product and architecture direction for AIRO. I
 
 The current published package is [`airo-ai-router`](https://www.npmjs.com/package/airo-ai-router). Current behavior is documented in [Routing rules and learning](routing-and-learning.md). None of the provider-registry, Jev-feedback, cloud-sync, or research-consent milestones below should be presented as released until their implementation, tests, security review, and user documentation are complete.
 
-Development status: the source-controlled provider registry, generic fallback, candidate generation, provider-neutral task features, cold-start capability scoring, and exhaustive runtime, account, and model-discovery adapter contracts are implemented on the Milestone 1 development branch. Policy calibration and the remaining acceptance-gate work remain open.
+Development status: the source-controlled provider registry, generic fallback, candidate generation, provider-neutral task features, versioned cold-start policy, development evaluation corpus, and exhaustive runtime, account, and model-discovery adapter contracts are implemented on the Milestone 1 development branch. Jev-assisted calibration and the remaining acceptance-gate work remain open.
 
 ## Architecture principles
 
@@ -79,7 +79,7 @@ task features
   = expected route utility
 ```
 
-The shipped policy should be a versioned, deterministic artifact. It may be calibrated during development, but changing it requires held-out evaluation and normal code review. A new provider still needs declared cold-start capabilities because AIRO cannot learn the quality of a provider it has never observed.
+The shipped policy is a versioned, deterministic artifact. Every route and newly written history record carries its policy version. A development-only reviewed fixture corpus enforces minimum provider, tier, and joint routing accuracy through `pnpm evaluate:routing-policy`. The artifact may be calibrated during development, including with Jev labels as supporting evidence, but changing it requires fixture evaluation and normal code review. A new provider still needs declared cold-start capabilities because AIRO cannot learn the quality of a provider it has never observed.
 
 ## Jev boundaries
 

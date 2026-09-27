@@ -456,6 +456,7 @@ async function singleRun(
     model: routed.model,
     effort: routed.effort,
     complexity: routed.complexity,
+    routingPolicyVersion: routed.routingPolicyVersion,
     exitCode: result.exitCode,
     durationMs,
     outputExcerpt: result.output.slice(-config.orchestration.outputTailChars),

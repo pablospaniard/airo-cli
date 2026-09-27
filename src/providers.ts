@@ -1,4 +1,5 @@
-import type { Agent, Effort, TaskCategory, TaskFeatures } from "./types.js";
+import { ROUTING_POLICY } from "./routing-policy.js";
+import type { Agent, Effort, TaskFeatures } from "./types.js";
 
 export interface ProviderCapabilities {
   accountInspection: boolean;
@@ -13,12 +14,6 @@ export interface ProviderDefinition {
   /** Stable tie-breaker after task-specific route scores. Lower values win. */
   fallbackPriority: number;
   capabilities: ProviderCapabilities;
-  routing: {
-    categories: Partial<Record<TaskCategory, number>>;
-    highRiskBonus: number;
-    deepComplexityBonus: number;
-    fastComplexityBonus: number;
-  };
 }
 
 /**
@@ -36,12 +31,6 @@ export const PROVIDERS = [
       modelDiscovery: true,
       structuredProgress: true,
     },
-    routing: {
-      categories: { debug: 3, research: 3, review: 2 },
-      highRiskBonus: 2,
-      deepComplexityBonus: 1,
-      fastComplexityBonus: 0,
-    },
   },
   {
     id: "codex",
@@ -52,12 +41,6 @@ export const PROVIDERS = [
       effortControl: true,
       modelDiscovery: true,
       structuredProgress: true,
-    },
-    routing: {
-      categories: { implement: 3, test: 3, debug: 1 },
-      highRiskBonus: 0,
-      deepComplexityBonus: 0,
-      fastComplexityBonus: 1,
     },
   },
   {
@@ -70,12 +53,6 @@ export const PROVIDERS = [
       modelDiscovery: true,
       structuredProgress: true,
     },
-    routing: {
-      categories: { research: 2, review: 1 },
-      highRiskBonus: 1,
-      deepComplexityBonus: 1,
-      fastComplexityBonus: 0,
-    },
   },
   {
     id: "copilot",
@@ -86,12 +63,6 @@ export const PROVIDERS = [
       effortControl: false,
       modelDiscovery: true,
       structuredProgress: false,
-    },
-    routing: {
-      categories: { implement: 2, test: 2, review: 1 },
-      highRiskBonus: 0,
-      deepComplexityBonus: 0,
-      fastComplexityBonus: 1,
     },
   },
 ] as const satisfies readonly ProviderDefinition[];
@@ -110,7 +81,7 @@ export function routingCapabilityScore(
   agent: Agent,
   features: TaskFeatures,
 ): { points: number; reasons: string[] } {
-  const profile = providerDefinition(agent).routing;
+  const profile = ROUTING_POLICY.providers[agent];
   const reasons: string[] = [];
   let points = profile.categories[features.category] ?? 0;
   if (points) reasons.push(`${features.category} capability`);

@@ -10,6 +10,7 @@ import {
   providerDefinition,
   routingCapabilityScore,
 } from "../providers.js";
+import { ROUTING_POLICY } from "../routing-policy.js";
 import {
   PROVIDER_RUNTIME_ADAPTERS,
   buildProviderInvocation,
@@ -42,6 +43,7 @@ test("requires every registered provider to have complete adapter coverage", () 
   assert.deepEqual(Object.keys(PROVIDER_RUNTIME_ADAPTERS), [...AGENTS]);
   assert.deepEqual(Object.keys(PROVIDER_ACCOUNT_ADAPTERS), [...AGENTS]);
   assert.deepEqual(Object.keys(PROVIDER_CATALOG_ADAPTERS), [...AGENTS]);
+  assert.deepEqual(Object.keys(ROUTING_POLICY.providers), [...AGENTS]);
 
   for (const provider of PROVIDERS) {
     const configured = DEFAULT_CONFIG[provider.id];

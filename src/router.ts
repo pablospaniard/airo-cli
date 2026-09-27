@@ -1,6 +1,7 @@
 import { extractTaskFeatures } from "./evaluation.js";
 import { learningHints } from "./history.js";
 import { AGENTS, effectiveEffort, routingCapabilityScore } from "./providers.js";
+import { ROUTING_POLICY } from "./routing-policy.js";
 import type {
   Agent,
   Effort,
@@ -46,8 +47,8 @@ function clampComplexity(n: number) {
   return Math.max(1, Math.min(5, n));
 }
 function tierFromComplexity(c: number): ModelTier {
-  if (c <= 2) return "fast";
-  if (c === 3) return "balanced";
+  if (c <= ROUTING_POLICY.tierSuitability.fastMaxComplexity) return "fast";
+  if (c === ROUTING_POLICY.tierSuitability.balancedComplexity) return "balanced";
   return "deep";
 }
 function effortForTier(tier: ModelTier): Effort {
@@ -59,7 +60,11 @@ const MODEL_TIERS: readonly ModelTier[] = ["fast", "balanced", "deep"];
 function tierScore(tier: ModelTier, complexity: number): number {
   const target = tierFromComplexity(complexity);
   const distance = Math.abs(MODEL_TIERS.indexOf(tier) - MODEL_TIERS.indexOf(target));
-  return distance === 0 ? 2 : distance === 1 ? 0 : -1;
+  return distance === 0
+    ? ROUTING_POLICY.tierSuitability.exact
+    : distance === 1
+      ? ROUTING_POLICY.tierSuitability.adjacent
+      : ROUTING_POLICY.tierSuitability.distant;
 }
 
 export function generateRouteCandidates(
@@ -269,9 +274,9 @@ export function routeTask(task: string, config: RouterConfig): RouteResult {
   const compounds = (task.match(/\b(and|also|while|without|across|then|after|before)\b/gi) ?? [])
     .length;
 
-  let complexity = 2;
-  if (words >= 20) complexity += 1;
-  if (words >= 55) complexity += 1;
+  let complexity = ROUTING_POLICY.complexity.base;
+  if (words >= ROUTING_POLICY.complexity.longTaskWords) complexity += 1;
+  if (words >= ROUTING_POLICY.complexity.veryLongTaskWords) complexity += 1;
   for (const [pattern, points, reason] of DEEP_SIGNALS)
     if (pattern.test(task)) {
       complexity += points;
@@ -282,7 +287,7 @@ export function routeTask(task: string, config: RouterConfig): RouteResult {
       complexity -= points;
       modelReasons.push(reason);
     }
-  if (compounds >= 3) complexity += 1;
+  if (compounds >= ROUTING_POLICY.complexity.compoundSignals) complexity += 1;
   complexity = clampComplexity(complexity);
 
   const taskFeatures = extractTaskFeatures(task, complexity);
@@ -291,8 +296,10 @@ export function routeTask(task: string, config: RouterConfig): RouteResult {
     if (capability.points)
       add(reasons, candidate, capability.points, capability.reasons.join(" + "));
   }
-  if (config.policy === "claude-heavy") add(reasons, "claude", 2, "claude-heavy policy");
-  if (config.policy === "codex-heavy") add(reasons, "codex", 2, "codex-heavy policy");
+  for (const candidate of AGENTS) {
+    const bias = ROUTING_POLICY.configuredBiases[config.policy][candidate] ?? 0;
+    if (bias) add(reasons, candidate, bias, `${config.policy} policy`);
+  }
 
   const learned = learningHints(task, config.history);
   const agents = [...AGENTS];
@@ -399,5 +406,6 @@ export function routeTask(task: string, config: RouterConfig): RouteResult {
     matchedRule,
     learningConfidence: learned.confidence,
     expectedUtility: learned.routeUtilities[routeKey],
+    routingPolicyVersion: ROUTING_POLICY.version,
   };
 }

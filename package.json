@@ -46,6 +46,7 @@
     "lint": "oxlint --deny-warnings --tsconfig tsconfig.json src vscode-extension/src",
     "typecheck": "tsc --noEmit && tsc -p vscode-extension/tsconfig.json --noEmit",
     "test": "pnpm run test:coverage",
+    "evaluate:routing-policy": "pnpm run build && node --test dist/test/routing-policy.evaluation.test.js",
     "test:coverage": "pnpm run build && node --test --experimental-test-coverage --test-coverage-exclude=dist/test/** --test-coverage-lines=95 --test-coverage-functions=95 dist/test/*.test.js",
     "start": "node dist/cli.js",
     "validate": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm test",

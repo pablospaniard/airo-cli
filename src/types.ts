@@ -160,6 +160,7 @@ export interface RouteResult {
   matchedRule?: string;
   learningConfidence?: number;
   expectedUtility?: number;
+  routingPolicyVersion: string;
 }
 
 export interface HistoryRecord {
@@ -178,6 +179,8 @@ export interface HistoryRecord {
   model: string;
   effort: Effort;
   complexity: number;
+  /** Shipped cold-start policy used to make this routing decision. */
+  routingPolicyVersion?: string;
   exitCode: number;
   durationMs: number;
   outputExcerpt?: string;

@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { DEFAULT_CONFIG } from "../config.js";
 import { appendHistory } from "../history.js";
+import { ROUTING_POLICY } from "../routing-policy.js";
 import {
   applyRoutePreferences,
   applyRouteOverrides,
@@ -40,6 +41,7 @@ test("routes architecture investigations to Claude with a deep model", () => {
   assert.equal(route.modelTier, "deep");
   assert.equal(route.model, DEFAULT_CONFIG.claude.models.deep.model);
   assert.ok(route.claudeScore > route.codexScore);
+  assert.equal(route.routingPolicyVersion, ROUTING_POLICY.version);
 });
 
 test("routes a small test implementation to Codex with a fast model", () => {
