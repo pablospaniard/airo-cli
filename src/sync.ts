@@ -7,9 +7,9 @@ import { execFileSync } from "node:child_process";
 import {
   DEFAULT_CONFIG,
   loadGlobalConfig,
+  updateGlobalConfig,
   validAgent,
   validPolicy,
-  writeGlobalConfig,
 } from "./config.js";
 import { dataRootDir } from "./paths.js";
 import { feedbackPath, historyPath } from "./history.js";
@@ -38,6 +38,13 @@ interface Credentials {
   accessToken: string;
   refreshToken: string;
   accountKey?: string;
+  // Set right before sending a refresh request, before the network call, and
+  // cleared once that rotation succeeds. If the process crashes or the
+  // response never arrives, the same value survives on disk so a later
+  // retry (even from a new process) can send it again and let the server
+  // recognize this exact attempt, instead of the retry looking identical to
+  // a stolen refresh token being replayed.
+  pendingRefreshRequestId?: string;
 }
 
 type SyncDataKind = "history" | "feedback" | "jev-feedback";
@@ -393,7 +400,10 @@ export function safeSyncSettings(config: RouterConfig): Record<string, unknown> 
   };
 }
 
-function applySafeSettings(config: RouterConfig, value: Record<string, unknown>): RouterConfig {
+export function applySafeSettings(
+  config: RouterConfig,
+  value: Record<string, unknown>,
+): RouterConfig {
   const providers = value.providers as
     | Record<string, { models?: RouterConfig["claude"]["models"]; defaultModel?: string }>
     | undefined;
@@ -408,33 +418,45 @@ function applySafeSettings(config: RouterConfig, value: Record<string, unknown>)
     )
       ? (value.modelRouting as RouterConfig["modelRouting"])
       : config.modelRouting,
+    // safeSyncSettings always writes a *complete* snapshot of these
+    // sections, never a partial diff. So a field missing from a pulled
+    // `value` means another device removed it, not that this device should
+    // keep its old local value for it — merging against local config here
+    // would silently resurrect the removed value and push it right back out
+    // on this device's next sync. Default missing fields from DEFAULT_CONFIG
+    // instead, and only fall back to local config for fields that are never
+    // synced in the first place (below).
     history: {
-      ...config.history,
+      ...DEFAULT_CONFIG.history,
       ...history,
       path: config.history.path,
       enabled: config.history.enabled,
     },
-    orchestration: { ...config.orchestration, ...orchestration },
+    orchestration: { ...DEFAULT_CONFIG.orchestration, ...orchestration },
     rules: Array.isArray(value.rules) ? (value.rules as RouterConfig["rules"]) : config.rules,
     claude: {
       ...config.claude,
       ...providers?.claude,
-      models: providers?.claude?.models ?? config.claude.models,
+      models: providers?.claude?.models ?? DEFAULT_CONFIG.claude.models,
+      defaultModel: providers?.claude?.defaultModel,
     },
     codex: {
       ...config.codex,
       ...providers?.codex,
-      models: providers?.codex?.models ?? config.codex.models,
+      models: providers?.codex?.models ?? DEFAULT_CONFIG.codex.models,
+      defaultModel: providers?.codex?.defaultModel,
     },
     gemini: {
       ...config.gemini,
       ...providers?.gemini,
-      models: providers?.gemini?.models ?? config.gemini.models,
+      models: providers?.gemini?.models ?? DEFAULT_CONFIG.gemini.models,
+      defaultModel: providers?.gemini?.defaultModel,
     },
     copilot: {
       ...config.copilot,
       ...providers?.copilot,
-      models: providers?.copilot?.models ?? config.copilot.models,
+      models: providers?.copilot?.models ?? DEFAULT_CONFIG.copilot.models,
+      defaultModel: providers?.copilot?.defaultModel,
     },
   };
 }
@@ -506,16 +528,28 @@ async function authenticated<T>(
         if (current.accessToken !== attemptedAccessToken) {
           return current;
         }
+        // Reuse the same request ID across a retry of this exact rotation
+        // (see the Credentials.pendingRefreshRequestId comment); only a
+        // genuinely new rotation attempt gets a fresh one. Persist it before
+        // the network call so it survives a crash while the request is in
+        // flight.
+        const rotationRequestId = current.pendingRefreshRequestId ?? crypto.randomUUID();
+        if (current.pendingRefreshRequestId !== rotationRequestId)
+          store.save({ ...current, pendingRefreshRequestId: rotationRequestId });
         const refreshed = await api<{ accessToken: string; refreshToken: string }>(
           state,
           "/v1/auth/refresh",
           {
             method: "POST",
-            body: JSON.stringify({ refreshToken: current.refreshToken }),
+            body: JSON.stringify({ refreshToken: current.refreshToken, rotationRequestId }),
           },
         ).catch(() => undefined);
         if (!refreshed) throw error;
-        credentials = { ...current, ...refreshed };
+        credentials = {
+          ...current,
+          ...refreshed,
+          pendingRefreshRequestId: undefined,
+        };
         store.save(credentials);
         return credentials;
       },
@@ -1114,7 +1148,10 @@ async function syncNowUnlocked(
 
   // Repository overrides affect the current run and its local history, but
   // account-wide cloud settings always originate from the global config.
-  const localSettings = safeSyncSettings(globalConfig);
+  // Record sync can involve several network round trips. Reload immediately
+  // before reconciling settings so edits made during that earlier work are
+  // considered local changes instead of being silently replaced or omitted.
+  const localSettings = safeSyncSettings(loadGlobalConfig().config);
   const localDigest = digest(localSettings);
   const remote = await authenticated<{
     settings: Array<{ key: string; revision: number; envelope: SyncEnvelope }>;
@@ -1158,7 +1195,16 @@ async function syncNowUnlocked(
       state.settingsDigest = localDigest;
     } else {
       if (localDigest !== remoteDigest)
-        writeGlobalConfig(applySafeSettings(globalConfig, remoteSettings));
+        updateGlobalConfig((current) => {
+          // The settings GET above is another race window. Refuse to apply
+          // the remote snapshot if a local edit landed after the fresh read;
+          // the next sync can then reconcile it normally without data loss.
+          if (digest(safeSyncSettings(current)) !== localDigest)
+            throw new Error(
+              "Routing settings changed locally while sync was in progress; no settings were overwritten.",
+            );
+          return applySafeSettings(current, remoteSettings);
+        });
       state.settingsRevision = routing.revision;
       state.settingsDigest = remoteDigest;
     }

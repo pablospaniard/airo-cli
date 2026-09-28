@@ -28,6 +28,8 @@ interface SessionRow {
   device_id: string;
   expires_at: number;
   revoked_at: number | null;
+  rotation_id: string | null;
+  request_id_hash: string | null;
   device_revoked_at: number | null;
 }
 
@@ -237,53 +239,48 @@ async function issueTokens(
   return { accessToken, refreshToken, expiresIn: ACCESS_TTL_SECONDS };
 }
 
-async function refreshSession(request: Request, env: Env): Promise<Response> {
-  const body = object(await readJson(request));
-  if (
-    !body ||
-    typeof body.refreshToken !== "string" ||
-    !/^[a-zA-Z0-9_-]{43}$/.test(body.refreshToken)
+const SESSION_ROW_COLUMNS = `s.id, s.family_id, s.user_id, s.device_id, s.expires_at, s.revoked_at,
+            s.rotation_id, s.request_id_hash, d.revoked_at AS device_revoked_at`;
+
+async function revokeFamily(env: Env, familyId: string): Promise<Response> {
+  await env.DB.prepare(
+    "UPDATE sessions SET revoked_at = ? WHERE family_id = ? AND revoked_at IS NULL",
   )
-    return error(400, "invalid_request", "refreshToken is required.");
-  const row = await env.DB.prepare(
-    `SELECT s.id, s.family_id, s.user_id, s.device_id, s.expires_at, s.revoked_at,
-            d.revoked_at AS device_revoked_at
-       FROM sessions s
-       JOIN devices d ON d.user_id = s.user_id AND d.id = s.device_id
-      WHERE s.token_hash = ? AND s.kind = 'refresh'`,
-  )
-    .bind(await sha256(body.refreshToken))
-    .first<SessionRow>();
-  if (row?.revoked_at) {
-    await env.DB.prepare(
-      "UPDATE sessions SET revoked_at = ? WHERE family_id = ? AND revoked_at IS NULL",
-    )
-      .bind(now(), row.family_id)
-      .run();
-    return error(
-      401,
-      "refresh_reused",
-      "Refresh token reuse detected; device sessions were revoked.",
-    );
-  }
-  if (!row || row.device_revoked_at || row.expires_at <= now())
-    return error(401, "invalid_refresh", "Refresh token expired or revoked.");
-  const limited = await rateLimit(env.AUTH_RATE_LIMITER, `refresh:${row.user_id}`);
-  if (limited) return limited;
+    .bind(now(), familyId)
+    .run();
+  return error(
+    401,
+    "refresh_reused",
+    "Refresh token reuse detected; device sessions were revoked.",
+  );
+}
+
+// Rotates a still-valid refresh session into a fresh access/refresh pair.
+// `requestIdHash` (from the client's rotationRequestId, hashed) is recorded
+// on the row being revoked so a later retry of this exact attempt can be
+// recognized — see the idempotent-retry handling in refreshSession. The new
+// rows also record `rotated_from` (the row they replace) so that retry can
+// find them; this is separate from `rotation_id`, which stays unique per row
+// and only gates the WHERE EXISTS race guard below.
+async function rotateSession(
+  env: Env,
+  row: SessionRow,
+  requestIdHash: string | null,
+): Promise<Response> {
   const rotationId = crypto.randomUUID();
   const accessToken = randomToken();
   const refreshToken = randomToken();
   const createdAt = now();
   const results = await env.DB.batch([
     env.DB.prepare(
-      "UPDATE sessions SET revoked_at = ?, rotation_id = ? WHERE id = ? AND revoked_at IS NULL",
-    ).bind(createdAt, rotationId, row.id),
+      "UPDATE sessions SET revoked_at = ?, rotation_id = ?, request_id_hash = ? WHERE id = ? AND revoked_at IS NULL",
+    ).bind(createdAt, rotationId, requestIdHash, row.id),
     env.DB.prepare(
       "UPDATE sessions SET revoked_at = ? WHERE family_id = ? AND id != ? AND revoked_at IS NULL",
     ).bind(createdAt, row.family_id, row.id),
     env.DB.prepare(
-      `INSERT INTO sessions(id, family_id, user_id, device_id, token_hash, kind, expires_at, created_at)
-       SELECT ?, ?, ?, ?, ?, 'access', ?, ?
+      `INSERT INTO sessions(id, family_id, user_id, device_id, token_hash, kind, expires_at, created_at, rotated_from)
+       SELECT ?, ?, ?, ?, ?, 'access', ?, ?, ?
         WHERE EXISTS (SELECT 1 FROM sessions WHERE id = ? AND rotation_id = ?)`,
     ).bind(
       crypto.randomUUID(),
@@ -294,11 +291,12 @@ async function refreshSession(request: Request, env: Env): Promise<Response> {
       createdAt + ACCESS_TTL_SECONDS,
       createdAt,
       row.id,
+      row.id,
       rotationId,
     ),
     env.DB.prepare(
-      `INSERT INTO sessions(id, family_id, user_id, device_id, token_hash, kind, expires_at, created_at)
-       SELECT ?, ?, ?, ?, ?, 'refresh', ?, ?
+      `INSERT INTO sessions(id, family_id, user_id, device_id, token_hash, kind, expires_at, created_at, rotated_from)
+       SELECT ?, ?, ?, ?, ?, 'refresh', ?, ?, ?
         WHERE EXISTS (SELECT 1 FROM sessions WHERE id = ? AND rotation_id = ?)`,
     ).bind(
       crypto.randomUUID(),
@@ -309,22 +307,71 @@ async function refreshSession(request: Request, env: Env): Promise<Response> {
       createdAt + REFRESH_TTL_SECONDS,
       createdAt,
       row.id,
+      row.id,
       rotationId,
     ),
   ]);
-  if (results[0].meta.changes !== 1) {
-    await env.DB.prepare(
-      "UPDATE sessions SET revoked_at = ? WHERE family_id = ? AND revoked_at IS NULL",
-    )
-      .bind(now(), row.family_id)
-      .run();
-    return error(
-      401,
-      "refresh_reused",
-      "Refresh token reuse detected; device sessions were revoked.",
-    );
-  }
+  if (results[0].meta.changes !== 1) return revokeFamily(env, row.family_id);
   return json({ accessToken, refreshToken, expiresIn: ACCESS_TTL_SECONDS });
+}
+
+async function refreshSession(request: Request, env: Env): Promise<Response> {
+  const body = object(await readJson(request));
+  if (
+    !body ||
+    typeof body.refreshToken !== "string" ||
+    !/^[a-zA-Z0-9_-]{43}$/.test(body.refreshToken)
+  )
+    return error(400, "invalid_request", "refreshToken is required.");
+  // An opaque, client-generated marker for one logical rotation attempt (not
+  // a secret): the client persists it to disk before sending this request
+  // and resends the SAME value if it retries because it never saw the
+  // response. It is never required and never accepted on its own — it only
+  // matters when it matches what a *specific* prior rotation recorded below.
+  const requestIdHash =
+    typeof body.rotationRequestId === "string" &&
+    body.rotationRequestId.length >= 16 &&
+    body.rotationRequestId.length <= 128
+      ? await sha256(body.rotationRequestId)
+      : null;
+  const row = await env.DB.prepare(
+    `SELECT ${SESSION_ROW_COLUMNS}
+       FROM sessions s
+       JOIN devices d ON d.user_id = s.user_id AND d.id = s.device_id
+      WHERE s.token_hash = ? AND s.kind = 'refresh'`,
+  )
+    .bind(await sha256(body.refreshToken))
+    .first<SessionRow>();
+  if (row?.revoked_at) {
+    // request_id_hash is only ever set by rotateSession, on the exact row a
+    // successful rotation consumed — never on a row revoked as a side
+    // effect of reuse detected elsewhere in its family. A hash match here
+    // means this is the same client retrying the same attempt (nothing else
+    // could produce it), never an independent, merely-concurrent use of the
+    // same refresh token, so it is safe to continue rotating the successor
+    // instead of revoking the family.
+    if (row.rotation_id && requestIdHash && row.request_id_hash === requestIdHash) {
+      const successor = await env.DB.prepare(
+        `SELECT ${SESSION_ROW_COLUMNS}
+           FROM sessions s
+           JOIN devices d ON d.user_id = s.user_id AND d.id = s.device_id
+          WHERE s.family_id = ? AND s.kind = 'refresh' AND s.rotated_from = ? AND s.revoked_at IS NULL`,
+      )
+        .bind(row.family_id, row.id)
+        .first<SessionRow>();
+      if (successor && !successor.device_revoked_at && successor.expires_at > now()) {
+        const limited = await rateLimit(env.AUTH_RATE_LIMITER, `refresh:${successor.user_id}`);
+        if (limited) return limited;
+        return rotateSession(env, successor, requestIdHash);
+      }
+    }
+    return revokeFamily(env, row.family_id);
+  }
+  if (!row || row.device_revoked_at || row.expires_at <= now())
+    return error(401, "invalid_refresh", "Refresh token expired or revoked.");
+  const limited = await rateLimit(env.AUTH_RATE_LIMITER, `refresh:${row.user_id}`);
+  if (limited) return limited;
+  return rotateSession(env, row, requestIdHash);
 }
 
 async function exchangeGithubToken(request: Request, env: Env): Promise<Response> {

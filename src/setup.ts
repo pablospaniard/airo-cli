@@ -1,6 +1,6 @@
 import readline, { type Interface } from "node:readline";
 import { discoverCatalogs, resolveDynamicModels } from "./catalog.js";
-import { loadConfig, writeGlobalConfig } from "./config.js";
+import { globalConfigPath, loadConfig, updateGlobalConfig } from "./config.js";
 import { AGENTS } from "./providers.js";
 import { agentColor, divider, promptLabel, statusIcon, ui } from "./ui.js";
 
@@ -79,7 +79,14 @@ export async function runSetup(): Promise<string> {
       else if (["no", "n"].includes(networkAnswer)) config.permissions.networkAccess = false;
     }
 
-    const file = writeGlobalConfig(config);
+    // Re-apply just the choices made in this session onto whatever the
+    // global config currently holds, instead of writing back the snapshot
+    // taken at the start of this (interactive, potentially long-running)
+    // session — that would silently discard any edit made elsewhere while
+    // the user was answering prompts here.
+    const permissions = config.permissions;
+    updateGlobalConfig((current) => ({ ...current, permissions }));
+    const file = globalConfigPath();
     console.log("");
     console.log(divider("Setup complete"));
     console.log(`${statusIcon("ok")} ${ui.green("Saved")} ${ui.cyan(file)}`);

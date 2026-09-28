@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type { Agent, Policy, RouterConfig } from "./types.js";
+import { withFileLock } from "./file-lock.js";
+import { dataRootDir } from "./paths.js";
 
 export const CONFIG_NOTE =
   "AIRO discovers provider models automatically. Set modelRouting.mode to manual to pin the provider tier mappings below.";
@@ -171,4 +173,22 @@ export function writeGlobalConfig(config: RouterConfig): string {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify({ _comment: CONFIG_NOTE, ...config }, null, 2) + "\n");
   return file;
+}
+
+/**
+ * Reads the current global config, lets `mutate` compute the next value from
+ * that fresh read, and writes the result — all under one lock. A plain
+ * load-then-later-write (reading at the start of a long operation and
+ * writing at the end) can silently discard an edit made in between, such as
+ * a concurrent `airo setup` run or sync applying remote settings. Every
+ * caller that reads the global config only to write back a derived value
+ * should go through this instead of pairing loadGlobalConfig/writeGlobalConfig
+ * directly.
+ */
+export function updateGlobalConfig(mutate: (config: RouterConfig) => RouterConfig): RouterConfig {
+  return withFileLock(path.join(dataRootDir(), "global-config.lock"), () => {
+    const next = mutate(loadGlobalConfig().config);
+    writeGlobalConfig(next);
+    return next;
+  });
 }

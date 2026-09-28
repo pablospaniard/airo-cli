@@ -8,6 +8,7 @@ import test from "node:test";
 import { DEFAULT_CONFIG, loadGlobalConfig, writeGlobalConfig } from "../config.js";
 import { appendHistory, setScopedFeedback } from "../history.js";
 import {
+  applySafeSettings,
   credentialStore,
   enableSync,
   exportCloudData,
@@ -53,6 +54,33 @@ test("sync settings exclude secrets and machine-specific configuration", () => {
     (settings.providers as { codex: { models: unknown } }).codex.models,
     config.codex.models,
   );
+});
+
+test("applying pulled settings does not resurrect a field another device removed", () => {
+  const local = structuredClone(DEFAULT_CONFIG);
+  local.codex.defaultModel = "gpt-5.6-terra";
+
+  // The remote snapshot has no `defaultModel` for codex at all — as if
+  // another device cleared it and safeSyncSettings dropped the now-undefined
+  // key when it serialized to JSON for the PUT body.
+  const remote = safeSyncSettings(DEFAULT_CONFIG);
+  delete (remote.providers as { codex: { defaultModel?: string } }).codex.defaultModel;
+
+  const applied = applySafeSettings(local, remote);
+  assert.equal(applied.codex.defaultModel, undefined);
+});
+
+test("applying pulled settings keeps machine-local fields sync never carries", () => {
+  const local = structuredClone(DEFAULT_CONFIG);
+  local.codex.command = "/opt/homebrew/bin/codex";
+  local.history.path = "/private/history.jsonl";
+  local.history.enabled = false;
+
+  const remote = safeSyncSettings(DEFAULT_CONFIG);
+  const applied = applySafeSettings(local, remote);
+  assert.equal(applied.codex.command, "/opt/homebrew/bin/codex");
+  assert.equal(applied.history.path, "/private/history.jsonl");
+  assert.equal(applied.history.enabled, false);
 });
 
 test("credential-file fallback requires an explicit choice and restrictive permissions", () => {

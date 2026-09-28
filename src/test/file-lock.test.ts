@@ -33,6 +33,31 @@ test("reclaims locks from a prior boot even when the PID is alive", () => {
   }
 });
 
+test("reclaims a lock whose owner PID was reused by an unrelated process", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "airo-lock-pid-reuse-"));
+  const lock = path.join(directory, "history.lock");
+  try {
+    // The recorded PID is our own (very much alive), but its start-time
+    // signature does not match our real one — as if the OS had reused this
+    // PID for an unrelated process since the lock was written. A liveness
+    // check based on the PID alone would treat this lock as held forever.
+    fs.writeFileSync(
+      lock,
+      JSON.stringify({
+        pid: process.pid,
+        token: "stale-owner-token",
+        startedAt: "not-this-processs-actual-start-signature",
+      }),
+    );
+    assert.equal(
+      withFileLock(lock, () => "acquired", { timeoutMs: 5000 }),
+      "acquired",
+    );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("reclaims incomplete and legacy locks before the acquisition timeout", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "airo-lock-stale-"));
   try {

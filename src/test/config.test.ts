@@ -9,6 +9,7 @@ import {
   globalConfigPath,
   loadConfig,
   loadGlobalConfig,
+  updateGlobalConfig,
   writeGlobalConfig,
   writeProjectConfig,
 } from "../config.js";
@@ -84,6 +85,33 @@ test("writes project and global configuration safely", () => {
     assert.equal(JSON.parse(fs.readFileSync(global, "utf8")).modelRouting.mode, "dynamic");
     assert.equal(loadGlobalConfig().path, global);
     assert.equal(loadGlobalConfig().config.modelRouting.mode, "dynamic");
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("updateGlobalConfig mutates the config currently on disk, not a stale snapshot", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-config-update-"));
+  const previousHome = process.env.HOME;
+  process.env.HOME = dir;
+  try {
+    writeGlobalConfig({ ...structuredClone(DEFAULT_CONFIG), policy: "codex-heavy" });
+    // Simulate a concurrent editor (e.g. `airo setup`) changing an unrelated
+    // field on disk after some other caller last read the config into
+    // memory. A mutate callback based on that stale in-memory copy must not
+    // be able to clobber this change: updateGlobalConfig always reads fresh.
+    writeGlobalConfig({
+      ...loadGlobalConfig().config,
+      permissions: { mode: "fullAccess", networkAccess: false },
+    });
+
+    const result = updateGlobalConfig((current) => ({ ...current, defaultAgent: "gemini" }));
+    assert.equal(result.permissions.mode, "fullAccess");
+    assert.equal(result.defaultAgent, "gemini");
+    assert.equal(loadGlobalConfig().config.permissions.mode, "fullAccess");
+    assert.equal(loadGlobalConfig().config.defaultAgent, "gemini");
   } finally {
     if (previousHome === undefined) delete process.env.HOME;
     else process.env.HOME = previousHome;
