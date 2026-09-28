@@ -423,6 +423,76 @@ describe("sync Worker", () => {
     expect((await refresh(retryTokens.refreshToken)).status).toBe(200);
   });
 
+  it("keeps a session alive when two truly concurrent requests share the same rotation request ID", async () => {
+    // The client's own request timed out and it retried while the original
+    // was still being processed server-side — both requests race the same
+    // refreshToken and rotationRequestId at once. The loser must not revoke
+    // the winner's brand-new tokens just because it lost that race.
+    const timestamp = Math.floor(Date.now() / 1000);
+    const refreshToken = "r".repeat(43);
+    const rotationRequestId = "concurrent-".padEnd(20, "x");
+    await env.DB.prepare(
+      "INSERT INTO sessions(id, family_id, user_id, device_id, token_hash, kind, expires_at, created_at) VALUES(?, ?, ?, ?, ?, 'refresh', ?, ?)",
+    )
+      .bind(
+        "refresh-race",
+        "family-race",
+        "user-test",
+        "device-test",
+        await hash(refreshToken),
+        timestamp + 3600,
+        timestamp,
+      )
+      .run();
+
+    const responses = await Promise.all([
+      refresh(refreshToken, rotationRequestId),
+      refresh(refreshToken, rotationRequestId),
+    ]);
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    const [firstTokens, secondTokens] = await Promise.all(
+      responses.map((response) => response.json<{ accessToken: string; refreshToken: string }>()),
+    );
+    // Whichever pair is the live tip must still work; the account must not
+    // have been signed out of every device by the race.
+    const results = await Promise.all([
+      statusFor(firstTokens.accessToken),
+      statusFor(secondTokens.accessToken),
+    ]);
+    expect(results.map((response) => response.status).sort()).toEqual([200, 401]);
+  });
+
+  it("recovers a chain of several lost responses for the same rotation request ID", async () => {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const refreshToken = "r".repeat(43);
+    const rotationRequestId = "multi-hop-".padEnd(20, "x");
+    await env.DB.prepare(
+      "INSERT INTO sessions(id, family_id, user_id, device_id, token_hash, kind, expires_at, created_at) VALUES(?, ?, ?, ?, ?, 'refresh', ?, ?)",
+    )
+      .bind(
+        "refresh-chain",
+        "family-chain",
+        "user-test",
+        "device-test",
+        await hash(refreshToken),
+        timestamp + 3600,
+        timestamp,
+      )
+      .run();
+
+    // Three retries in a row with the same original (never-updated) token
+    // and request ID, as if every single response were lost — not just the
+    // first one.
+    let last: { accessToken: string; refreshToken: string } | undefined;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const response = await refresh(refreshToken, rotationRequestId);
+      expect(response.status).toBe(200);
+      last = await response.json<{ accessToken: string; refreshToken: string }>();
+    }
+    expect((await statusFor(last!.accessToken)).status).toBe(200);
+    expect((await refresh(last!.refreshToken)).status).toBe(200);
+  });
+
   it("revokes the family when a rotated refresh token is reused without a matching rotation request ID", async () => {
     const timestamp = Math.floor(Date.now() / 1000);
     const refreshToken = "r".repeat(43);

@@ -255,13 +255,75 @@ async function revokeFamily(env: Env, familyId: string): Promise<Response> {
   );
 }
 
+// A rotation is recognized as the continuation of an already-consumed row's
+// retry chain only within this window of that row's revocation, and only a
+// bounded number of hops past it. Idempotent-retry recognition requires
+// knowing the exact per-attempt requestIdHash, which is never sent back to
+// the client and only ever appears in the one request that carried it — but
+// bounding it in time and depth too keeps a captured (request, id) pair from
+// being usable to ride an old, abandoned rotation chain into whatever live
+// session it may have grown into long after the fact.
+const IDEMPOTENT_RETRY_WINDOW_SECONDS = 60;
+const IDEMPOTENT_RETRY_MAX_HOPS = 5;
+
+// Given a row that was consumed by a rotation carrying `requestIdHash`,
+// finds the live tip of its retry chain (if any) and continues rotating it.
+// Used both when a client retries and presents an already-revoked token
+// directly, and when rotateSession itself loses a race to rotate a row —
+// which looks identical from here: either way, we have a row that is (now)
+// revoked, and want to know whether the same logical attempt already has a
+// live successor we should hand back instead of tearing the family down.
+async function continueIdempotentRotation(
+  env: Env,
+  row: SessionRow,
+  requestIdHash: string | null,
+): Promise<Response | undefined> {
+  // rotation_id is only ever set by rotateSession, on the exact row a
+  // successful rotation consumed — never on a row revoked as a side effect
+  // of reuse detected elsewhere in its family. A request_id_hash match here
+  // means this is the same client retrying the same attempt (nothing else
+  // could produce it), never an independent, merely-concurrent use of the
+  // same refresh token.
+  if (
+    !row.rotation_id ||
+    !requestIdHash ||
+    row.request_id_hash !== requestIdHash ||
+    !row.revoked_at ||
+    now() - row.revoked_at > IDEMPOTENT_RETRY_WINDOW_SECONDS
+  )
+    return undefined;
+  let parentId = row.id;
+  for (let hop = 0; hop < IDEMPOTENT_RETRY_MAX_HOPS; hop += 1) {
+    // rotated_from links a rotation's successor back to the row it directly
+    // replaced. A retry can find the live tip of a chain more than one hop
+    // deep — e.g. the retry's own response is also lost — by walking it.
+    const next = await env.DB.prepare(
+      `SELECT ${SESSION_ROW_COLUMNS}
+         FROM sessions s
+         JOIN devices d ON d.user_id = s.user_id AND d.id = s.device_id
+        WHERE s.family_id = ? AND s.kind = 'refresh' AND s.rotated_from = ?`,
+    )
+      .bind(row.family_id, parentId)
+      .first<SessionRow>();
+    if (!next) return undefined;
+    if (!next.revoked_at) {
+      if (next.device_revoked_at || next.expires_at <= now()) return undefined;
+      const limited = await rateLimit(env.AUTH_RATE_LIMITER, `refresh:${next.user_id}`);
+      if (limited) return limited;
+      return rotateSession(env, next, requestIdHash);
+    }
+    parentId = next.id;
+  }
+  return undefined;
+}
+
 // Rotates a still-valid refresh session into a fresh access/refresh pair.
 // `requestIdHash` (from the client's rotationRequestId, hashed) is recorded
 // on the row being revoked so a later retry of this exact attempt can be
-// recognized — see the idempotent-retry handling in refreshSession. The new
-// rows also record `rotated_from` (the row they replace) so that retry can
-// find them; this is separate from `rotation_id`, which stays unique per row
-// and only gates the WHERE EXISTS race guard below.
+// recognized — see continueIdempotentRotation. The new rows also record
+// `rotated_from` (the row they replace) so that retry can find them; this is
+// separate from `rotation_id`, which stays unique per row and only gates the
+// WHERE EXISTS race guard below.
 async function rotateSession(
   env: Env,
   row: SessionRow,
@@ -311,7 +373,24 @@ async function rotateSession(
       rotationId,
     ),
   ]);
-  if (results[0].meta.changes !== 1) return revokeFamily(env, row.family_id);
+  if (results[0].meta.changes !== 1) {
+    // We lost a race to rotate this exact row. Before concluding this is
+    // reuse, re-read it and check whether whoever won recorded the same
+    // requestIdHash we were carrying: if so, this was a concurrent retry of
+    // the identical logical attempt, not an independent replay, and we
+    // should continue rotating its successor rather than revoke the family
+    // out from under the request that just won.
+    const current = await env.DB.prepare(
+      `SELECT ${SESSION_ROW_COLUMNS}
+         FROM sessions s
+         JOIN devices d ON d.user_id = s.user_id AND d.id = s.device_id
+        WHERE s.id = ?`,
+    )
+      .bind(row.id)
+      .first<SessionRow>();
+    const retried = current && (await continueIdempotentRotation(env, current, requestIdHash));
+    return retried ?? revokeFamily(env, row.family_id);
+  }
   return json({ accessToken, refreshToken, expiresIn: ACCESS_TTL_SECONDS });
 }
 
@@ -343,29 +422,8 @@ async function refreshSession(request: Request, env: Env): Promise<Response> {
     .bind(await sha256(body.refreshToken))
     .first<SessionRow>();
   if (row?.revoked_at) {
-    // request_id_hash is only ever set by rotateSession, on the exact row a
-    // successful rotation consumed — never on a row revoked as a side
-    // effect of reuse detected elsewhere in its family. A hash match here
-    // means this is the same client retrying the same attempt (nothing else
-    // could produce it), never an independent, merely-concurrent use of the
-    // same refresh token, so it is safe to continue rotating the successor
-    // instead of revoking the family.
-    if (row.rotation_id && requestIdHash && row.request_id_hash === requestIdHash) {
-      const successor = await env.DB.prepare(
-        `SELECT ${SESSION_ROW_COLUMNS}
-           FROM sessions s
-           JOIN devices d ON d.user_id = s.user_id AND d.id = s.device_id
-          WHERE s.family_id = ? AND s.kind = 'refresh' AND s.rotated_from = ? AND s.revoked_at IS NULL`,
-      )
-        .bind(row.family_id, row.id)
-        .first<SessionRow>();
-      if (successor && !successor.device_revoked_at && successor.expires_at > now()) {
-        const limited = await rateLimit(env.AUTH_RATE_LIMITER, `refresh:${successor.user_id}`);
-        if (limited) return limited;
-        return rotateSession(env, successor, requestIdHash);
-      }
-    }
-    return revokeFamily(env, row.family_id);
+    const retried = await continueIdempotentRotation(env, row, requestIdHash);
+    return retried ?? revokeFamily(env, row.family_id);
   }
   if (!row || row.device_revoked_at || row.expires_at <= now())
     return error(401, "invalid_refresh", "Refresh token expired or revoked.");

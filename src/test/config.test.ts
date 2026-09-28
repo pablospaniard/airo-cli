@@ -119,6 +119,33 @@ test("updateGlobalConfig mutates the config currently on disk, not a stale snaps
   }
 });
 
+test("updateGlobalConfig aborts instead of overwriting a save that lands mid-update", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-config-update-race-"));
+  const previousHome = process.env.HOME;
+  process.env.HOME = dir;
+  try {
+    writeGlobalConfig({ ...structuredClone(DEFAULT_CONFIG), policy: "codex-heavy" });
+    assert.throws(
+      () =>
+        updateGlobalConfig((current) => {
+          // Our lock only serializes cooperating callers — an external
+          // editor's direct save (simulated here) never takes it, so it can
+          // land after `mutate` was handed the config but before the write.
+          // updateGlobalConfig must notice and refuse to clobber it.
+          writeGlobalConfig({ ...current, policy: "claude-heavy" });
+          return { ...current, defaultAgent: "gemini" };
+        }),
+      /changed on disk/,
+    );
+    assert.equal(loadGlobalConfig().config.policy, "claude-heavy");
+    assert.equal(loadGlobalConfig().config.defaultAgent, "codex");
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("loads account-wide configuration without repository overrides", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-global-config-"));
   const previousHome = process.env.HOME;

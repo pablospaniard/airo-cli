@@ -184,10 +184,26 @@ export function writeGlobalConfig(config: RouterConfig): string {
  * caller that reads the global config only to write back a derived value
  * should go through this instead of pairing loadGlobalConfig/writeGlobalConfig
  * directly.
+ *
+ * The lock only serializes callers that go through it — it cannot make a
+ * text editor's direct save wait, since the editor never takes it. To avoid
+ * silently discarding such a save anyway, the raw file is re-read immediately
+ * before writing and compared against what `mutate` was given; a change
+ * aborts the update instead of overwriting it. That still leaves a short,
+ * unavoidable window between that final check and the write itself — no
+ * advisory lock can bind a writer that never asked for it — but narrows it
+ * to the minimum this scheme can offer.
  */
 export function updateGlobalConfig(mutate: (config: RouterConfig) => RouterConfig): RouterConfig {
   return withFileLock(path.join(dataRootDir(), "global-config.lock"), () => {
+    const file = globalConfigPath();
+    const readRaw = () => (fs.existsSync(file) ? fs.readFileSync(file, "utf8") : undefined);
+    const before = readRaw();
     const next = mutate(loadGlobalConfig().config);
+    if (readRaw() !== before)
+      throw new Error(
+        `${file} changed on disk while it was being updated; no changes were written.`,
+      );
     writeGlobalConfig(next);
     return next;
   });
