@@ -40,6 +40,22 @@ function currentBootId(): string {
       if (seconds) return `darwin:${seconds}`;
     } catch {}
   }
+  if (process.platform === "win32") {
+    try {
+      const value = execFileSync(
+        "powershell.exe",
+        [
+          "-NoLogo",
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          "[DateTimeOffset]::new((Get-CimInstance Win32_OperatingSystem).LastBootUpTime).ToUnixTimeSeconds()",
+        ],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+      ).trim();
+      if (/^\d+$/.test(value)) return `windows:${value}`;
+    } catch {}
+  }
   try {
     return `uptime:${Math.round((Date.now() - os.uptime() * 1000) / 1000)}`;
   } catch {
@@ -54,13 +70,25 @@ const BOOT_ID = currentBootId();
 
 export function sameBootIdentity(left: string, right: string): boolean {
   if (left === right) return true;
-  const parseFallback = (value: string) =>
+  // Approximate/unknown identities cannot safely prove that a live PID is
+  // from an earlier boot. Prefer waiting over deleting a live owner's lock.
+  if (left === "unknown" || right === "unknown") return true;
+  const approximate = (value: string) =>
     value.startsWith("uptime:") ? Number(value.slice("uptime:".length)) : Number.NaN;
-  const leftTime = parseFallback(left);
-  const rightTime = parseFallback(right);
-  return (
-    Number.isFinite(leftTime) && Number.isFinite(rightTime) && Math.abs(leftTime - rightTime) <= 300
-  );
+  const stableEpoch = (value: string) => {
+    const match = /^(?:darwin|windows):(\d+)$/.exec(value);
+    return match ? Number(match[1]) : Number.NaN;
+  };
+  const leftApproximate = approximate(left);
+  const rightApproximate = approximate(right);
+  if (Number.isFinite(leftApproximate) && Number.isFinite(rightApproximate)) return true;
+  if (Number.isFinite(leftApproximate) !== Number.isFinite(rightApproximate)) {
+    const leftEpoch = Number.isFinite(leftApproximate) ? leftApproximate : stableEpoch(left);
+    const rightEpoch = Number.isFinite(rightApproximate) ? rightApproximate : stableEpoch(right);
+    if (Number.isFinite(leftEpoch) && Number.isFinite(rightEpoch))
+      return Math.abs(leftEpoch - rightEpoch) <= 300;
+  }
+  return false;
 }
 
 function readOwner(file: string): LockOwner | undefined {

@@ -53,6 +53,21 @@ test("loads and deeply merges project configuration", () => {
   }
 });
 
+test("normalizes unknown routing policy and agent values", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-config-invalid-routing-"));
+  try {
+    fs.writeFileSync(
+      path.join(dir, ".airo.json"),
+      JSON.stringify({ policy: "gemini-heavy", defaultAgent: "unknown-provider" }),
+    );
+    const loaded = loadConfig(dir).config;
+    assert.equal(loaded.policy, DEFAULT_CONFIG.policy);
+    assert.equal(loaded.defaultAgent, DEFAULT_CONFIG.defaultAgent);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("writes project and global configuration safely", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-config-write-"));
   const previousHome = process.env.HOME;

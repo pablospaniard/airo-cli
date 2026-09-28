@@ -117,6 +117,37 @@ test("upgrades legacy records during export and rejects conflicting immutable ID
   }
 });
 
+test("re-import merges newer mutable history evidence", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-history-update-"));
+  const source = historyConfig(path.join(dir, "source", "history.jsonl"));
+  const destination = historyConfig(path.join(dir, "destination", "history.jsonl"));
+  const archive = path.join(dir, "portable.airo");
+  const project = path.join(dir, "project");
+  fs.mkdirSync(project);
+  try {
+    const initial = { ...record(project), updatedAt: "2026-01-02T00:00:00.000Z" };
+    appendHistory(source, initial);
+    exportLearningArchive(source, archive, PASSPHRASE);
+    importLearningArchive(destination, archive, PASSPHRASE);
+
+    const updated = {
+      ...readHistory(source)[0],
+      updatedAt: "2026-01-03T00:00:00.000Z",
+      feedback: "good" as const,
+      feedbackNote: "verified after import",
+    };
+    fs.writeFileSync(source.path!, `${JSON.stringify(updated)}\n`);
+    exportLearningArchive(source, archive, PASSPHRASE, { overwrite: true });
+    const repeated = importLearningArchive(destination, archive, PASSPHRASE);
+
+    assert.deepEqual(repeated.history, { imported: 1, skipped: 0, total: 1 });
+    assert.equal(readHistory(destination)[0].feedback, "good");
+    assert.equal(readHistory(destination)[0].feedbackNote, "verified after import");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("import holds the evidence locks while taking its merge snapshot", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-history-import-lock-"));
   const source = historyConfig(path.join(dir, "source", "history.jsonl"));

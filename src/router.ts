@@ -297,8 +297,9 @@ export function routeTask(task: string, config: RouterConfig): RouteResult {
     if (capability.points)
       add(reasons, candidate, capability.points, capability.reasons.join(" + "));
   }
+  const configuredBiases = ROUTING_POLICY.configuredBiases[config.policy] ?? {};
   for (const candidate of AGENTS) {
-    const bias = ROUTING_POLICY.configuredBiases[config.policy][candidate] ?? 0;
+    const bias = configuredBiases[candidate] ?? 0;
     if (bias) add(reasons, candidate, bias, `${config.policy} policy`);
   }
 

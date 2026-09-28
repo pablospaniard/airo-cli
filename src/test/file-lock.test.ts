@@ -8,7 +8,10 @@ import { sameBootIdentity, withFileLock, withFileLockAsync, withFileLocks } from
 test("treats nearby uptime estimates as the same boot", () => {
   assert.equal(sameBootIdentity("uptime:1000", "uptime:1001"), true);
   assert.equal(sameBootIdentity("uptime:1000", "uptime:1300"), true);
-  assert.equal(sameBootIdentity("uptime:1000", "uptime:1301"), false);
+  assert.equal(sameBootIdentity("uptime:1000", "uptime:1301"), true);
+  assert.equal(sameBootIdentity("unknown", "uptime:1301"), true);
+  assert.equal(sameBootIdentity("windows:1000", "uptime:1300"), true);
+  assert.equal(sameBootIdentity("windows:1000", "uptime:1301"), false);
   assert.equal(sameBootIdentity("darwin:1000", "darwin:1001"), false);
 });
 

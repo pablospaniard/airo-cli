@@ -180,6 +180,8 @@ export interface HistoryRecord {
   sessionId?: string;
   parentRunId?: string;
   timestamp: string;
+  /** Timestamp of a post-run mutation such as delayed evaluation or legacy inline feedback. */
+  updatedAt?: string;
   cwd: string;
   /** Stable learning scope; unlike cwd, this can survive moving to another machine. */
   repositoryId?: string;

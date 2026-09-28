@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { DEFAULT_CONFIG, writeGlobalConfig } from "../config.js";
+import { DEFAULT_CONFIG, loadGlobalConfig, writeGlobalConfig } from "../config.js";
 import { appendHistory, setScopedFeedback } from "../history.js";
 import {
   credentialStore,
@@ -27,6 +27,7 @@ import {
   wrapAccountKey,
   type SyncEnvelope,
 } from "../sync-crypto.js";
+import { readSyncDeletions, recordSyncDeletions } from "../sync-deletions.js";
 
 async function waitForFile(file: string): Promise<void> {
   const deadline = Date.now() + 2_000;
@@ -579,6 +580,63 @@ test("sync uses global settings and applies the newest version of a changed reco
   }
 });
 
+test("sync normalizes unknown routing values received from another device", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "airo-sync-invalid-routing-"));
+  const previousHome = process.env.HOME;
+  const previousFetch = globalThis.fetch;
+  process.env.HOME = home;
+  const root = path.join(home, ".local", "share", "airo");
+  fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(
+    syncStatePath(root),
+    JSON.stringify({
+      version: 1,
+      server: "https://sync.test",
+      deviceId: "device-test",
+      enabled: true,
+      cursor: 0,
+      credentialStore: "file",
+      user: { id: "user-test", login: "tester" },
+    }),
+  );
+  const key = createAccountKey();
+  credentialStore(true, root).save({
+    accessToken: "access-token",
+    refreshToken: "refresh-token",
+    accountKey: encodeAccountKey(key),
+  });
+  writeGlobalConfig({
+    ...structuredClone(DEFAULT_CONFIG),
+    policy: "codex-heavy",
+    defaultAgent: "gemini",
+  });
+  const remote = encryptSyncPayload(
+    key,
+    { ...safeSyncSettings(DEFAULT_CONFIG), policy: "gemini-heavy", defaultAgent: "other" },
+    "setting:routing",
+  );
+  try {
+    globalThis.fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/v1/sync/pull")
+        return Response.json({ events: [], cursor: 0, hasMore: false });
+      if (url.pathname === "/v1/settings")
+        return Response.json({ settings: [{ key: "routing", revision: 1, envelope: remote }] });
+      throw new Error(`Unexpected sync request: ${url}`);
+    };
+
+    await syncNow(structuredClone(DEFAULT_CONFIG));
+    const saved = loadGlobalConfig().config;
+    assert.equal(saved.policy, DEFAULT_CONFIG.policy);
+    assert.equal(saved.defaultAgent, DEFAULT_CONFIG.defaultAgent);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("sync records always use the global history dataset", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "airo-sync-canonical-history-"));
   const previousHome = process.env.HOME;
@@ -692,6 +750,7 @@ test("sync batches pushes by bytes and emits tombstones for deleted records", as
   });
   const config = structuredClone(DEFAULT_CONFIG);
   config.history.path = historyFile;
+  recordSyncDeletions(historyFile, "feedback", [deletedId]);
   const requestSizes: number[] = [];
   const pushed: Array<{ id: string; kind: string; envelope: SyncEnvelope }> = [];
   try {
@@ -723,6 +782,119 @@ test("sync batches pushes by bytes and emits tombstones for deleted records", as
       targetKind: "feedback",
       deletedVersion: "d".repeat(43),
     });
+    assert.deepEqual(readSyncDeletions(historyFile), []);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("sync never infers deletions from a missing or malformed history source", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "airo-sync-source-safety-"));
+  const previousHome = process.env.HOME;
+  const previousFetch = globalThis.fetch;
+  process.env.HOME = home;
+  const root = path.join(home, ".local", "share", "airo");
+  const historyFile = path.join(root, "history.jsonl");
+  fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(
+    syncStatePath(root),
+    JSON.stringify({
+      version: 1,
+      server: "https://sync.test",
+      deviceId: "device-test",
+      enabled: true,
+      cursor: 0,
+      credentialStore: "file",
+      user: { id: "user-test", login: "tester" },
+      records: { history: { "existing-record": "v".repeat(43) } },
+      recordsPath: historyFile,
+    }),
+  );
+  credentialStore(true, root).save({
+    accessToken: "access-token",
+    refreshToken: "refresh-token",
+    accountKey: encodeAccountKey(createAccountKey()),
+  });
+  const config = structuredClone(DEFAULT_CONFIG);
+  config.history.path = historyFile;
+  let pushes = 0;
+  try {
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/v1/sync/push") {
+        pushes++;
+        return Response.json({ accepted: 0 });
+      }
+      if (url.pathname === "/v1/sync/pull")
+        return Response.json({ events: [], cursor: 0, hasMore: false });
+      if (url.pathname === "/v1/settings" && init?.method === "PUT")
+        return Response.json({ revision: 1 });
+      if (url.pathname === "/v1/settings") return Response.json({ settings: [] });
+      throw new Error(`Unexpected sync request: ${url}`);
+    };
+
+    assert.equal((await syncNow(config)).pushed, 0);
+    assert.equal(pushes, 0);
+
+    fs.writeFileSync(historyFile, '{"id":"broken"\n');
+    await assert.rejects(syncNow(config), /contains invalid JSON/);
+    assert.equal(pushes, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("sync retries HTML server errors and reports structured results", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "airo-sync-http-retry-"));
+  const previousHome = process.env.HOME;
+  const previousFetch = globalThis.fetch;
+  process.env.HOME = home;
+  const root = path.join(home, ".local", "share", "airo");
+  fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(
+    syncStatePath(root),
+    JSON.stringify({
+      version: 1,
+      server: "https://sync.test",
+      deviceId: "device-test",
+      enabled: true,
+      cursor: 0,
+      credentialStore: "file",
+      user: { id: "user-test", login: "tester" },
+    }),
+  );
+  credentialStore(true, root).save({
+    accessToken: "access-token",
+    refreshToken: "refresh-token",
+    accountKey: encodeAccountKey(createAccountKey()),
+  });
+  let pulls = 0;
+  try {
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/v1/sync/pull") {
+        pulls++;
+        if (pulls < 3)
+          return new Response("<html>temporary outage</html>", {
+            status: 502,
+            headers: { "content-type": "text/html" },
+          });
+        return Response.json({ events: [], cursor: 0, hasMore: false });
+      }
+      if (url.pathname === "/v1/settings" && init?.method === "PUT")
+        return Response.json({ revision: 1 });
+      if (url.pathname === "/v1/settings") return Response.json({ settings: [] });
+      throw new Error(`Unexpected sync request: ${url}`);
+    };
+
+    assert.deepEqual(await syncNow(structuredClone(DEFAULT_CONFIG)), { pushed: 0, pulled: 0 });
+    assert.equal(pulls, 3);
   } finally {
     globalThis.fetch = previousFetch;
     if (previousHome === undefined) delete process.env.HOME;
@@ -786,10 +958,12 @@ test("sync sends only changes and gives every delete or restore a unique version
     assert.equal((await syncNow(config)).pushed, 1);
     assert.equal((await syncNow(config)).pushed, 0);
     fs.unlinkSync(historyFile);
+    recordSyncDeletions(historyFile, "history", [record.id]);
     assert.equal((await syncNow(config)).pushed, 1);
     fs.writeFileSync(historyFile, `${JSON.stringify(record)}\n`);
     assert.equal((await syncNow(config)).pushed, 1);
     fs.unlinkSync(historyFile);
+    recordSyncDeletions(historyFile, "history", [record.id]);
     assert.equal((await syncNow(config)).pushed, 1);
 
     assert.deepEqual(
@@ -916,7 +1090,7 @@ test("sync persists only one size-bounded push batch after a failure", async () 
   }
 });
 
-test("sync applies tombstones and persists cursor progress page by page", async () => {
+test("sync applies all pull pages atomically and persists the final cursor", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "airo-sync-tombstone-"));
   const previousHome = process.env.HOME;
   const previousFetch = globalThis.fetch;
@@ -972,8 +1146,8 @@ test("sync applies tombstones and persists cursor progress page by page", async 
             hasMore: true,
           });
         const saved = JSON.parse(fs.readFileSync(syncStatePath(root), "utf8"));
-        assert.equal(saved.cursor, 4);
-        assert.equal(fs.readFileSync(historyFile, "utf8"), "");
+        assert.equal(saved.cursor, 0);
+        assert.match(fs.readFileSync(historyFile, "utf8"), new RegExp(id));
         return Response.json({ events: [], cursor: 4, hasMore: false });
       }
       if (url.pathname === "/v1/settings" && init?.method === "PUT")
@@ -985,6 +1159,8 @@ test("sync applies tombstones and persists cursor progress page by page", async 
     const result = await syncNow(config);
     assert.equal(result.pulled, 1);
     assert.equal(pulls, 2);
+    assert.equal(JSON.parse(fs.readFileSync(syncStatePath(root), "utf8")).cursor, 4);
+    assert.equal(fs.readFileSync(historyFile, "utf8"), "");
   } finally {
     globalThis.fetch = previousFetch;
     if (previousHome === undefined) delete process.env.HOME;
@@ -1258,6 +1434,7 @@ test("sync pull preserves and later pushes a same-record concurrent edit or rest
     await syncNow(structuredClone(DEFAULT_CONFIG));
     assert.deepEqual(pushedTasks, ["local edit"]);
     fs.unlinkSync(historyFile);
+    recordSyncDeletions(historyFile, "history", [original.id]);
     await syncNow(structuredClone(DEFAULT_CONFIG));
     assert.deepEqual(JSON.parse(fs.readFileSync(historyFile, "utf8")), localEdit);
     await syncNow(structuredClone(DEFAULT_CONFIG));
@@ -1441,6 +1618,75 @@ test("cloud export follows every bounded event page", async () => {
       [],
     );
   } finally {
+    globalThis.fetch = previousFetch;
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("cloud export and device operations share the account-operation lock", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "airo-sync-export-lock-"));
+  const previousHome = process.env.HOME;
+  const previousFetch = globalThis.fetch;
+  process.env.HOME = home;
+  const root = path.join(home, ".local", "share", "airo");
+  fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(
+    syncStatePath(root),
+    JSON.stringify({
+      version: 1,
+      server: "https://sync.test",
+      deviceId: "device-test",
+      enabled: true,
+      cursor: 0,
+      credentialStore: "file",
+      user: { id: "user-test", login: "tester" },
+    }),
+  );
+  credentialStore(true, root).save({ accessToken: "access-token", refreshToken: "refresh-token" });
+  const output = path.join(home, "account-export.json");
+  let releaseExport!: () => void;
+  let markExportStarted!: () => void;
+  const exportGate = new Promise<void>((resolve) => (releaseExport = resolve));
+  const exportStarted = new Promise<void>((resolve) => (markExportStarted = resolve));
+  let devicesRequested = false;
+  try {
+    globalThis.fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/v1/account/export") {
+        markExportStarted();
+        await exportGate;
+        return Response.json({
+          schemaVersion: 1,
+          user: { id: "user-test" },
+          devices: [],
+          settings: [],
+          accountKey: null,
+          events: [],
+          eventCursor: 0,
+          deviceOffset: 0,
+          settingOffset: 0,
+          hasMore: false,
+        });
+      }
+      if (url.pathname === "/v1/devices") {
+        devicesRequested = true;
+        return Response.json({ devices: [] });
+      }
+      throw new Error(`Unexpected sync request: ${url}`);
+    };
+
+    const exporting = exportCloudData(output);
+    await exportStarted;
+    const listing = syncDevices();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(devicesRequested, false);
+    releaseExport();
+    await Promise.all([exporting, listing]);
+    assert.equal(devicesRequested, true);
+  } finally {
+    releaseExport();
     globalThis.fetch = previousFetch;
     if (previousHome === undefined) delete process.env.HOME;
     else process.env.HOME = previousHome;

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import type { RouterConfig } from "./types.js";
+import type { Agent, Policy, RouterConfig } from "./types.js";
 
 export const CONFIG_NOTE =
   "AIRO discovers provider models automatically. Set modelRouting.mode to manual to pin the provider tier mappings below.";
@@ -69,6 +69,17 @@ export const DEFAULT_CONFIG: RouterConfig = {
   rules: [],
 };
 
+const POLICIES = new Set<Policy>(["balanced", "claude-heavy", "codex-heavy"]);
+const AGENTS = new Set<Agent>(["claude", "codex", "gemini", "copilot"]);
+
+export function validPolicy(value: unknown): value is Policy {
+  return typeof value === "string" && POLICIES.has(value as Policy);
+}
+
+export function validAgent(value: unknown): value is Agent {
+  return typeof value === "string" && AGENTS.has(value as Agent);
+}
+
 export function configCandidates(cwd = process.cwd()): string[] {
   return [
     path.join(cwd, ".airo.json"),
@@ -99,6 +110,10 @@ function mergeConfig(parsed: any, sourceFile?: string): RouterConfig {
   const config: RouterConfig = {
     ...DEFAULT_CONFIG,
     ...parsed,
+    policy: validPolicy(parsed.policy) ? parsed.policy : DEFAULT_CONFIG.policy,
+    defaultAgent: validAgent(parsed.defaultAgent)
+      ? parsed.defaultAgent
+      : DEFAULT_CONFIG.defaultAgent,
     claude: mergeProvider(DEFAULT_CONFIG.claude, parsed.claude),
     codex: mergeProvider(DEFAULT_CONFIG.codex, parsed.codex),
     gemini: mergeProvider(DEFAULT_CONFIG.gemini, parsed.gemini),

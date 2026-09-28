@@ -4,11 +4,23 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { loadGlobalConfig, writeGlobalConfig } from "./config.js";
+import {
+  DEFAULT_CONFIG,
+  loadGlobalConfig,
+  validAgent,
+  validPolicy,
+  writeGlobalConfig,
+} from "./config.js";
 import { dataRootDir } from "./paths.js";
-import { feedbackPath, historyPath, readFeedback, readHistory } from "./history.js";
-import { jevFeedbackPath, readJevFeedback } from "./jev-feedback.js";
+import { feedbackPath, historyPath } from "./history.js";
+import { jevFeedbackPath } from "./jev-feedback.js";
 import { withFileLock, withFileLockAsync, withFileLocks } from "./file-lock.js";
+import {
+  acknowledgeSyncDeletions,
+  readSyncDeletions,
+  syncDeletionJournalPath,
+  type SyncDeletion,
+} from "./sync-deletions.js";
 import type { RouterConfig } from "./types.js";
 import {
   createAccountKey,
@@ -388,10 +400,8 @@ function applySafeSettings(config: RouterConfig, value: Record<string, unknown>)
   const orchestration = (value.orchestration ?? {}) as Partial<RouterConfig["orchestration"]>;
   return {
     ...config,
-    ...(typeof value.policy === "string" ? { policy: value.policy as RouterConfig["policy"] } : {}),
-    ...(typeof value.defaultAgent === "string"
-      ? { defaultAgent: value.defaultAgent as RouterConfig["defaultAgent"] }
-      : {}),
+    policy: validPolicy(value.policy) ? value.policy : DEFAULT_CONFIG.policy,
+    defaultAgent: validAgent(value.defaultAgent) ? value.defaultAgent : DEFAULT_CONFIG.defaultAgent,
     modelRouting: ["dynamic", "manual"].includes(
       String((value.modelRouting as { mode?: unknown } | undefined)?.mode),
     )
@@ -447,19 +457,28 @@ async function api<T>(
   const retryable = (init.method ?? "GET").toUpperCase() === "GET" || route === "/v1/auth/github";
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const response = retryable ? await retryTransientFetch(request) : await request();
-    const body = (await response.json()) as T & { error?: { message?: string } };
-    if (response.ok) return body;
-    if (response.status === 429 && attempt < 4) {
+    const transientStatus = response.status === 429 || (retryable && response.status >= 500);
+    if (transientStatus && attempt < 4) {
       const retryAfter = Number(response.headers.get("retry-after") ?? 0);
+      await response.body?.cancel().catch(() => undefined);
       await new Promise((resolve) =>
         setTimeout(resolve, Math.max(250 * 2 ** attempt, retryAfter * 1000)),
       );
       continue;
     }
+    const raw = await response.text();
+    let body: (T & { error?: { message?: string; code?: string } }) | undefined;
+    try {
+      body = JSON.parse(raw) as T & { error?: { message?: string; code?: string } };
+    } catch {
+      if (response.ok)
+        throw new SyncApiError("Sync service returned an invalid JSON response.", response.status);
+    }
+    if (response.ok) return body!;
     throw new SyncApiError(
-      body.error?.message ?? `Sync service returned HTTP ${response.status}.`,
+      body?.error?.message ?? `Sync service returned HTTP ${response.status}.`,
       response.status,
-      (body.error as { code?: string } | undefined)?.code,
+      body?.error?.code,
     );
   }
   throw new Error("Sync request retries were exhausted.");
@@ -704,21 +723,48 @@ type LocalSyncRecord = {
   record: { id: string; timestamp?: string; repositoryId?: string };
 };
 
-function localRecords(config: RouterConfig): LocalSyncRecord[] {
+function readSyncRecords(file: string, kind: SyncDataKind): LocalSyncRecord[] {
+  if (!fs.existsSync(file)) return [];
+  const records: LocalSyncRecord[] = [];
+  for (const [index, line] of fs.readFileSync(file, "utf8").split(/\r?\n/).entries()) {
+    if (!line) continue;
+    let record: unknown;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      throw new Error(`Sync source ${file} contains invalid JSON on line ${index + 1}.`);
+    }
+    if (
+      !record ||
+      typeof record !== "object" ||
+      typeof (record as { id?: unknown }).id !== "string"
+    )
+      throw new Error(`Sync source ${file} contains an invalid record on line ${index + 1}.`);
+    records.push({ kind, record: record as LocalSyncRecord["record"] });
+  }
+  return records;
+}
+
+function localSnapshot(config: RouterConfig): {
+  records: LocalSyncRecord[];
+  deletions: SyncDeletion[];
+} {
+  const historyFile = historyPath(config.history);
   return withFileLocks(
     [
-      `${historyPath(config.history)}.lock`,
+      `${historyFile}.lock`,
       `${feedbackPath(config.history)}.lock`,
       `${jevFeedbackPath(config.history)}.lock`,
+      `${syncDeletionJournalPath(historyFile)}.lock`,
     ],
-    () => [
-      ...readHistory(config.history).map((record) => ({ kind: "history" as const, record })),
-      ...readFeedback(config.history).map((record) => ({ kind: "feedback" as const, record })),
-      ...readJevFeedback(config.history).map((record) => ({
-        kind: "jev-feedback" as const,
-        record,
-      })),
-    ],
+    () => ({
+      records: [
+        ...readSyncRecords(historyFile, "history"),
+        ...readSyncRecords(feedbackPath(config.history), "feedback"),
+        ...readSyncRecords(jevFeedbackPath(config.history), "jev-feedback"),
+      ],
+      deletions: readSyncDeletions(historyFile),
+    }),
   );
 }
 
@@ -736,11 +782,12 @@ function recordManifest(records: LocalSyncRecord[], key: Buffer): SyncRecordMani
   return manifest;
 }
 
-function localEvents(
+function* localEvents(
   records: LocalSyncRecord[],
   key: Buffer,
   previous: SyncRecordManifest = {},
-): SyncEvent[] {
+  deletions: SyncDeletion[] = [],
+): Generator<SyncEvent> {
   const make = (
     kind: SyncDataKind,
     record: { id: string; timestamp?: string; repositoryId?: string },
@@ -757,23 +804,32 @@ function localEvents(
     };
   };
   const current = recordManifest(records, key);
-  const events = records
-    .filter(({ kind, record }) => previous[kind]?.[record.id] !== current[kind]?.[record.id])
-    .map(({ kind, record }) => make(kind, record));
-  for (const kind of ["history", "feedback", "jev-feedback"] as const) {
-    for (const [id, deletedVersion] of Object.entries(previous[kind] ?? {})) {
-      if (current[kind]?.[id]) continue;
-      const tombstone = { id, targetKind: kind, deletedVersion };
-      events.push({
-        id,
-        version: operationVersion(key),
-        kind: "tombstone",
-        createdAt: Math.floor(Date.now() / 1000),
-        envelope: encryptSyncPayload(key, tombstone, `event:tombstone:${id}`),
-      });
-    }
+  for (const { kind, record } of records)
+    if (previous[kind]?.[record.id] !== current[kind]?.[record.id]) yield make(kind, record);
+  for (const { kind, id } of deletions) {
+    const deletedVersion = previous[kind]?.[id];
+    if (!deletedVersion || current[kind]?.[id]) continue;
+    const tombstone = { id, targetKind: kind, deletedVersion };
+    yield {
+      id,
+      version: operationVersion(key),
+      kind: "tombstone",
+      createdAt: Math.floor(Date.now() / 1000),
+      envelope: encryptSyncPayload(key, tombstone, `event:tombstone:${id}`),
+    };
   }
-  return events;
+}
+
+function tombstoneDeletions(events: SyncEvent[], key: Buffer): SyncDeletion[] {
+  return events.flatMap((event) => {
+    if (event.kind !== "tombstone") return [];
+    const tombstone = decryptSyncPayload<{ id: string; targetKind: SyncDataKind }>(
+      key,
+      event.envelope,
+      eventContext(event),
+    );
+    return [{ kind: tombstone.targetKind, id: tombstone.id }];
+  });
 }
 
 function readJsonLines<T extends { id: string }>(file: string): Map<string, T> {
@@ -807,15 +863,16 @@ function syncFile(config: RouterConfig, kind: SyncDataKind): string {
   return jevFeedbackPath(config.history);
 }
 
-function applyEventPage(
-  config: RouterConfig,
+type SyncOperation = { id: string; record?: { id: string } };
+type SyncOperations = Map<SyncDataKind, Map<string, SyncOperation>>;
+
+function collectEventPage(
   key: Buffer,
   events: SyncEvent[],
-  previous: SyncRecordManifest = {},
-): { changed: number; manifest: SyncRecordManifest } {
-  const manifest = structuredClone(previous);
-  const operations = new Map<SyncDataKind, Map<string, { id: string; record?: { id: string } }>>();
-  const add = (kind: SyncDataKind, operation: { id: string; record?: { id: string } }) => {
+  manifest: SyncRecordManifest,
+  operations: SyncOperations,
+): void {
+  const add = (kind: SyncDataKind, operation: SyncOperation) => {
     const current = operations.get(kind) ?? new Map();
     current.set(operation.id, operation);
     operations.set(kind, current);
@@ -842,6 +899,14 @@ function applyEventPage(
     add(event.kind, { id: event.id, record });
     (manifest[event.kind] ??= {})[event.id] = recordVersion(key, record);
   }
+}
+
+function applyCollectedEvents(
+  config: RouterConfig,
+  key: Buffer,
+  operations: SyncOperations,
+  previous: SyncRecordManifest,
+): number {
   let changed = 0;
   for (const [kind, kindOperations] of operations) {
     const file = syncFile(config, kind);
@@ -872,11 +937,14 @@ function applyEventPage(
       return kindChanged;
     });
   }
-  return { changed, manifest };
+  return changed;
 }
 
-function eventBatches(events: SyncEvent[], maxBytes = 900_000, maxEvents = 100): string[] {
-  const bodies: string[] = [];
+function* eventBatches(
+  events: Iterable<SyncEvent>,
+  maxBytes = 900_000,
+  maxEvents = 100,
+): Generator<string> {
   let batch: SyncEvent[] = [];
   for (const event of events) {
     const candidate = [...batch, event];
@@ -886,14 +954,13 @@ function eventBatches(events: SyncEvent[], maxBytes = 900_000, maxEvents = 100):
       continue;
     }
     if (!batch.length) throw new Error(`Sync event ${event.id} exceeds the request size limit.`);
-    bodies.push(JSON.stringify({ events: batch }));
+    yield JSON.stringify({ events: batch });
     batch = [event];
     const single = JSON.stringify({ events: batch });
     if (Buffer.byteLength(single) > maxBytes)
       throw new Error(`Sync event ${event.id} exceeds the request size limit.`);
   }
-  if (batch.length) bodies.push(JSON.stringify({ events: batch }));
-  return bodies;
+  if (batch.length) yield JSON.stringify({ events: batch });
 }
 
 function manifestAfterEvents(
@@ -957,6 +1024,7 @@ async function syncNowUnlocked(
   // catch records written while that request was in flight.
   for (let cycle = 0; cycle < 2; cycle += 1) {
     if (state.pendingEvents?.length) {
+      const pendingEvents = state.pendingEvents;
       for (const body of eventBatches(state.pendingEvents)) {
         const result = await authenticated<{ accepted: number }>(state, store, "/v1/sync/push", {
           method: "POST",
@@ -964,6 +1032,7 @@ async function syncNowUnlocked(
         });
         pushed += result.accepted;
       }
+      acknowledgeSyncDeletions(recordsPath, tombstoneDeletions(pendingEvents, key));
       state.records =
         state.pendingRecords ?? manifestAfterEvents(state.records, state.pendingEvents, key);
       state.recordsPath = state.pendingRecordsPath ?? recordsPath;
@@ -973,23 +1042,18 @@ async function syncNowUnlocked(
       writeState(state);
       continue;
     }
-    const records = localRecords(syncConfig);
-    const nextManifest = recordManifest(records, key);
+    const snapshot = localSnapshot(syncConfig);
+    const nextManifest = recordManifest(snapshot.records, key);
     const previousManifest = state.recordsPath === recordsPath ? state.records : undefined;
-    const events = localEvents(records, key, previousManifest);
-    if (!events.length) {
-      if (state.recordsPath !== recordsPath) {
-        state.records = nextManifest;
-        state.recordsPath = recordsPath;
-        writeState(state);
-      }
-      break;
-    }
     if (state.recordsPath !== recordsPath) {
       state.records = {};
       state.recordsPath = recordsPath;
     }
-    for (const body of eventBatches(events)) {
+    let hadEvents = false;
+    for (const body of eventBatches(
+      localEvents(snapshot.records, key, previousManifest, snapshot.deletions),
+    )) {
+      hadEvents = true;
       const batch = (JSON.parse(body) as { events: SyncEvent[] }).events;
       // Persist only the bounded request currently in flight. A crash after
       // the server accepts it safely retries the same operation versions.
@@ -1001,29 +1065,45 @@ async function syncNowUnlocked(
         body,
       });
       pushed += result.accepted;
+      acknowledgeSyncDeletions(recordsPath, tombstoneDeletions(batch, key));
       state.records = manifestAfterEvents(state.records, batch, key);
       state.recordsPath = recordsPath;
       delete state.pendingEvents;
       delete state.pendingRecordsPath;
       writeState(state);
     }
+    if (!hadEvents) {
+      if (state.recordsPath !== recordsPath || state.records === undefined) {
+        state.records = nextManifest;
+        state.recordsPath = recordsPath;
+        writeState(state);
+      }
+      break;
+    }
   }
   let pulled = 0;
   let hasMore = true;
+  let pullCursor = state.cursor;
+  const pullBaseline = structuredClone(state.records ?? {});
+  const pulledManifest = structuredClone(pullBaseline);
+  const pulledOperations: SyncOperations = new Map();
   while (hasMore) {
     const result = await authenticated<{ events: SyncEvent[]; cursor: number; hasMore: boolean }>(
       state,
       store,
-      `/v1/sync/pull?cursor=${state.cursor}&limit=100`,
+      `/v1/sync/pull?cursor=${pullCursor}&limit=100`,
     );
-    const applied = applyEventPage(syncConfig, key, result.events, state.records);
-    pulled += applied.changed;
-    state.records = applied.manifest;
-    state.recordsPath = recordsPath;
-    state.cursor = result.cursor;
-    writeState(state);
+    collectEventPage(key, result.events, pulledManifest, pulledOperations);
+    if (result.hasMore && result.cursor <= pullCursor)
+      throw new Error("Sync pull did not advance its cursor.");
+    pullCursor = result.cursor;
     hasMore = result.hasMore;
   }
+  pulled = applyCollectedEvents(syncConfig, key, pulledOperations, pullBaseline);
+  state.records = pulledManifest;
+  state.recordsPath = recordsPath;
+  state.cursor = pullCursor;
+  writeState(state);
 
   // Repository overrides affect the current run and its local history, but
   // account-wide cloud settings always originate from the global config.
@@ -1102,7 +1182,7 @@ export function syncStatus(allowFile = false): {
   }
 }
 
-export async function syncDevices(allowFile = false): Promise<
+async function syncDevicesUnlocked(allowFile = false): Promise<
   Array<{
     id: string;
     name: string;
@@ -1126,7 +1206,19 @@ export async function syncDevices(allowFile = false): Promise<
   ).devices;
 }
 
-export async function syncRevokeDevice(deviceId: string, allowFile = false): Promise<void> {
+export function syncDevices(allowFile = false): Promise<
+  Array<{
+    id: string;
+    name: string;
+    lastSeenAt: number;
+    revokedAt: number | null;
+    current: boolean;
+  }>
+> {
+  return withSyncOperationLock(() => syncDevicesUnlocked(allowFile));
+}
+
+async function syncRevokeDeviceUnlocked(deviceId: string, allowFile = false): Promise<void> {
   if (!/^[a-zA-Z0-9:_-]{8,128}$/.test(deviceId)) throw new Error("Invalid device ID.");
   const state = readState();
   if (!state) throw new Error("Sync is not configured.");
@@ -1135,7 +1227,11 @@ export async function syncRevokeDevice(deviceId: string, allowFile = false): Pro
   });
 }
 
-export async function exportCloudData(
+export function syncRevokeDevice(deviceId: string, allowFile = false): Promise<void> {
+  return withSyncOperationLock(() => syncRevokeDeviceUnlocked(deviceId, allowFile));
+}
+
+async function exportCloudDataUnlocked(
   output: string,
   options: { allowFile?: boolean; overwrite?: boolean } = {},
 ): Promise<string> {
@@ -1216,6 +1312,13 @@ export async function exportCloudData(
   } finally {
     fs.rmSync(spoolDirectory, { recursive: true, force: true });
   }
+}
+
+export function exportCloudData(
+  output: string,
+  options: { allowFile?: boolean; overwrite?: boolean } = {},
+): Promise<string> {
+  return withSyncOperationLock(() => exportCloudDataUnlocked(output, options));
 }
 
 async function syncLogoutUnlocked(allowFile = false): Promise<void> {
