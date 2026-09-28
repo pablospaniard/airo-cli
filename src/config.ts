@@ -198,8 +198,15 @@ export function updateGlobalConfig(mutate: (config: RouterConfig) => RouterConfi
   return withFileLock(path.join(dataRootDir(), "global-config.lock"), () => {
     const file = globalConfigPath();
     const readRaw = () => (fs.existsSync(file) ? fs.readFileSync(file, "utf8") : undefined);
+    // Read the raw file once and derive both the config `mutate` sees and
+    // the "before" snapshot from that SAME read. Reading them separately
+    // (loadGlobalConfig(), then a second readRaw() to snapshot) would let an
+    // intervening write land between the two reads: mutate would still see
+    // fully fresh data, but the change-check below would compare against
+    // the now-stale first read and reject a perfectly valid update.
     const before = readRaw();
-    const next = mutate(loadGlobalConfig().config);
+    const current = before === undefined ? DEFAULT_CONFIG : mergeConfig(JSON.parse(before), file);
+    const next = mutate(current);
     if (readRaw() !== before)
       throw new Error(
         `${file} changed on disk while it was being updated; no changes were written.`,
