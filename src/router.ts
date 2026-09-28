@@ -118,6 +118,10 @@ function configuredModelIn(
   for (const agent of AGENTS) {
     for (const tier of ["fast", "balanced", "deep"] as const) {
       const model = config[agent].models[tier].model;
+      // "auto" is a provider sentinel, not a model name that users can pin.
+      // Matching it would turn ordinary text such as "auto-generated" into an
+      // explicit Gemini route and disable automatic provider fallback.
+      if (model.toLowerCase() === "auto") continue;
       const flexible = escapeRegex(model).replace(/[-._]+/g, "[-._\\s]+");
       const match = new RegExp(`\\b${flexible}\\b`, "i").exec(text);
       if (match) matches.push({ index: match.index, agent, model, tier });

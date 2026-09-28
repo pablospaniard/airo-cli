@@ -352,6 +352,7 @@ function credentialStoreForState(
 }
 
 function resetSyncProgress(state: SyncState): void {
+  state.enabled = false;
   state.cursor = 0;
   delete state.settingsRevision;
   delete state.settingsDigest;
@@ -879,16 +880,20 @@ function collectEventPage(
   };
   for (const event of events) {
     if (event.kind === "tombstone") {
-      const tombstone = decryptSyncPayload<{ id: string; targetKind: SyncDataKind }>(
-        key,
-        event.envelope,
-        eventContext(event),
-      );
+      const tombstone = decryptSyncPayload<{
+        id: string;
+        targetKind: SyncDataKind;
+        deletedVersion: string;
+      }>(key, event.envelope, eventContext(event));
       if (
         tombstone.id !== event.id ||
-        !["history", "feedback", "jev-feedback"].includes(tombstone.targetKind)
+        !["history", "feedback", "jev-feedback"].includes(tombstone.targetKind) ||
+        typeof tombstone.deletedVersion !== "string"
       )
         throw new Error(`Sync tombstone ${event.id} failed validation.`);
+      // Deletions are conditional on the version their author observed. This
+      // prevents an offline device from deleting a newer edit from another one.
+      if (manifest[tombstone.targetKind]?.[event.id] !== tombstone.deletedVersion) continue;
       add(tombstone.targetKind, { id: event.id });
       delete manifest[tombstone.targetKind]?.[event.id];
       continue;
@@ -971,16 +976,18 @@ function manifestAfterEvents(
   const manifest = structuredClone(previous ?? {});
   for (const event of events) {
     if (event.kind === "tombstone") {
-      const tombstone = decryptSyncPayload<{ id: string; targetKind: SyncDataKind }>(
-        key,
-        event.envelope,
-        eventContext(event),
-      );
+      const tombstone = decryptSyncPayload<{
+        id: string;
+        targetKind: SyncDataKind;
+        deletedVersion: string;
+      }>(key, event.envelope, eventContext(event));
       if (
         tombstone.id !== event.id ||
-        !["history", "feedback", "jev-feedback"].includes(tombstone.targetKind)
+        !["history", "feedback", "jev-feedback"].includes(tombstone.targetKind) ||
+        typeof tombstone.deletedVersion !== "string"
       )
         throw new Error(`Sync tombstone ${event.id} failed validation.`);
+      if (manifest[tombstone.targetKind]?.[event.id] !== tombstone.deletedVersion) continue;
       delete manifest[tombstone.targetKind]?.[event.id];
       continue;
     }

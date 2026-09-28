@@ -273,6 +273,22 @@ test("asks for clarification when a routing instruction cannot be resolved", () 
   assert.equal(routingClarification("use automatic routing for this review", current), undefined);
 });
 
+test("does not mistake the auto model sentinel for an explicit Gemini request", () => {
+  const current = config();
+  for (const task of [
+    "Add a helper with auto-generated IDs to the parser",
+    "use auto routing to fix the lint errors",
+  ]) {
+    const request = userRoutingRequest(task, current);
+    const route = routeTask(task, current);
+    assert.equal(request.model, undefined);
+    assert.equal(request.agent, undefined);
+    assert.equal(route.userRequestedModel, undefined);
+    assert.equal(route.agentPinned, false);
+    assert.notEqual(route.agent, "gemini");
+  }
+});
+
 test("does not let a later sentence change the routing request", () => {
   const current = config();
   const request = userRoutingRequest("use Claude. Then make the implementation fast", current);

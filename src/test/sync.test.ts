@@ -137,11 +137,13 @@ test("sync login resets a changed account namespace and remembers file credentia
     assert.equal(state.settingsDigest, undefined);
     assert.equal(state.lastSyncAt, undefined);
     assert.equal(state.records, undefined);
+    assert.equal(state.enabled, false);
     assert.deepEqual(state.syncIdentity, {
       server: "https://new-sync.test",
       userId: "new-user",
     });
     assert.equal(state.credentialStore, "file");
+    assert.equal(credentialStore(true, root).load()?.accountKey, undefined);
     assert.equal(syncStatus().credentials, true);
   } finally {
     globalThis.fetch = previousFetch;
@@ -1120,7 +1122,14 @@ test("sync applies all pull pages atomically and persists the final cursor", asy
   });
   const config = structuredClone(DEFAULT_CONFIG);
   config.history.path = historyFile;
-  const tombstonePayload = { id, targetKind: "history", deletedVersion: "v".repeat(43) };
+  const tombstonePayload = {
+    id,
+    targetKind: "history",
+    deletedVersion: crypto
+      .createHmac("sha256", key)
+      .update(JSON.stringify({ id, task: "delete me" }))
+      .digest("base64url"),
+  };
   let pulls = 0;
   try {
     globalThis.fetch = async (input, init) => {
@@ -1161,6 +1170,88 @@ test("sync applies all pull pages atomically and persists the final cursor", asy
     assert.equal(pulls, 2);
     assert.equal(JSON.parse(fs.readFileSync(syncStatePath(root), "utf8")).cursor, 4);
     assert.equal(fs.readFileSync(historyFile, "utf8"), "");
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("sync ignores a stale tombstone after a newer remote edit", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "airo-sync-stale-tombstone-"));
+  const previousHome = process.env.HOME;
+  const previousFetch = globalThis.fetch;
+  process.env.HOME = home;
+  const root = path.join(home, ".local", "share", "airo");
+  const historyFile = path.join(root, "history.jsonl");
+  fs.mkdirSync(root, { recursive: true });
+  const original = { id: "concurrently-edited-history", task: "original" };
+  const remoteEdit = { ...original, task: "newer remote edit" };
+  fs.writeFileSync(historyFile, `${JSON.stringify(original)}\n`);
+  fs.writeFileSync(
+    syncStatePath(root),
+    JSON.stringify({
+      version: 1,
+      server: "https://sync.test",
+      deviceId: "device-test",
+      enabled: true,
+      cursor: 0,
+      credentialStore: "file",
+      user: { id: "user-test", login: "tester" },
+    }),
+  );
+  const key = createAccountKey();
+  credentialStore(true, root).save({
+    accessToken: "access-token",
+    refreshToken: "refresh-token",
+    accountKey: encodeAccountKey(key),
+  });
+  const originalVersion = crypto
+    .createHmac("sha256", key)
+    .update(JSON.stringify(original))
+    .digest("base64url");
+  try {
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/v1/sync/push") {
+        const body = JSON.parse(String(init?.body)) as { events: unknown[] };
+        return Response.json({ accepted: body.events.length });
+      }
+      if (url.pathname === "/v1/sync/pull")
+        return Response.json({
+          events: [
+            {
+              id: original.id,
+              version: "e".repeat(43),
+              kind: "history",
+              createdAt: 2,
+              envelope: encryptSyncPayload(key, remoteEdit, `event:history:${original.id}`),
+            },
+            {
+              id: original.id,
+              version: "t".repeat(43),
+              kind: "tombstone",
+              createdAt: 3,
+              envelope: encryptSyncPayload(
+                key,
+                { id: original.id, targetKind: "history", deletedVersion: originalVersion },
+                `event:tombstone:${original.id}`,
+              ),
+            },
+          ],
+          cursor: 2,
+          hasMore: false,
+        });
+      if (url.pathname === "/v1/settings" && init?.method === "PUT")
+        return Response.json({ revision: 1 });
+      if (url.pathname === "/v1/settings") return Response.json({ settings: [] });
+      throw new Error(`Unexpected sync request: ${url}`);
+    };
+
+    const result = await syncNow(structuredClone(DEFAULT_CONFIG));
+    assert.equal(result.pulled, 1);
+    assert.deepEqual(JSON.parse(fs.readFileSync(historyFile, "utf8")), remoteEdit);
   } finally {
     globalThis.fetch = previousFetch;
     if (previousHome === undefined) delete process.env.HOME;
