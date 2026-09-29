@@ -34,7 +34,9 @@ The extension uses the same local routing, history, and learning behavior as the
 CLI. Use the sync button in the sidebar header, the **AIRO: Sync Now** and
 **AIRO: Show Sync Status** commands, or `/sync` commands to manage encrypted
 sync. Passphrases are collected with VS Code password prompts and passed only to
-the local AIRO process through its environment.
+the local AIRO process through its environment. `/sync login` reuses the saved
+server or `AIRO_SYNC_URL`; use `/sync login https://sync.example.com` to choose
+a server explicitly.
 
 Use `/jev` to inspect, enable, disable, or reset optional Jev feedback. Enabling
 it displays the data-sharing disclosure and requires explicit confirmation.

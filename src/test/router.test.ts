@@ -46,6 +46,12 @@ test("routes architecture investigations to Claude with a deep model", () => {
   assert.equal(route.routingPolicyVersion, ROUTING_POLICY.version);
 });
 
+test("defensively ignores an unknown routing policy", () => {
+  const invalid = config() as unknown as { policy: string };
+  invalid.policy = "gemini-heavy";
+  assert.doesNotThrow(() => routeTask("Fix a parser bug", invalid as RouterConfig));
+});
+
 test("routes a small test implementation to Codex with a fast model", () => {
   const route = routeTask("Add a unit test for this simple type", config());
 
