@@ -60,20 +60,20 @@ test("single mode continues when its first fallback also fails", () => {
   };
   const codex = executable(
     "codex",
-    `require("node:fs").appendFileSync(${JSON.stringify(runLog)}, "codex\\n");
+    `if (process.argv.some((arg) => arg.includes("Rename a type in one file"))) require("node:fs").appendFileSync(${JSON.stringify(runLog)}, "codex\\n");
 console.log(JSON.stringify({type:"turn.failed",error:{message:"unexpected status 401 Unauthorized: Missing bearer"}}));
 process.exit(1);`,
   );
   const claude = executable(
     "claude",
     `if (process.argv.includes("auth")) { console.log(JSON.stringify({loggedIn:true})); process.exit(0); }
-require("node:fs").appendFileSync(${JSON.stringify(runLog)}, "claude\\n");
+if (process.argv.some((arg) => arg.includes("Rename a type in one file"))) require("node:fs").appendFileSync(${JSON.stringify(runLog)}, "claude\\n");
 console.log(JSON.stringify({type:"result",subtype:"error",result:"Claude usage limit reached."}));
 process.exit(1);`,
   );
   const gemini = executable(
     "gemini",
-    `require("node:fs").appendFileSync(${JSON.stringify(runLog)}, "gemini\\n");
+    `if (process.argv.some((arg) => arg.includes("Rename a type in one file"))) require("node:fs").appendFileSync(${JSON.stringify(runLog)}, "gemini\\n");
 console.log(JSON.stringify({type:"message",role:"assistant",content:"Fallback completed."}));`,
   );
 
