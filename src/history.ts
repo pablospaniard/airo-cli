@@ -13,6 +13,7 @@ import type {
 import { dataRootDir } from "./paths.js";
 import { enrichHistoryRecord, extractTaskFeatures } from "./evaluation.js";
 import { resolveRepositoryIdentity } from "./repository.js";
+import { withFileLock, withFileLocks } from "./file-lock.js";
 
 export const HISTORY_SCHEMA_VERSION = 1;
 export const FEEDBACK_SCHEMA_VERSION = 1;
@@ -54,11 +55,42 @@ export function historyPath(config: HistoryConfig): string {
 }
 
 export function newHistoryId(): string {
-  return crypto.randomBytes(4).toString("hex");
+  return crypto.randomBytes(16).toString("hex");
 }
 
 export function newRunId(): string {
   return crypto.randomBytes(6).toString("hex");
+}
+
+function latestLocalHistoryPath(config: HistoryConfig): string {
+  return `${historyPath(config)}.latest-local.json`;
+}
+
+function writeAtomic(file: string, value: string): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const temporary = `${file}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+  fs.writeFileSync(temporary, value, { mode: 0o600 });
+  fs.renameSync(temporary, file);
+}
+
+function writeHistory(file: string, records: HistoryRecord[]): void {
+  writeAtomic(
+    file,
+    records.length ? `${records.map((record) => JSON.stringify(record)).join("\n")}\n` : "",
+  );
+}
+
+function latestLocalRecord(config: HistoryConfig, records: HistoryRecord[]): HistoryRecord {
+  try {
+    const marker = JSON.parse(fs.readFileSync(latestLocalHistoryPath(config), "utf8")) as {
+      id?: string;
+    };
+    const local = records.find((record) => record.id === marker.id);
+    if (local) return local;
+  } catch {}
+  return [...records]
+    .sort((a, b) => a.timestamp.localeCompare(b.timestamp) || a.id.localeCompare(b.id))
+    .at(-1)!;
 }
 
 export function appendHistory(config: HistoryConfig, record: HistoryRecord): void {
@@ -67,16 +99,15 @@ export function appendHistory(config: HistoryConfig, record: HistoryRecord): voi
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const repositoryId =
     record.repositoryId ?? resolveRepositoryIdentity(record.cwd, path.dirname(file)).id;
-  fs.appendFileSync(
-    file,
-    JSON.stringify(
-      enrichHistoryRecord({
-        ...record,
-        schemaVersion: HISTORY_SCHEMA_VERSION,
-        repositoryId,
-      }),
-    ) + "\n",
-  );
+  withFileLock(`${file}.lock`, () => {
+    const saved = enrichHistoryRecord({
+      ...record,
+      schemaVersion: HISTORY_SCHEMA_VERSION,
+      repositoryId,
+    });
+    fs.appendFileSync(file, JSON.stringify(saved) + "\n");
+    writeAtomic(latestLocalHistoryPath(config), `${JSON.stringify({ id: saved.id })}\n`);
+  });
 }
 
 export function feedbackPath(config: HistoryConfig): string {
@@ -107,9 +138,11 @@ export function appendFeedback(config: HistoryConfig, feedback: FeedbackRecord):
   if (!config.enabled) return;
   const file = feedbackPath(config);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.appendFileSync(
-    file,
-    JSON.stringify({ ...feedback, schemaVersion: FEEDBACK_SCHEMA_VERSION }) + "\n",
+  withFileLock(`${file}.lock`, () =>
+    fs.appendFileSync(
+      file,
+      JSON.stringify({ ...feedback, schemaVersion: FEEDBACK_SCHEMA_VERSION }) + "\n",
+    ),
   );
 }
 
@@ -124,18 +157,22 @@ export function setScopedFeedback(
     confidence?: number;
   } = {},
 ): FeedbackRecord {
-  const records = readHistory(config);
-  if (!records.length) throw new Error("No routing history yet.");
   const scope = options.scope ?? "run";
-  const latest = records.at(-1)!;
-  const targetId = options.targetId ?? (scope === "run" ? (latest.runId ?? latest.id) : latest.id);
-  const exists =
-    scope === "run"
-      ? records.some(
-          (record) => record.runId === targetId || (!record.runId && record.id === targetId),
-        )
-      : records.some((record) => record.id === targetId);
-  if (!exists) throw new Error(`${scope === "run" ? "Run" : "Phase"} ${targetId} not found.`);
+  const targetId = withFileLock(`${historyPath(config)}.lock`, () => {
+    const records = readHistory(config);
+    if (!records.length) throw new Error("No routing history yet.");
+    const latest = latestLocalRecord(config, records);
+    const selected =
+      options.targetId ?? (scope === "run" ? (latest.runId ?? latest.id) : latest.id);
+    const exists =
+      scope === "run"
+        ? records.some(
+            (record) => record.runId === selected || (!record.runId && record.id === selected),
+          )
+        : records.some((record) => record.id === selected);
+    if (!exists) throw new Error(`${scope === "run" ? "Run" : "Phase"} ${selected} not found.`);
+    return selected;
+  });
   const feedback: FeedbackRecord = {
     schemaVersion: FEEDBACK_SCHEMA_VERSION,
     id: newHistoryId(),
@@ -201,14 +238,15 @@ export function updateHistoryRecord(
   id: string,
   update: (record: HistoryRecord) => HistoryRecord,
 ): HistoryRecord | undefined {
-  const records = readHistory(config);
-  const index = records.findIndex((record) => record.id === id);
-  if (index < 0) return undefined;
-  records[index] = update(records[index]);
   const file = historyPath(config);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, records.map((record) => JSON.stringify(record)).join("\n") + "\n");
-  return records[index];
+  return withFileLock(`${file}.lock`, () => {
+    const records = readHistory(config);
+    const index = records.findIndex((record) => record.id === id);
+    if (index < 0) return undefined;
+    records[index] = update(records[index]);
+    writeHistory(file, records);
+    return records[index];
+  });
 }
 
 export function setFeedback(
@@ -217,32 +255,33 @@ export function setFeedback(
   id?: string,
   note?: string,
 ): HistoryRecord[] {
-  const records = readHistory(config);
-  if (!records.length) throw new Error("No routing history yet.");
-  let targets: number[] = [];
-
-  if (!id || id === "last") {
-    const last = records[records.length - 1];
-    if (last.runId)
-      targets = records.map((r, i) => (r.runId === last.runId ? i : -1)).filter((i) => i >= 0);
-    else targets = [records.length - 1];
-  } else {
-    const byRun = records.map((r, i) => (r.runId === id ? i : -1)).filter((i) => i >= 0);
-    if (byRun.length) targets = byRun;
-    else {
-      const index = records.findIndex((r) => r.id === id);
-      if (index >= 0) targets = [index];
-    }
-  }
-  if (!targets.length) throw new Error(`History item or run ${id} not found.`);
-
-  for (const index of targets) {
-    records[index] = { ...records[index], feedback: rating, feedbackNote: note };
-  }
   const file = historyPath(config);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, records.map((r) => JSON.stringify(r)).join("\n") + "\n");
-  return targets.map((i) => records[i]);
+  return withFileLock(`${file}.lock`, () => {
+    const records = readHistory(config);
+    if (!records.length) throw new Error("No routing history yet.");
+    let targets: number[] = [];
+
+    if (!id || id === "last") {
+      const last = latestLocalRecord(config, records);
+      if (last.runId)
+        targets = records.map((r, i) => (r.runId === last.runId ? i : -1)).filter((i) => i >= 0);
+      else targets = [records.findIndex((record) => record.id === last.id)];
+    } else {
+      const byRun = records.map((r, i) => (r.runId === id ? i : -1)).filter((i) => i >= 0);
+      if (byRun.length) targets = byRun;
+      else {
+        const index = records.findIndex((r) => r.id === id);
+        if (index >= 0) targets = [index];
+      }
+    }
+    if (!targets.length) throw new Error(`History item or run ${id} not found.`);
+
+    for (const index of targets) {
+      records[index] = { ...records[index], feedback: rating, feedbackNote: note };
+    }
+    writeHistory(file, records);
+    return targets.map((i) => records[i]);
+  });
 }
 
 function tokens(s: string): Set<string> {
@@ -473,16 +512,15 @@ export function explainLearning(
 }
 
 export function resetLearning(config: HistoryConfig): number {
-  const file = feedbackPath(config);
-  const count = readFeedback(config).length;
-  if (fs.existsSync(file)) fs.unlinkSync(file);
-  const records = readHistory(config).map(
-    ({ feedback: _feedback, feedbackNote: _note, ...record }) => record,
-  );
-  if (records.length)
-    fs.writeFileSync(
-      historyPath(config),
-      records.map((record) => JSON.stringify(record)).join("\n") + "\n",
+  const feedbackFile = feedbackPath(config);
+  const historyFile = historyPath(config);
+  return withFileLocks([`${historyFile}.lock`, `${feedbackFile}.lock`], () => {
+    const count = readFeedback(config).length;
+    if (fs.existsSync(feedbackFile)) fs.unlinkSync(feedbackFile);
+    const records = readHistory(config).map(
+      ({ feedback: _feedback, feedbackNote: _note, ...record }) => record,
     );
-  return count;
+    if (records.length) writeHistory(historyFile, records);
+    return count;
+  });
 }

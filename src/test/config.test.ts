@@ -8,6 +8,7 @@ import {
   DEFAULT_CONFIG,
   globalConfigPath,
   loadConfig,
+  loadGlobalConfig,
   writeGlobalConfig,
   writeProjectConfig,
 } from "../config.js";
@@ -30,7 +31,7 @@ test("loads and deeply merges project configuration", () => {
       JSON.stringify({
         policy: "claude-heavy",
         claude: { models: { fast: { model: "custom-haiku" } } },
-        history: { enabled: false },
+        history: { enabled: false, path: "data/history.jsonl" },
         logging: { level: "compact" },
         permissions: { networkAccess: false },
         rules: "invalid",
@@ -39,10 +40,11 @@ test("loads and deeply merges project configuration", () => {
     const loaded = loadConfig(dir);
     assert.equal(loaded.path, path.join(dir, ".airo.json"));
     assert.equal(loaded.config.policy, "claude-heavy");
-    assert.equal(loaded.config.modelRouting.mode, "dynamic");
+    assert.equal(loaded.config.modelRouting.mode, "manual");
     assert.equal(loaded.config.claude.models.fast.model, "custom-haiku");
     assert.equal(loaded.config.claude.models.deep.model, DEFAULT_CONFIG.claude.models.deep.model);
     assert.equal(loaded.config.history.enabled, false);
+    assert.equal(loaded.config.history.path, path.join(dir, "data", "history.jsonl"));
     assert.equal(loaded.config.permissions.mode, "prompt");
     assert.equal(loaded.config.permissions.networkAccess, false);
     assert.deepEqual(loaded.config.rules, []);
@@ -65,6 +67,27 @@ test("writes project and global configuration safely", () => {
     assert.equal(global, globalConfigPath());
     assert.equal(JSON.parse(fs.readFileSync(global, "utf8")).defaultAgent, "codex");
     assert.equal(JSON.parse(fs.readFileSync(global, "utf8")).modelRouting.mode, "dynamic");
+    assert.equal(loadGlobalConfig().path, global);
+    assert.equal(loadGlobalConfig().config.modelRouting.mode, "dynamic");
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loads account-wide configuration without repository overrides", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-global-config-"));
+  const previousHome = process.env.HOME;
+  process.env.HOME = dir;
+  try {
+    writeGlobalConfig({ ...structuredClone(DEFAULT_CONFIG), policy: "codex-heavy" });
+    fs.writeFileSync(
+      path.join(dir, ".airo.json"),
+      JSON.stringify({ ...DEFAULT_CONFIG, policy: "claude-heavy" }),
+    );
+    assert.equal(loadConfig(dir).config.policy, "claude-heavy");
+    assert.equal(loadGlobalConfig().config.policy, "codex-heavy");
   } finally {
     if (previousHome === undefined) delete process.env.HOME;
     else process.env.HOME = previousHome;

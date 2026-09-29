@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { extractTaskFeatures } from "./evaluation.js";
 import { historyPath, newHistoryId, readFeedback, readHistory } from "./history.js";
+import { withFileLock } from "./file-lock.js";
 import { resolveRepositoryIdentity } from "./repository.js";
 import type { Agent, HistoryConfig, HistoryRecord, ModelTier, TaskFeatures } from "./types.js";
 
@@ -233,20 +234,25 @@ function appendJevFeedback(config: HistoryConfig, records: JevFeedbackRecord[]):
   if (!records.length) return;
   const file = jevFeedbackPath(config);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.appendFileSync(file, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`, {
-    mode: 0o600,
+  withFileLock(`${file}.lock`, () => {
+    fs.appendFileSync(file, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`, {
+      mode: 0o600,
+    });
+    fs.chmodSync(file, 0o600);
   });
-  fs.chmodSync(file, 0o600);
 }
 
 export function resetJevFeedback(config: HistoryConfig): number {
-  const records = readJevFeedback(config);
-  try {
-    fs.unlinkSync(jevFeedbackPath(config));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-  return records.length;
+  const file = jevFeedbackPath(config);
+  return withFileLock(`${file}.lock`, () => {
+    const records = readJevFeedback(config);
+    try {
+      fs.unlinkSync(file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    return records.length;
+  });
 }
 
 function bucket(value: number | undefined, boundaries: number[]): string | undefined {

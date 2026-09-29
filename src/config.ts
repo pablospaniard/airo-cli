@@ -95,31 +95,50 @@ function mergeProvider(base: RouterConfig["claude"], value: any): RouterConfig["
   };
 }
 
+function mergeConfig(parsed: any, sourceFile?: string): RouterConfig {
+  const config: RouterConfig = {
+    ...DEFAULT_CONFIG,
+    ...parsed,
+    claude: mergeProvider(DEFAULT_CONFIG.claude, parsed.claude),
+    codex: mergeProvider(DEFAULT_CONFIG.codex, parsed.codex),
+    gemini: mergeProvider(DEFAULT_CONFIG.gemini, parsed.gemini),
+    copilot: mergeProvider(DEFAULT_CONFIG.copilot, parsed.copilot),
+    // Configurations written before model routing was introduced contain
+    // deliberate model selections. Preserve those selections on upgrade.
+    modelRouting: {
+      mode: parsed.modelRouting?.mode === "dynamic" ? "dynamic" : "manual",
+    },
+    permissions: { ...DEFAULT_CONFIG.permissions, ...parsed.permissions },
+    history: { ...DEFAULT_CONFIG.history, ...parsed.history },
+    orchestration: { ...DEFAULT_CONFIG.orchestration, ...parsed.orchestration },
+    logging: { ...DEFAULT_CONFIG.logging, ...parsed.logging },
+    rules: Array.isArray(parsed.rules) ? parsed.rules : [],
+  };
+  if (config.history.path && !path.isAbsolute(config.history.path) && sourceFile)
+    config.history.path = path.resolve(path.dirname(sourceFile), config.history.path);
+  return config;
+}
+
 export function loadConfig(cwd = process.cwd()): { config: RouterConfig; path?: string } {
   for (const file of configCandidates(cwd)) {
     if (!fs.existsSync(file)) continue;
     const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
     return {
-      config: {
-        ...DEFAULT_CONFIG,
-        ...parsed,
-        claude: mergeProvider(DEFAULT_CONFIG.claude, parsed.claude),
-        codex: mergeProvider(DEFAULT_CONFIG.codex, parsed.codex),
-        gemini: mergeProvider(DEFAULT_CONFIG.gemini, parsed.gemini),
-        copilot: mergeProvider(DEFAULT_CONFIG.copilot, parsed.copilot),
-        modelRouting: {
-          mode: parsed.modelRouting?.mode === "manual" ? "manual" : "dynamic",
-        },
-        permissions: { ...DEFAULT_CONFIG.permissions, ...parsed.permissions },
-        history: { ...DEFAULT_CONFIG.history, ...parsed.history },
-        orchestration: { ...DEFAULT_CONFIG.orchestration, ...parsed.orchestration },
-        logging: { ...DEFAULT_CONFIG.logging, ...parsed.logging },
-        rules: Array.isArray(parsed.rules) ? parsed.rules : [],
-      },
+      config: mergeConfig(parsed, file),
       path: file,
     };
   }
   return { config: DEFAULT_CONFIG };
+}
+
+/** Load only account-wide configuration, never a repository override. */
+export function loadGlobalConfig(): { config: RouterConfig; path?: string } {
+  const file = globalConfigPath();
+  if (!fs.existsSync(file)) return { config: DEFAULT_CONFIG };
+  return {
+    config: mergeConfig(JSON.parse(fs.readFileSync(file, "utf8")), file),
+    path: file,
+  };
 }
 
 export function writeProjectConfig(cwd = process.cwd()): string {
