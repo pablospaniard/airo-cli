@@ -659,6 +659,7 @@ function interactiveHelp(): string {
       `${commandColor("/usage [limit]")}      ${ui.gray("show token usage")}`,
       `${commandColor("/logs")}               ${ui.gray("show recent run logs")}`,
       `${commandColor("/attach <file-path>")} ${ui.gray("attach a local image, PDF, Markdown, or JSON file to the next task")}`,
+      `${commandColor("/no-jev <task>")}       ${ui.gray("run one task without sending it to Jev")}`,
       `${commandColor("/feedback good|bad [note]")} ${ui.gray("rate the latest run")}`,
       `${commandColor("/feedback phase <id> good|bad [note]")} ${ui.gray("rate one phase")}`,
       `${commandColor("/learning status|explain <id>")} ${ui.gray("inspect learned routing")}`,
@@ -857,7 +858,11 @@ async function chatLoop(config: any, path?: string) {
             console.log(
               `${statusIcon("ok")} ${ui.gray("attached dropped file")} ${ui.cyan(attachmentPath)}`,
             );
-            action = { kind: "task", task: "Inspect the attached file" };
+            action = {
+              kind: "task",
+              task: "Inspect the attached file",
+              noJev: action.noJev,
+            };
           } catch {
             // A normal task ending in a filename should still be routed normally.
           }
@@ -865,7 +870,9 @@ async function chatLoop(config: any, path?: string) {
         const attachmentContext = attachments.length
           ? `\n\nAttached local file(s) for inspection:\n${attachments.map((file) => `- ${file}`).join("\n")}\nUse the provider's local file inspection capability if available.`
           : "";
-        const args = parseArgs(taskArgs(`${action.task}${attachmentContext}`, preferences));
+        const args = parseArgs(
+          taskArgs(`${action.task}${attachmentContext}`, preferences, { noJev: action.noJev }),
+        );
         attachments = [];
         const adaptive = args.adaptive || (!args.single && shouldOrchestrate(args.task, config));
         console.log(

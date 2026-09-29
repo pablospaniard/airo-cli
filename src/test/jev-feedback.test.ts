@@ -18,6 +18,7 @@ import {
   readJevConsent,
   readJevFeedback,
   resetJevFeedback,
+  sanitizeJevTask,
 } from "../jev-feedback.js";
 import type { HistoryConfig, HistoryRecord } from "../types.js";
 
@@ -116,6 +117,23 @@ test("Jev feedback is default-off and consent is local, versioned, and revocable
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("Jev task sanitization removes attachment lists and absolute paths", () => {
+  const task = [
+    "Review /Users/me/secret-project/src/app.ts and C:\\Users\\me\\secret\\app.ts",
+    "",
+    "Attached local file(s) for inspection:",
+    "- /Users/me/secret-project/private.txt",
+    "Use the provider's local file inspection capability if available.",
+  ].join("\n");
+  const sanitized = sanitizeJevTask(task);
+  assert.doesNotMatch(sanitized, /Users|secret-project|Attached local file|private\.txt/);
+  assert.match(sanitized, /^Review \[local-path\] and \[local-path\]$/);
+  assert.equal(
+    sanitizeJevTask("Check /repo and https://example.com/docs"),
+    "Check [local-path] and https://example.com/docs",
+  );
 });
 
 test("post-run evaluation sends a bounded payload and stores validated feedback without secrets", async () => {

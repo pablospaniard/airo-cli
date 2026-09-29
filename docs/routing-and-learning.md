@@ -279,6 +279,9 @@ airo feedback jev reset --yes
 airo --no-jev "task"
 ```
 
+Within the interactive workspace, run `/no-jev task` or `--no-jev task` to opt
+that task out without ending the session.
+
 Enablement records versioned consent in a permission-restricted local file. The API key remains in the environment. After provider execution and ordinary history recording, AIRO sends one batched request containing task text, phase/task features, selected provider and tier, bucketed outcomes, and an explicit rating when present. It does not copy provider output, source, diffs, configuration, repository metadata, paths, feedback notes, environment variables, or transcripts into the structured request. Because any text supplied by a user can itself contain sensitive values, use `--no-jev` for a task that should remain entirely local.
 
 Typed answers are schema-validated and stored separately in `history.jev-feedback.jsonl`; task text is not duplicated there. Only internally consistent provider/tier judgments at or above the confidence threshold can enter learning. They must meet the same repository scope, similarity sample floor, and recency rules as ordinary evidence, and are capped below the maximum ordinary-history adjustment. Explicit current choices and custom rules remain authoritative. `permissions.networkAccess: false` suppresses the optional request. Network, authentication, rate-limit, timeout, malformed-response, and model-version failures are fail-open and do not alter the completed run's exit status.
