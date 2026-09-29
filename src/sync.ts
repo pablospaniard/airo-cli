@@ -461,14 +461,29 @@ export function applySafeSettings(
   };
 }
 
+function secureSyncServer(configuredServer: string): string {
+  try {
+    const url = new URL(configuredServer);
+    const loopback = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(url.hostname);
+    if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) throw new Error();
+    if (url.username || url.password) throw new Error();
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    throw new Error("Sync server must use HTTPS (HTTP is allowed only for localhost development).");
+  }
+}
+
 async function api<T>(
   state: SyncState,
   route: string,
   init: RequestInit = {},
   token?: string,
 ): Promise<T> {
+  // Revalidate persisted state on every request so credentials saved by an
+  // older version can never be sent over a remote plaintext connection.
+  const server = secureSyncServer(state.server);
   const request = () =>
-    fetch(`${state.server}${route}`, {
+    fetch(`${server}${route}`, {
       ...init,
       signal: AbortSignal.timeout(15_000),
       headers: {
@@ -578,9 +593,10 @@ async function syncLoginUnlocked(options: {
   const useCredentialFile = Boolean(
     options.allowCredentialFile || existing?.credentialStore === "file",
   );
-  const server = options.server ?? process.env.AIRO_SYNC_URL ?? existing?.server;
-  if (!server)
+  const configuredServer = options.server ?? process.env.AIRO_SYNC_URL ?? existing?.server;
+  if (!configuredServer)
     throw new Error("Set AIRO_SYNC_URL or pass --server with the deployed AIRO sync Worker URL.");
+  const server = secureSyncServer(configuredServer);
   const state: SyncState = existing ?? {
     version: 1,
     server: server.replace(/\/$/, ""),

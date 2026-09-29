@@ -10,7 +10,7 @@ import type {
   HistoryRecord,
   ModelTier,
 } from "./types.js";
-import { dataRootDir } from "./paths.js";
+import { dataRootDir, ensurePrivateDirectory, ensurePrivateFile } from "./paths.js";
 import { enrichHistoryRecord, extractTaskFeatures } from "./evaluation.js";
 import { withFileLock, withFileLocks } from "./file-lock.js";
 import { resolveRepositoryIdentity } from "./repository.js";
@@ -68,7 +68,7 @@ function latestLocalHistoryPath(config: HistoryConfig): string {
 }
 
 function writeAtomic(file: string, value: string): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  ensurePrivateDirectory(path.dirname(file));
   const temporary = `${file}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
   fs.writeFileSync(temporary, value, { mode: 0o600 });
   fs.renameSync(temporary, file);
@@ -97,7 +97,7 @@ function latestLocalRecord(config: HistoryConfig, records: HistoryRecord[]): His
 export function appendHistory(config: HistoryConfig, record: HistoryRecord): void {
   if (!config.enabled) return;
   const file = historyPath(config);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  ensurePrivateDirectory(path.dirname(file));
   const repositoryId =
     record.repositoryId ?? resolveRepositoryIdentity(record.cwd, path.dirname(file)).id;
   withFileLock(`${file}.lock`, () => {
@@ -106,7 +106,8 @@ export function appendHistory(config: HistoryConfig, record: HistoryRecord): voi
       schemaVersion: HISTORY_SCHEMA_VERSION,
       repositoryId,
     });
-    fs.appendFileSync(file, JSON.stringify(saved) + "\n");
+    fs.appendFileSync(file, JSON.stringify(saved) + "\n", { mode: 0o600 });
+    ensurePrivateFile(file);
     writeAtomic(latestLocalHistoryPath(config), `${JSON.stringify({ id: saved.id })}\n`);
   });
 }
@@ -138,13 +139,15 @@ export function readFeedback(config: HistoryConfig): FeedbackRecord[] {
 export function appendFeedback(config: HistoryConfig, feedback: FeedbackRecord): void {
   if (!config.enabled) return;
   const file = feedbackPath(config);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  withFileLock(`${file}.lock`, () =>
+  ensurePrivateDirectory(path.dirname(file));
+  withFileLock(`${file}.lock`, () => {
     fs.appendFileSync(
       file,
       JSON.stringify({ ...feedback, schemaVersion: FEEDBACK_SCHEMA_VERSION }) + "\n",
-    ),
-  );
+      { mode: 0o600 },
+    );
+    ensurePrivateFile(file);
+  });
 }
 
 export function setScopedFeedback(

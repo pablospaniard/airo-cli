@@ -164,6 +164,9 @@
     "vscode": "^1.106.0"
   },
   "capabilities": {
-    "virtualWorkspaces": false
+    "virtualWorkspaces": false,
+    "untrustedWorkspaces": {
+      "supported": false
+    }
   }
 }
