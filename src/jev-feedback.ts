@@ -277,9 +277,21 @@ export function sanitizeJevTask(task: string): string {
     /\n\nAttached local file\(s\) for inspection:\n[\s\S]*?\nUse the provider's local file inspection capability if available\.\s*$/,
     "",
   );
-  return withoutAttachments
-    .replace(/[a-zA-Z]:\\(?:[^\s\\]+\\)+[^\s,;]+/g, "[local-path]")
-    .replace(/(^|[\s("'])\/(?!\/)[^\s,;)"']+/g, "$1[local-path]");
+  return (
+    withoutAttachments
+      // Windows paths may contain spaces. Stop at punctuation, a closing quote,
+      // or a natural-language connector rather than leaking the path one token
+      // at a time.
+      .replace(
+        /(^|[\s("'`])(?:[a-z]:\\|[\w.@-]+\\)(?:[^\\\r\n,;)"'`]+\\)*[^\\\r\n,;)"'`]+?(?=\s+(?:and|or|then|from|to|in|with|for)\b|[,\r\n;)"'`]|$)/gi,
+        "$1[local-path]",
+      )
+      .replace(/(^|[\s("'`])\/(?!\/)[^\s,;)"'`]+/g, "$1[local-path]")
+      .replace(/(^|[\s("'`])(?:~|\.\.?)\/[^\s,;)"'`]+/g, "$1[local-path]")
+      // A slash-separated token is a repository-relative path. Requiring a
+      // normal text boundary prevents matching the path portion of a URL.
+      .replace(/(^|[\s("'`])(?:[\w.@-]+\/)+[\w.@%+?=:#-]+(?=$|[\s,;)"'`])/g, "$1[local-path]")
+  );
 }
 
 function runPayload(config: HistoryConfig, records: HistoryRecord[]) {

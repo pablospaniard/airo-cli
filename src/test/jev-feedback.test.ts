@@ -119,21 +119,29 @@ test("Jev feedback is default-off and consent is local, versioned, and revocable
   }
 });
 
-test("Jev task sanitization removes attachment lists and absolute paths", () => {
+test("Jev task sanitization removes attachment lists and local paths", () => {
   const task = [
-    "Review /Users/me/secret-project/src/app.ts and C:\\Users\\me\\secret\\app.ts",
+    "Review /Users/me/secret-project/src/app.ts, src/customer/acme.ts, ./private/config.json,",
+    '"C:\\Users\\Jane Doe\\secret app.ts", docs\\Customer Files\\roadmap.md, and ~/secret',
     "",
     "Attached local file(s) for inspection:",
     "- /Users/me/secret-project/private.txt",
     "Use the provider's local file inspection capability if available.",
   ].join("\n");
   const sanitized = sanitizeJevTask(task);
-  assert.doesNotMatch(sanitized, /Users|secret-project|Attached local file|private\.txt/);
-  assert.match(sanitized, /^Review \[local-path\] and \[local-path\]$/);
-  assert.equal(
-    sanitizeJevTask("Check /repo and https://example.com/docs"),
-    "Check [local-path] and https://example.com/docs",
+  assert.doesNotMatch(
+    sanitized,
+    /Users|secret-project|customer|private|Jane Doe|Customer Files|~\/secret|Attached local file/,
   );
+  assert.equal(
+    sanitized,
+    'Review [local-path], [local-path], [local-path],\n"[local-path]", [local-path], and [local-path]',
+  );
+  assert.equal(
+    sanitizeJevTask("Check /repo and https://example.com/docs plus http://localhost/file"),
+    "Check [local-path] and https://example.com/docs plus http://localhost/file",
+  );
+  assert.equal(sanitizeJevTask("Inspect src/app.ts?line=12"), "Inspect [local-path]");
 });
 
 test("post-run evaluation sends a bounded payload and stores validated feedback without secrets", async () => {
