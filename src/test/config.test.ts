@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import fs from "node:fs";
+import fs, { type PathLike } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -9,6 +9,7 @@ import {
   globalConfigPath,
   loadConfig,
   loadGlobalConfig,
+  updateGlobalConfig,
   writeGlobalConfig,
   writeProjectConfig,
 } from "../config.js";
@@ -53,6 +54,21 @@ test("loads and deeply merges project configuration", () => {
   }
 });
 
+test("normalizes unknown routing policy and agent values", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-config-invalid-routing-"));
+  try {
+    fs.writeFileSync(
+      path.join(dir, ".airo.json"),
+      JSON.stringify({ policy: "gemini-heavy", defaultAgent: "unknown-provider" }),
+    );
+    const loaded = loadConfig(dir).config;
+    assert.equal(loaded.policy, DEFAULT_CONFIG.policy);
+    assert.equal(loaded.defaultAgent, DEFAULT_CONFIG.defaultAgent);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("writes project and global configuration safely", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-config-write-"));
   const previousHome = process.env.HOME;
@@ -70,6 +86,91 @@ test("writes project and global configuration safely", () => {
     assert.equal(loadGlobalConfig().path, global);
     assert.equal(loadGlobalConfig().config.modelRouting.mode, "dynamic");
   } finally {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("updateGlobalConfig mutates the config currently on disk, not a stale snapshot", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-config-update-"));
+  const previousHome = process.env.HOME;
+  process.env.HOME = dir;
+  try {
+    writeGlobalConfig({ ...structuredClone(DEFAULT_CONFIG), policy: "codex-heavy" });
+    // Simulate a concurrent editor (e.g. `airo setup`) changing an unrelated
+    // field on disk after some other caller last read the config into
+    // memory. A mutate callback based on that stale in-memory copy must not
+    // be able to clobber this change: updateGlobalConfig always reads fresh.
+    writeGlobalConfig({
+      ...loadGlobalConfig().config,
+      permissions: { mode: "fullAccess", networkAccess: false },
+    });
+
+    const result = updateGlobalConfig((current) => ({ ...current, defaultAgent: "gemini" }));
+    assert.equal(result.permissions.mode, "fullAccess");
+    assert.equal(result.defaultAgent, "gemini");
+    assert.equal(loadGlobalConfig().config.permissions.mode, "fullAccess");
+    assert.equal(loadGlobalConfig().config.defaultAgent, "gemini");
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("updateGlobalConfig aborts instead of overwriting a save that lands mid-update", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-config-update-race-"));
+  const previousHome = process.env.HOME;
+  process.env.HOME = dir;
+  try {
+    writeGlobalConfig({ ...structuredClone(DEFAULT_CONFIG), policy: "codex-heavy" });
+    assert.throws(
+      () =>
+        updateGlobalConfig((current) => {
+          // Our lock only serializes cooperating callers — an external
+          // editor's direct save (simulated here) never takes it, so it can
+          // land after `mutate` was handed the config but before the write.
+          // updateGlobalConfig must notice and refuse to clobber it.
+          writeGlobalConfig({ ...current, policy: "claude-heavy" });
+          return { ...current, defaultAgent: "gemini" };
+        }),
+      /changed on disk/,
+    );
+    assert.equal(loadGlobalConfig().config.policy, "claude-heavy");
+    assert.equal(loadGlobalConfig().config.defaultAgent, "codex");
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("updateGlobalConfig preserves an editor save published during its commit", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-config-update-publish-race-"));
+  const previousHome = process.env.HOME;
+  const originalRename = fs.renameSync;
+  process.env.HOME = dir;
+  try {
+    const file = writeGlobalConfig({ ...structuredClone(DEFAULT_CONFIG), policy: "codex-heavy" });
+    let injected = false;
+    fs.renameSync = ((oldPath: PathLike, newPath: PathLike) => {
+      originalRename(oldPath, newPath);
+      if (!injected && oldPath === file && newPath === `${file}.update`) {
+        injected = true;
+        writeGlobalConfig({ ...structuredClone(DEFAULT_CONFIG), policy: "claude-heavy" });
+      }
+    }) as typeof fs.renameSync;
+
+    assert.throws(
+      () => updateGlobalConfig((current) => ({ ...current, defaultAgent: "gemini" })),
+      /changed on disk/,
+    );
+    assert.equal(injected, true);
+    assert.equal(loadGlobalConfig().config.policy, "claude-heavy");
+    assert.equal(loadGlobalConfig().config.defaultAgent, "codex");
+  } finally {
+    fs.renameSync = originalRename;
     if (previousHome === undefined) delete process.env.HOME;
     else process.env.HOME = previousHome;
     fs.rmSync(dir, { recursive: true, force: true });

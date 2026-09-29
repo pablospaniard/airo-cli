@@ -364,11 +364,32 @@ describe("sync Worker", () => {
     expect(await response.json()).toMatchObject({ error: { code: "export_item_too_large" } });
   });
 
-  it("revokes a token family when a rotated refresh token is reused", async () => {
+  async function refresh(refreshToken: string, rotationRequestId?: string): Promise<Response> {
+    return SELF.fetch("https://example.com/v1/auth/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refreshToken, rotationRequestId }),
+    });
+  }
+
+  async function statusFor(token: string): Promise<Response> {
+    return SELF.fetch("https://example.com/v1/sync/status", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  }
+
+  it("continues rotating the same session when a retry presents the same rotation request ID", async () => {
+    // A client retries /v1/auth/refresh with the same refreshToken and the
+    // same, client-persisted rotationRequestId whenever it never saw the
+    // previous response (dropped connection, timeout, crash) even though
+    // the server had already rotated the token. That must succeed again
+    // instead of being treated as a stolen-token replay, or a flaky network
+    // would permanently sign the user out.
     const timestamp = Math.floor(Date.now() / 1000);
     const refreshToken = "r".repeat(43);
+    const rotationRequestId = "attempt-1-".padEnd(20, "x");
     await env.DB.prepare(
-      "INSERT INTO sessions(id, family_id, user_id, device_id, token_hash, kind, expires_at, created_at, revoked_at) VALUES(?, ?, ?, ?, ?, 'refresh', ?, ?, ?)",
+      "INSERT INTO sessions(id, family_id, user_id, device_id, token_hash, kind, expires_at, created_at) VALUES(?, ?, ?, ?, ?, 'refresh', ?, ?)",
     )
       .bind(
         "refresh-test",
@@ -378,37 +399,209 @@ describe("sync Worker", () => {
         await hash(refreshToken),
         timestamp + 3600,
         timestamp,
-        null,
       )
       .run();
-    const rotated = await SELF.fetch("https://example.com/v1/auth/refresh", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refreshToken }),
+
+    const first = await refresh(refreshToken, rotationRequestId);
+    expect(first.status).toBe(200);
+    const firstTokens = await first.json<{ accessToken: string; refreshToken: string }>();
+    expect((await statusFor(firstTokens.accessToken)).status).toBe(200);
+
+    // The client never received `first`'s body and retries with the same
+    // (now-superseded) refresh token and the same rotationRequestId.
+    const retry = await refresh(refreshToken, rotationRequestId);
+    expect(retry.status).toBe(200);
+    const retryTokens = await retry.json<{ accessToken: string; refreshToken: string }>();
+    expect(retryTokens.refreshToken).not.toBe(firstTokens.refreshToken);
+
+    // The response the client never saw is superseded, but the retry's own
+    // pair works, and the account was not signed out of every device.
+    expect((await statusFor(firstTokens.accessToken)).status).toBe(401);
+    expect((await statusFor(retryTokens.accessToken)).status).toBe(200);
+
+    // The newest refresh token still rotates normally afterward.
+    expect((await refresh(retryTokens.refreshToken)).status).toBe(200);
+  });
+
+  it("keeps a session alive when two truly concurrent requests share the same rotation request ID", async () => {
+    // The client's own request timed out and it retried while the original
+    // was still being processed server-side — both requests race the same
+    // refreshToken and rotationRequestId at once. The loser must not revoke
+    // the winner's brand-new tokens just because it lost that race.
+    const timestamp = Math.floor(Date.now() / 1000);
+    const refreshToken = "r".repeat(43);
+    const rotationRequestId = "concurrent-".padEnd(20, "x");
+    await env.DB.prepare(
+      "INSERT INTO sessions(id, family_id, user_id, device_id, token_hash, kind, expires_at, created_at) VALUES(?, ?, ?, ?, ?, 'refresh', ?, ?)",
+    )
+      .bind(
+        "refresh-race",
+        "family-race",
+        "user-test",
+        "device-test",
+        await hash(refreshToken),
+        timestamp + 3600,
+        timestamp,
+      )
+      .run();
+
+    const responses = await Promise.all([
+      refresh(refreshToken, rotationRequestId),
+      refresh(refreshToken, rotationRequestId),
+    ]);
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    const [firstTokens, secondTokens] = await Promise.all(
+      responses.map((response) => response.json<{ accessToken: string; refreshToken: string }>()),
+    );
+    // Whichever pair is the live tip must still work; the account must not
+    // have been signed out of every device by the race.
+    const results = await Promise.all([
+      statusFor(firstTokens.accessToken),
+      statusFor(secondTokens.accessToken),
+    ]);
+    expect(results.map((response) => response.status).sort()).toEqual([200, 401]);
+  });
+
+  it("recovers a chain of several lost responses for the same rotation request ID", async () => {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const refreshToken = "r".repeat(43);
+    const rotationRequestId = "multi-hop-".padEnd(20, "x");
+    await env.DB.prepare(
+      "INSERT INTO sessions(id, family_id, user_id, device_id, token_hash, kind, expires_at, created_at) VALUES(?, ?, ?, ?, ?, 'refresh', ?, ?)",
+    )
+      .bind(
+        "refresh-chain",
+        "family-chain",
+        "user-test",
+        "device-test",
+        await hash(refreshToken),
+        timestamp + 3600,
+        timestamp,
+      )
+      .run();
+
+    // Three retries in a row with the same original (never-updated) token
+    // and request ID, as if every single response were lost — not just the
+    // first one.
+    let last: { accessToken: string; refreshToken: string } | undefined;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const response = await refresh(refreshToken, rotationRequestId);
+      expect(response.status).toBe(200);
+      last = await response.json<{ accessToken: string; refreshToken: string }>();
+    }
+    expect((await statusFor(last!.accessToken)).status).toBe(200);
+    expect((await refresh(last!.refreshToken)).status).toBe(200);
+  });
+
+  it("recovers a persisted refresh retry after more than a minute", async () => {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const refreshToken = "d".repeat(43);
+    const rotationRequestId = "delayed-retry-".padEnd(20, "x");
+    await env.DB.prepare(
+      "INSERT INTO sessions(id, family_id, user_id, device_id, token_hash, kind, expires_at, created_at) VALUES(?, ?, ?, ?, ?, 'refresh', ?, ?)",
+    )
+      .bind(
+        "refresh-delayed",
+        "family-delayed",
+        "user-test",
+        "device-test",
+        await hash(refreshToken),
+        timestamp + 3600,
+        timestamp,
+      )
+      .run();
+
+    expect((await refresh(refreshToken, rotationRequestId)).status).toBe(200);
+    await env.DB.prepare("UPDATE sessions SET revoked_at = ? WHERE id = ?")
+      .bind(timestamp - 3600, "refresh-delayed")
+      .run();
+    expect((await refresh(refreshToken, rotationRequestId)).status).toBe(200);
+  });
+
+  it("does not let an old retry cross a newer rotation request", async () => {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const refreshToken = "s".repeat(43);
+    const oldRequestId = "old-attempt-".padEnd(20, "x");
+    const newRequestId = "new-attempt-".padEnd(20, "x");
+    await env.DB.prepare(
+      "INSERT INTO sessions(id, family_id, user_id, device_id, token_hash, kind, expires_at, created_at) VALUES(?, ?, ?, ?, ?, 'refresh', ?, ?)",
+    )
+      .bind(
+        "refresh-superseded",
+        "family-superseded",
+        "user-test",
+        "device-test",
+        await hash(refreshToken),
+        timestamp + 3600,
+        timestamp,
+      )
+      .run();
+
+    expect((await refresh(refreshToken, oldRequestId)).status).toBe(200);
+    const retry = await refresh(refreshToken, oldRequestId);
+    const retryTokens = await retry.json<{ refreshToken: string }>();
+    const current = await refresh(retryTokens.refreshToken, newRequestId);
+    const currentTokens = await current.json<{ accessToken: string }>();
+
+    const delayed = await refresh(refreshToken, oldRequestId);
+    expect(delayed.status).toBe(409);
+    expect(await delayed.json()).toMatchObject({
+      error: { code: "refresh_retry_superseded" },
     });
+    expect((await statusFor(currentTokens.accessToken)).status).toBe(200);
+  });
+
+  it("revokes the family when a rotated refresh token is reused without a matching rotation request ID", async () => {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const refreshToken = "r".repeat(43);
+    const rotationRequestId = "attempt-1-".padEnd(20, "x");
+    await env.DB.prepare(
+      "INSERT INTO sessions(id, family_id, user_id, device_id, token_hash, kind, expires_at, created_at) VALUES(?, ?, ?, ?, ?, 'refresh', ?, ?)",
+    )
+      .bind(
+        "refresh-test",
+        "family-test",
+        "user-test",
+        "device-test",
+        await hash(refreshToken),
+        timestamp + 3600,
+        timestamp,
+      )
+      .run();
+    const rotated = await refresh(refreshToken, rotationRequestId);
     expect(rotated.status).toBe(200);
     const replacements = await rotated.json<{ accessToken: string }>();
-    expect(
-      (
-        await SELF.fetch("https://example.com/v1/sync/status", {
-          headers: { Authorization: `Bearer ${replacements.accessToken}` },
-        })
-      ).status,
-    ).toBe(200);
-    const response = await SELF.fetch("https://example.com/v1/auth/refresh", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refreshToken }),
-    });
+    expect((await statusFor(replacements.accessToken)).status).toBe(200);
+
+    // A different actor (or a client that never persisted its
+    // rotationRequestId) replays the same, now-superseded refresh token
+    // without the matching ID that would prove it is the same attempt.
+    const response = await refresh(refreshToken, "a-different-request-id");
     expect(response.status).toBe(401);
     expect(await response.json()).toMatchObject({ error: { code: "refresh_reused" } });
-    expect(
-      (
-        await SELF.fetch("https://example.com/v1/sync/status", {
-          headers: { Authorization: `Bearer ${replacements.accessToken}` },
-        })
-      ).status,
-    ).toBe(401);
+    expect((await statusFor(replacements.accessToken)).status).toBe(401);
+  });
+
+  it("revokes the family when a rotated refresh token is reused with no rotation request ID at all", async () => {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const refreshToken = "r".repeat(43);
+    await env.DB.prepare(
+      "INSERT INTO sessions(id, family_id, user_id, device_id, token_hash, kind, expires_at, created_at) VALUES(?, ?, ?, ?, ?, 'refresh', ?, ?)",
+    )
+      .bind(
+        "refresh-plain",
+        "family-plain",
+        "user-test",
+        "device-test",
+        await hash(refreshToken),
+        timestamp + 3600,
+        timestamp,
+      )
+      .run();
+    expect((await refresh(refreshToken)).status).toBe(200);
+    const response = await refresh(refreshToken);
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({ error: { code: "refresh_reused" } });
   });
 
   it("allows only one concurrent refresh and revokes its replacements on reuse", async () => {

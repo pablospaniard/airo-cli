@@ -118,6 +118,10 @@ function configuredModelIn(
   for (const agent of AGENTS) {
     for (const tier of ["fast", "balanced", "deep"] as const) {
       const model = config[agent].models[tier].model;
+      // "auto" is a provider sentinel, not a model name that users can pin.
+      // Matching it would turn ordinary text such as "auto-generated" into an
+      // explicit Gemini route and disable automatic provider fallback.
+      if (model.toLowerCase() === "auto") continue;
       const flexible = escapeRegex(model).replace(/[-._]+/g, "[-._\\s]+");
       const match = new RegExp(`\\b${flexible}\\b`, "i").exec(text);
       if (match) matches.push({ index: match.index, agent, model, tier });
@@ -297,8 +301,9 @@ export function routeTask(task: string, config: RouterConfig): RouteResult {
     if (capability.points)
       add(reasons, candidate, capability.points, capability.reasons.join(" + "));
   }
+  const configuredBiases = ROUTING_POLICY.configuredBiases[config.policy] ?? {};
   for (const candidate of AGENTS) {
-    const bias = ROUTING_POLICY.configuredBiases[config.policy][candidate] ?? 0;
+    const bias = configuredBiases[candidate] ?? 0;
     if (bias) add(reasons, candidate, bias, `${config.policy} policy`);
   }
 

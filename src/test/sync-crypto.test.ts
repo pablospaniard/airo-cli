@@ -30,6 +30,17 @@ test("encrypts sync records with authenticated context", () => {
   );
 });
 
+test("rejects a truncated authentication tag instead of accepting a weak forgery", () => {
+  const key = createAccountKey();
+  const envelope = encryptSyncPayload(key, { id: "record-one" }, "event:history:record-one");
+  const tagBytes = Buffer.from(envelope.tag, "base64url");
+  const truncated = { ...envelope, tag: tagBytes.subarray(0, 4).toString("base64url") };
+  assert.throws(
+    () => decryptSyncPayload(key, truncated, "event:history:record-one"),
+    /authentication tag/,
+  );
+});
+
 test("wraps account keys for passphrase recovery", () => {
   const key = createAccountKey();
   const wrapped = wrapAccountKey(key, PASSPHRASE);

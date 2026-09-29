@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import type { RouterConfig } from "./types.js";
+import crypto from "node:crypto";
+import type { Agent, Policy, RouterConfig } from "./types.js";
+import { withFileLock } from "./file-lock.js";
+import { dataRootDir } from "./paths.js";
 
 export const CONFIG_NOTE =
   "AIRO discovers provider models automatically. Set modelRouting.mode to manual to pin the provider tier mappings below.";
@@ -69,6 +72,17 @@ export const DEFAULT_CONFIG: RouterConfig = {
   rules: [],
 };
 
+const POLICIES = new Set<Policy>(["balanced", "claude-heavy", "codex-heavy"]);
+const AGENTS = new Set<Agent>(["claude", "codex", "gemini", "copilot"]);
+
+export function validPolicy(value: unknown): value is Policy {
+  return typeof value === "string" && POLICIES.has(value as Policy);
+}
+
+export function validAgent(value: unknown): value is Agent {
+  return typeof value === "string" && AGENTS.has(value as Agent);
+}
+
 export function configCandidates(cwd = process.cwd()): string[] {
   return [
     path.join(cwd, ".airo.json"),
@@ -99,6 +113,10 @@ function mergeConfig(parsed: any, sourceFile?: string): RouterConfig {
   const config: RouterConfig = {
     ...DEFAULT_CONFIG,
     ...parsed,
+    policy: validPolicy(parsed.policy) ? parsed.policy : DEFAULT_CONFIG.policy,
+    defaultAgent: validAgent(parsed.defaultAgent)
+      ? parsed.defaultAgent
+      : DEFAULT_CONFIG.defaultAgent,
     claude: mergeProvider(DEFAULT_CONFIG.claude, parsed.claude),
     codex: mergeProvider(DEFAULT_CONFIG.codex, parsed.codex),
     gemini: mergeProvider(DEFAULT_CONFIG.gemini, parsed.gemini),
@@ -134,9 +152,14 @@ export function loadConfig(cwd = process.cwd()): { config: RouterConfig; path?: 
 /** Load only account-wide configuration, never a repository override. */
 export function loadGlobalConfig(): { config: RouterConfig; path?: string } {
   const file = globalConfigPath();
-  if (!fs.existsSync(file)) return { config: DEFAULT_CONFIG };
+  const readable = fs.existsSync(file)
+    ? file
+    : fs.existsSync(`${file}.update`)
+      ? `${file}.update`
+      : undefined;
+  if (!readable) return { config: DEFAULT_CONFIG };
   return {
-    config: mergeConfig(JSON.parse(fs.readFileSync(file, "utf8")), file),
+    config: mergeConfig(JSON.parse(fs.readFileSync(readable, "utf8")), file),
     path: file,
   };
 }
@@ -154,6 +177,100 @@ export function writeProjectConfig(cwd = process.cwd()): string {
 export function writeGlobalConfig(config: RouterConfig): string {
   const file = globalConfigPath();
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify({ _comment: CONFIG_NOTE, ...config }, null, 2) + "\n");
+  const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(
+      temporary,
+      JSON.stringify({ _comment: CONFIG_NOTE, ...config }, null, 2) + "\n",
+      {
+        flag: "wx",
+        mode: 0o600,
+      },
+    );
+    fs.renameSync(temporary, file);
+  } finally {
+    try {
+      fs.unlinkSync(temporary);
+    } catch {}
+  }
   return file;
+}
+
+/**
+ * Reads the current global config, lets `mutate` compute the next value from
+ * that fresh read, and writes the result — all under one lock. A plain
+ * load-then-later-write (reading at the start of a long operation and
+ * writing at the end) can silently discard an edit made in between, such as
+ * a concurrent `airo setup` run or sync applying remote settings. Every
+ * caller that reads the global config only to write back a derived value
+ * should go through this instead of pairing loadGlobalConfig/writeGlobalConfig
+ * directly.
+ *
+ * The lock serializes cooperating callers. Publication also moves the exact
+ * file we read to a recovery path and creates the replacement with an
+ * exclusive hard link. An editor save before the move changes the captured
+ * bytes; a save during the move occupies the destination. Both become a
+ * conflict instead of being overwritten.
+ */
+export function updateGlobalConfig(mutate: (config: RouterConfig) => RouterConfig): RouterConfig {
+  return withFileLock(path.join(dataRootDir(), "global-config.lock"), () => {
+    const file = globalConfigPath();
+    const recovery = `${file}.update`;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    if (fs.existsSync(recovery)) {
+      if (!fs.existsSync(file)) fs.linkSync(recovery, file);
+      fs.unlinkSync(recovery);
+    }
+    const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : undefined;
+    const current = before
+      ? mergeConfig(JSON.parse(before), file)
+      : structuredClone(DEFAULT_CONFIG);
+    const next = mutate(current);
+    const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    fs.writeFileSync(
+      temporary,
+      JSON.stringify({ _comment: CONFIG_NOTE, ...next }, null, 2) + "\n",
+      { flag: "wx", mode: 0o600 },
+    );
+    let captured = false;
+    try {
+      if (before === undefined) {
+        try {
+          fs.linkSync(temporary, file);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+          throw new Error(
+            `${file} changed on disk while it was being updated; no changes were written.`,
+          );
+        }
+      } else {
+        fs.renameSync(file, recovery);
+        captured = true;
+        if (fs.readFileSync(recovery, "utf8") !== before)
+          throw new Error(
+            `${file} changed on disk while it was being updated; no changes were written.`,
+          );
+        try {
+          fs.linkSync(temporary, file);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+          throw new Error(
+            `${file} changed on disk while it was being updated; no changes were written.`,
+          );
+        }
+      }
+      return next;
+    } finally {
+      if (captured && !fs.existsSync(file))
+        try {
+          fs.linkSync(recovery, file);
+        } catch {}
+      try {
+        fs.unlinkSync(recovery);
+      } catch {}
+      try {
+        fs.unlinkSync(temporary);
+      } catch {}
+    }
+  });
 }

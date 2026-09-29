@@ -14,6 +14,7 @@ import { dataRootDir } from "./paths.js";
 import { enrichHistoryRecord, extractTaskFeatures } from "./evaluation.js";
 import { resolveRepositoryIdentity } from "./repository.js";
 import { withFileLock, withFileLocks } from "./file-lock.js";
+import { recordSyncDeletions } from "./sync-deletions.js";
 
 export const HISTORY_SCHEMA_VERSION = 1;
 export const FEEDBACK_SCHEMA_VERSION = 1;
@@ -243,7 +244,7 @@ export function updateHistoryRecord(
     const records = readHistory(config);
     const index = records.findIndex((record) => record.id === id);
     if (index < 0) return undefined;
-    records[index] = update(records[index]);
+    records[index] = { ...update(records[index]), updatedAt: new Date().toISOString() };
     writeHistory(file, records);
     return records[index];
   });
@@ -277,7 +278,12 @@ export function setFeedback(
     if (!targets.length) throw new Error(`History item or run ${id} not found.`);
 
     for (const index of targets) {
-      records[index] = { ...records[index], feedback: rating, feedbackNote: note };
+      records[index] = {
+        ...records[index],
+        feedback: rating,
+        feedbackNote: note,
+        updatedAt: new Date().toISOString(),
+      };
     }
     writeHistory(file, records);
     return targets.map((i) => records[i]);
@@ -515,11 +521,20 @@ export function resetLearning(config: HistoryConfig): number {
   const feedbackFile = feedbackPath(config);
   const historyFile = historyPath(config);
   return withFileLocks([`${historyFile}.lock`, `${feedbackFile}.lock`], () => {
-    const count = readFeedback(config).length;
-    if (fs.existsSync(feedbackFile)) fs.unlinkSync(feedbackFile);
-    const records = readHistory(config).map(
-      ({ feedback: _feedback, feedbackNote: _note, ...record }) => record,
+    const feedback = readFeedback(config);
+    const count = feedback.length;
+    recordSyncDeletions(
+      historyFile,
+      "feedback",
+      feedback.map((record) => record.id),
     );
+    if (fs.existsSync(feedbackFile)) fs.unlinkSync(feedbackFile);
+    const updatedAt = new Date().toISOString();
+    const records = readHistory(config).map((record) => {
+      if (record.feedback === undefined && record.feedbackNote === undefined) return record;
+      const { feedback: _feedback, feedbackNote: _note, ...withoutFeedback } = record;
+      return { ...withoutFeedback, updatedAt };
+    });
     if (records.length) writeHistory(historyFile, records);
     return count;
   });

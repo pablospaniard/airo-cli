@@ -4,11 +4,23 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { loadGlobalConfig, writeGlobalConfig } from "./config.js";
+import {
+  DEFAULT_CONFIG,
+  loadGlobalConfig,
+  updateGlobalConfig,
+  validAgent,
+  validPolicy,
+} from "./config.js";
 import { dataRootDir } from "./paths.js";
-import { feedbackPath, historyPath, readFeedback, readHistory } from "./history.js";
-import { jevFeedbackPath, readJevFeedback } from "./jev-feedback.js";
+import { feedbackPath, historyPath } from "./history.js";
+import { jevFeedbackPath } from "./jev-feedback.js";
 import { withFileLock, withFileLockAsync, withFileLocks } from "./file-lock.js";
+import {
+  acknowledgeSyncDeletions,
+  readSyncDeletions,
+  syncDeletionJournalPath,
+  type SyncDeletion,
+} from "./sync-deletions.js";
 import type { RouterConfig } from "./types.js";
 import {
   createAccountKey,
@@ -26,6 +38,13 @@ interface Credentials {
   accessToken: string;
   refreshToken: string;
   accountKey?: string;
+  // Set right before sending a refresh request, before the network call, and
+  // cleared once that rotation succeeds. If the process crashes or the
+  // response never arrives, the same value survives on disk so a later
+  // retry (even from a new process) can send it again and let the server
+  // recognize this exact attempt, instead of the retry looking identical to
+  // a stolen refresh token being replayed.
+  pendingRefreshRequestId?: string;
 }
 
 type SyncDataKind = "history" | "feedback" | "jev-feedback";
@@ -340,6 +359,7 @@ function credentialStoreForState(
 }
 
 function resetSyncProgress(state: SyncState): void {
+  state.enabled = false;
   state.cursor = 0;
   delete state.settingsRevision;
   delete state.settingsDigest;
@@ -380,7 +400,10 @@ export function safeSyncSettings(config: RouterConfig): Record<string, unknown> 
   };
 }
 
-function applySafeSettings(config: RouterConfig, value: Record<string, unknown>): RouterConfig {
+export function applySafeSettings(
+  config: RouterConfig,
+  value: Record<string, unknown>,
+): RouterConfig {
   const providers = value.providers as
     | Record<string, { models?: RouterConfig["claude"]["models"]; defaultModel?: string }>
     | undefined;
@@ -388,42 +411,52 @@ function applySafeSettings(config: RouterConfig, value: Record<string, unknown>)
   const orchestration = (value.orchestration ?? {}) as Partial<RouterConfig["orchestration"]>;
   return {
     ...config,
-    ...(typeof value.policy === "string" ? { policy: value.policy as RouterConfig["policy"] } : {}),
-    ...(typeof value.defaultAgent === "string"
-      ? { defaultAgent: value.defaultAgent as RouterConfig["defaultAgent"] }
-      : {}),
+    policy: validPolicy(value.policy) ? value.policy : DEFAULT_CONFIG.policy,
+    defaultAgent: validAgent(value.defaultAgent) ? value.defaultAgent : DEFAULT_CONFIG.defaultAgent,
     modelRouting: ["dynamic", "manual"].includes(
       String((value.modelRouting as { mode?: unknown } | undefined)?.mode),
     )
       ? (value.modelRouting as RouterConfig["modelRouting"])
       : config.modelRouting,
+    // safeSyncSettings always writes a *complete* snapshot of these
+    // sections, never a partial diff. So a field missing from a pulled
+    // `value` means another device removed it, not that this device should
+    // keep its old local value for it — merging against local config here
+    // would silently resurrect the removed value and push it right back out
+    // on this device's next sync. Default missing fields from DEFAULT_CONFIG
+    // instead, and only fall back to local config for fields that are never
+    // synced in the first place (below).
     history: {
-      ...config.history,
+      ...DEFAULT_CONFIG.history,
       ...history,
       path: config.history.path,
       enabled: config.history.enabled,
     },
-    orchestration: { ...config.orchestration, ...orchestration },
+    orchestration: { ...DEFAULT_CONFIG.orchestration, ...orchestration },
     rules: Array.isArray(value.rules) ? (value.rules as RouterConfig["rules"]) : config.rules,
     claude: {
       ...config.claude,
       ...providers?.claude,
-      models: providers?.claude?.models ?? config.claude.models,
+      models: providers?.claude?.models ?? DEFAULT_CONFIG.claude.models,
+      defaultModel: providers?.claude?.defaultModel,
     },
     codex: {
       ...config.codex,
       ...providers?.codex,
-      models: providers?.codex?.models ?? config.codex.models,
+      models: providers?.codex?.models ?? DEFAULT_CONFIG.codex.models,
+      defaultModel: providers?.codex?.defaultModel,
     },
     gemini: {
       ...config.gemini,
       ...providers?.gemini,
-      models: providers?.gemini?.models ?? config.gemini.models,
+      models: providers?.gemini?.models ?? DEFAULT_CONFIG.gemini.models,
+      defaultModel: providers?.gemini?.defaultModel,
     },
     copilot: {
       ...config.copilot,
       ...providers?.copilot,
-      models: providers?.copilot?.models ?? config.copilot.models,
+      models: providers?.copilot?.models ?? DEFAULT_CONFIG.copilot.models,
+      defaultModel: providers?.copilot?.defaultModel,
     },
   };
 }
@@ -447,19 +480,28 @@ async function api<T>(
   const retryable = (init.method ?? "GET").toUpperCase() === "GET" || route === "/v1/auth/github";
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const response = retryable ? await retryTransientFetch(request) : await request();
-    const body = (await response.json()) as T & { error?: { message?: string } };
-    if (response.ok) return body;
-    if (response.status === 429 && attempt < 4) {
+    const transientStatus = response.status === 429 || (retryable && response.status >= 500);
+    if (transientStatus && attempt < 4) {
       const retryAfter = Number(response.headers.get("retry-after") ?? 0);
+      await response.body?.cancel().catch(() => undefined);
       await new Promise((resolve) =>
         setTimeout(resolve, Math.max(250 * 2 ** attempt, retryAfter * 1000)),
       );
       continue;
     }
+    const raw = await response.text();
+    let body: (T & { error?: { message?: string; code?: string } }) | undefined;
+    try {
+      body = JSON.parse(raw) as T & { error?: { message?: string; code?: string } };
+    } catch {
+      if (response.ok)
+        throw new SyncApiError("Sync service returned an invalid JSON response.", response.status);
+    }
+    if (response.ok) return body!;
     throw new SyncApiError(
-      body.error?.message ?? `Sync service returned HTTP ${response.status}.`,
+      body?.error?.message ?? `Sync service returned HTTP ${response.status}.`,
       response.status,
-      (body.error as { code?: string } | undefined)?.code,
+      body?.error?.code,
     );
   }
   throw new Error("Sync request retries were exhausted.");
@@ -486,16 +528,28 @@ async function authenticated<T>(
         if (current.accessToken !== attemptedAccessToken) {
           return current;
         }
+        // Reuse the same request ID across a retry of this exact rotation
+        // (see the Credentials.pendingRefreshRequestId comment); only a
+        // genuinely new rotation attempt gets a fresh one. Persist it before
+        // the network call so it survives a crash while the request is in
+        // flight.
+        const rotationRequestId = current.pendingRefreshRequestId ?? crypto.randomUUID();
+        if (current.pendingRefreshRequestId !== rotationRequestId)
+          store.save({ ...current, pendingRefreshRequestId: rotationRequestId });
         const refreshed = await api<{ accessToken: string; refreshToken: string }>(
           state,
           "/v1/auth/refresh",
           {
             method: "POST",
-            body: JSON.stringify({ refreshToken: current.refreshToken }),
+            body: JSON.stringify({ refreshToken: current.refreshToken, rotationRequestId }),
           },
         ).catch(() => undefined);
         if (!refreshed) throw error;
-        credentials = { ...current, ...refreshed };
+        credentials = {
+          ...current,
+          ...refreshed,
+          pendingRefreshRequestId: undefined,
+        };
         store.save(credentials);
         return credentials;
       },
@@ -722,21 +776,48 @@ type LocalSyncRecord = {
   record: { id: string; timestamp?: string; repositoryId?: string };
 };
 
-function localRecords(config: RouterConfig): LocalSyncRecord[] {
+function readSyncRecords(file: string, kind: SyncDataKind): LocalSyncRecord[] {
+  if (!fs.existsSync(file)) return [];
+  const records: LocalSyncRecord[] = [];
+  for (const [index, line] of fs.readFileSync(file, "utf8").split(/\r?\n/).entries()) {
+    if (!line) continue;
+    let record: unknown;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      throw new Error(`Sync source ${file} contains invalid JSON on line ${index + 1}.`);
+    }
+    if (
+      !record ||
+      typeof record !== "object" ||
+      typeof (record as { id?: unknown }).id !== "string"
+    )
+      throw new Error(`Sync source ${file} contains an invalid record on line ${index + 1}.`);
+    records.push({ kind, record: record as LocalSyncRecord["record"] });
+  }
+  return records;
+}
+
+function localSnapshot(config: RouterConfig): {
+  records: LocalSyncRecord[];
+  deletions: SyncDeletion[];
+} {
+  const historyFile = historyPath(config.history);
   return withFileLocks(
     [
-      `${historyPath(config.history)}.lock`,
+      `${historyFile}.lock`,
       `${feedbackPath(config.history)}.lock`,
       `${jevFeedbackPath(config.history)}.lock`,
+      `${syncDeletionJournalPath(historyFile)}.lock`,
     ],
-    () => [
-      ...readHistory(config.history).map((record) => ({ kind: "history" as const, record })),
-      ...readFeedback(config.history).map((record) => ({ kind: "feedback" as const, record })),
-      ...readJevFeedback(config.history).map((record) => ({
-        kind: "jev-feedback" as const,
-        record,
-      })),
-    ],
+    () => ({
+      records: [
+        ...readSyncRecords(historyFile, "history"),
+        ...readSyncRecords(feedbackPath(config.history), "feedback"),
+        ...readSyncRecords(jevFeedbackPath(config.history), "jev-feedback"),
+      ],
+      deletions: readSyncDeletions(historyFile),
+    }),
   );
 }
 
@@ -754,11 +835,12 @@ function recordManifest(records: LocalSyncRecord[], key: Buffer): SyncRecordMani
   return manifest;
 }
 
-function localEvents(
+function* localEvents(
   records: LocalSyncRecord[],
   key: Buffer,
   previous: SyncRecordManifest = {},
-): SyncEvent[] {
+  deletions: SyncDeletion[] = [],
+): Generator<SyncEvent> {
   const make = (
     kind: SyncDataKind,
     record: { id: string; timestamp?: string; repositoryId?: string },
@@ -775,23 +857,32 @@ function localEvents(
     };
   };
   const current = recordManifest(records, key);
-  const events = records
-    .filter(({ kind, record }) => previous[kind]?.[record.id] !== current[kind]?.[record.id])
-    .map(({ kind, record }) => make(kind, record));
-  for (const kind of ["history", "feedback", "jev-feedback"] as const) {
-    for (const [id, deletedVersion] of Object.entries(previous[kind] ?? {})) {
-      if (current[kind]?.[id]) continue;
-      const tombstone = { id, targetKind: kind, deletedVersion };
-      events.push({
-        id,
-        version: operationVersion(key),
-        kind: "tombstone",
-        createdAt: Math.floor(Date.now() / 1000),
-        envelope: encryptSyncPayload(key, tombstone, `event:tombstone:${id}`),
-      });
-    }
+  for (const { kind, record } of records)
+    if (previous[kind]?.[record.id] !== current[kind]?.[record.id]) yield make(kind, record);
+  for (const { kind, id } of deletions) {
+    const deletedVersion = previous[kind]?.[id];
+    if (!deletedVersion || current[kind]?.[id]) continue;
+    const tombstone = { id, targetKind: kind, deletedVersion };
+    yield {
+      id,
+      version: operationVersion(key),
+      kind: "tombstone",
+      createdAt: Math.floor(Date.now() / 1000),
+      envelope: encryptSyncPayload(key, tombstone, `event:tombstone:${id}`),
+    };
   }
-  return events;
+}
+
+function tombstoneDeletions(events: SyncEvent[], key: Buffer): SyncDeletion[] {
+  return events.flatMap((event) => {
+    if (event.kind !== "tombstone") return [];
+    const tombstone = decryptSyncPayload<{ id: string; targetKind: SyncDataKind }>(
+      key,
+      event.envelope,
+      eventContext(event),
+    );
+    return [{ kind: tombstone.targetKind, id: tombstone.id }];
+  });
 }
 
 function readJsonLines<T extends { id: string }>(file: string): Map<string, T> {
@@ -825,31 +916,36 @@ function syncFile(config: RouterConfig, kind: SyncDataKind): string {
   return jevFeedbackPath(config.history);
 }
 
-function applyEventPage(
-  config: RouterConfig,
+type SyncOperation = { id: string; record?: { id: string } };
+type SyncOperations = Map<SyncDataKind, Map<string, SyncOperation>>;
+
+function collectEventPage(
   key: Buffer,
   events: SyncEvent[],
-  previous: SyncRecordManifest = {},
-): { changed: number; manifest: SyncRecordManifest } {
-  const manifest = structuredClone(previous);
-  const operations = new Map<SyncDataKind, Map<string, { id: string; record?: { id: string } }>>();
-  const add = (kind: SyncDataKind, operation: { id: string; record?: { id: string } }) => {
+  manifest: SyncRecordManifest,
+  operations: SyncOperations,
+): void {
+  const add = (kind: SyncDataKind, operation: SyncOperation) => {
     const current = operations.get(kind) ?? new Map();
     current.set(operation.id, operation);
     operations.set(kind, current);
   };
   for (const event of events) {
     if (event.kind === "tombstone") {
-      const tombstone = decryptSyncPayload<{ id: string; targetKind: SyncDataKind }>(
-        key,
-        event.envelope,
-        eventContext(event),
-      );
+      const tombstone = decryptSyncPayload<{
+        id: string;
+        targetKind: SyncDataKind;
+        deletedVersion: string;
+      }>(key, event.envelope, eventContext(event));
       if (
         tombstone.id !== event.id ||
-        !["history", "feedback", "jev-feedback"].includes(tombstone.targetKind)
+        !["history", "feedback", "jev-feedback"].includes(tombstone.targetKind) ||
+        typeof tombstone.deletedVersion !== "string"
       )
         throw new Error(`Sync tombstone ${event.id} failed validation.`);
+      // Deletions are conditional on the version their author observed. This
+      // prevents an offline device from deleting a newer edit from another one.
+      if (manifest[tombstone.targetKind]?.[event.id] !== tombstone.deletedVersion) continue;
       add(tombstone.targetKind, { id: event.id });
       delete manifest[tombstone.targetKind]?.[event.id];
       continue;
@@ -860,6 +956,14 @@ function applyEventPage(
     add(event.kind, { id: event.id, record });
     (manifest[event.kind] ??= {})[event.id] = recordVersion(key, record);
   }
+}
+
+function applyCollectedEvents(
+  config: RouterConfig,
+  key: Buffer,
+  operations: SyncOperations,
+  previous: SyncRecordManifest,
+): number {
   let changed = 0;
   for (const [kind, kindOperations] of operations) {
     const file = syncFile(config, kind);
@@ -890,11 +994,14 @@ function applyEventPage(
       return kindChanged;
     });
   }
-  return { changed, manifest };
+  return changed;
 }
 
-function eventBatches(events: SyncEvent[], maxBytes = 900_000, maxEvents = 100): string[] {
-  const bodies: string[] = [];
+function* eventBatches(
+  events: Iterable<SyncEvent>,
+  maxBytes = 900_000,
+  maxEvents = 100,
+): Generator<string> {
   let batch: SyncEvent[] = [];
   for (const event of events) {
     const candidate = [...batch, event];
@@ -904,14 +1011,13 @@ function eventBatches(events: SyncEvent[], maxBytes = 900_000, maxEvents = 100):
       continue;
     }
     if (!batch.length) throw new Error(`Sync event ${event.id} exceeds the request size limit.`);
-    bodies.push(JSON.stringify({ events: batch }));
+    yield JSON.stringify({ events: batch });
     batch = [event];
     const single = JSON.stringify({ events: batch });
     if (Buffer.byteLength(single) > maxBytes)
       throw new Error(`Sync event ${event.id} exceeds the request size limit.`);
   }
-  if (batch.length) bodies.push(JSON.stringify({ events: batch }));
-  return bodies;
+  if (batch.length) yield JSON.stringify({ events: batch });
 }
 
 function manifestAfterEvents(
@@ -922,16 +1028,18 @@ function manifestAfterEvents(
   const manifest = structuredClone(previous ?? {});
   for (const event of events) {
     if (event.kind === "tombstone") {
-      const tombstone = decryptSyncPayload<{ id: string; targetKind: SyncDataKind }>(
-        key,
-        event.envelope,
-        eventContext(event),
-      );
+      const tombstone = decryptSyncPayload<{
+        id: string;
+        targetKind: SyncDataKind;
+        deletedVersion: string;
+      }>(key, event.envelope, eventContext(event));
       if (
         tombstone.id !== event.id ||
-        !["history", "feedback", "jev-feedback"].includes(tombstone.targetKind)
+        !["history", "feedback", "jev-feedback"].includes(tombstone.targetKind) ||
+        typeof tombstone.deletedVersion !== "string"
       )
         throw new Error(`Sync tombstone ${event.id} failed validation.`);
+      if (manifest[tombstone.targetKind]?.[event.id] !== tombstone.deletedVersion) continue;
       delete manifest[tombstone.targetKind]?.[event.id];
       continue;
     }
@@ -975,6 +1083,7 @@ async function syncNowUnlocked(
   // catch records written while that request was in flight.
   for (let cycle = 0; cycle < 2; cycle += 1) {
     if (state.pendingEvents?.length) {
+      const pendingEvents = state.pendingEvents;
       for (const body of eventBatches(state.pendingEvents)) {
         const result = await authenticated<{ accepted: number }>(state, store, "/v1/sync/push", {
           method: "POST",
@@ -982,6 +1091,7 @@ async function syncNowUnlocked(
         });
         pushed += result.accepted;
       }
+      acknowledgeSyncDeletions(recordsPath, tombstoneDeletions(pendingEvents, key));
       state.records =
         state.pendingRecords ?? manifestAfterEvents(state.records, state.pendingEvents, key);
       state.recordsPath = state.pendingRecordsPath ?? recordsPath;
@@ -991,23 +1101,18 @@ async function syncNowUnlocked(
       writeState(state);
       continue;
     }
-    const records = localRecords(syncConfig);
-    const nextManifest = recordManifest(records, key);
+    const snapshot = localSnapshot(syncConfig);
+    const nextManifest = recordManifest(snapshot.records, key);
     const previousManifest = state.recordsPath === recordsPath ? state.records : undefined;
-    const events = localEvents(records, key, previousManifest);
-    if (!events.length) {
-      if (state.recordsPath !== recordsPath) {
-        state.records = nextManifest;
-        state.recordsPath = recordsPath;
-        writeState(state);
-      }
-      break;
-    }
     if (state.recordsPath !== recordsPath) {
       state.records = {};
       state.recordsPath = recordsPath;
     }
-    for (const body of eventBatches(events)) {
+    let hadEvents = false;
+    for (const body of eventBatches(
+      localEvents(snapshot.records, key, previousManifest, snapshot.deletions),
+    )) {
+      hadEvents = true;
       const batch = (JSON.parse(body) as { events: SyncEvent[] }).events;
       // Persist only the bounded request currently in flight. A crash after
       // the server accepts it safely retries the same operation versions.
@@ -1019,37 +1124,56 @@ async function syncNowUnlocked(
         body,
       });
       pushed += result.accepted;
+      acknowledgeSyncDeletions(recordsPath, tombstoneDeletions(batch, key));
       state.records = manifestAfterEvents(state.records, batch, key);
       state.recordsPath = recordsPath;
       delete state.pendingEvents;
       delete state.pendingRecordsPath;
       writeState(state);
     }
+    if (!hadEvents) {
+      if (state.recordsPath !== recordsPath || state.records === undefined) {
+        state.records = nextManifest;
+        state.recordsPath = recordsPath;
+        writeState(state);
+      }
+      break;
+    }
   }
   let pulled = 0;
   let hasMore = true;
+  let pullCursor = state.cursor;
+  const pullBaseline = structuredClone(state.records ?? {});
+  const pulledManifest = structuredClone(pullBaseline);
+  const pulledOperations: SyncOperations = new Map();
   while (hasMore) {
     const result = await authenticated<{ events: SyncEvent[]; cursor: number; hasMore: boolean }>(
       state,
       store,
-      `/v1/sync/pull?cursor=${state.cursor}&limit=100`,
+      `/v1/sync/pull?cursor=${pullCursor}&limit=100`,
     );
-    const applied = applyEventPage(syncConfig, key, result.events, state.records);
-    pulled += applied.changed;
-    state.records = applied.manifest;
-    state.recordsPath = recordsPath;
-    state.cursor = result.cursor;
-    writeState(state);
+    collectEventPage(key, result.events, pulledManifest, pulledOperations);
+    if (result.hasMore && result.cursor <= pullCursor)
+      throw new Error("Sync pull did not advance its cursor.");
+    pullCursor = result.cursor;
     hasMore = result.hasMore;
   }
+  pulled = applyCollectedEvents(syncConfig, key, pulledOperations, pullBaseline);
+  state.records = pulledManifest;
+  state.recordsPath = recordsPath;
+  state.cursor = pullCursor;
+  writeState(state);
 
   // Repository overrides affect the current run and its local history, but
   // account-wide cloud settings always originate from the global config.
-  const localSettings = safeSyncSettings(globalConfig);
-  const localDigest = digest(localSettings);
+  // Record sync can involve several network round trips. Reload immediately
+  // before reconciling settings so edits made during that earlier work are
+  // considered local changes instead of being silently replaced or omitted.
   let racedCreatingSettings = false;
   for (let attempt = 0; ; attempt += 1) {
     try {
+      const localSettings = safeSyncSettings(loadGlobalConfig().config);
+      const localDigest = digest(localSettings);
       const remote = await authenticated<{
         settings: Array<{ key: string; revision: number; envelope: SyncEnvelope }>;
       }>(state, store, "/v1/settings");
@@ -1097,7 +1221,16 @@ async function syncNowUnlocked(
           state.settingsDigest = localDigest;
         } else {
           if (localDigest !== remoteDigest)
-            writeGlobalConfig(applySafeSettings(globalConfig, remoteSettings));
+            updateGlobalConfig((current) => {
+              // The settings GET above is another race window. Refuse to apply
+              // the remote snapshot if a local edit landed after the fresh read;
+              // the next sync can then reconcile it normally without data loss.
+              if (digest(safeSyncSettings(current)) !== localDigest)
+                throw new Error(
+                  "Routing settings changed locally while sync was in progress; no settings were overwritten.",
+                );
+              return applySafeSettings(current, remoteSettings);
+            });
           state.settingsRevision = routing.revision;
           state.settingsDigest = remoteDigest;
         }
@@ -1139,7 +1272,7 @@ export function syncStatus(allowFile = false): {
   }
 }
 
-export async function syncDevices(allowFile = false): Promise<
+async function syncDevicesUnlocked(allowFile = false): Promise<
   Array<{
     id: string;
     name: string;
@@ -1163,7 +1296,19 @@ export async function syncDevices(allowFile = false): Promise<
   ).devices;
 }
 
-export async function syncRevokeDevice(deviceId: string, allowFile = false): Promise<void> {
+export function syncDevices(allowFile = false): Promise<
+  Array<{
+    id: string;
+    name: string;
+    lastSeenAt: number;
+    revokedAt: number | null;
+    current: boolean;
+  }>
+> {
+  return withSyncOperationLock(() => syncDevicesUnlocked(allowFile));
+}
+
+async function syncRevokeDeviceUnlocked(deviceId: string, allowFile = false): Promise<void> {
   if (!/^[a-zA-Z0-9:_-]{8,128}$/.test(deviceId)) throw new Error("Invalid device ID.");
   const state = readState();
   if (!state) throw new Error("Sync is not configured.");
@@ -1172,7 +1317,11 @@ export async function syncRevokeDevice(deviceId: string, allowFile = false): Pro
   });
 }
 
-export async function exportCloudData(
+export function syncRevokeDevice(deviceId: string, allowFile = false): Promise<void> {
+  return withSyncOperationLock(() => syncRevokeDeviceUnlocked(deviceId, allowFile));
+}
+
+async function exportCloudDataUnlocked(
   output: string,
   options: { allowFile?: boolean; overwrite?: boolean } = {},
 ): Promise<string> {
@@ -1253,6 +1402,13 @@ export async function exportCloudData(
   } finally {
     fs.rmSync(spoolDirectory, { recursive: true, force: true });
   }
+}
+
+export function exportCloudData(
+  output: string,
+  options: { allowFile?: boolean; overwrite?: boolean } = {},
+): Promise<string> {
+  return withSyncOperationLock(() => exportCloudDataUnlocked(output, options));
 }
 
 async function syncLogoutUnlocked(allowFile = false): Promise<void> {

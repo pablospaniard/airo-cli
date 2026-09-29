@@ -8,7 +8,10 @@ import { sameBootIdentity, withFileLock, withFileLockAsync, withFileLocks } from
 test("treats nearby uptime estimates as the same boot", () => {
   assert.equal(sameBootIdentity("uptime:1000", "uptime:1001"), true);
   assert.equal(sameBootIdentity("uptime:1000", "uptime:1300"), true);
-  assert.equal(sameBootIdentity("uptime:1000", "uptime:1301"), false);
+  assert.equal(sameBootIdentity("uptime:1000", "uptime:1301"), true);
+  assert.equal(sameBootIdentity("unknown", "uptime:1301"), true);
+  assert.equal(sameBootIdentity("windows:1000", "uptime:1300"), true);
+  assert.equal(sameBootIdentity("windows:1000", "uptime:1301"), false);
   assert.equal(sameBootIdentity("darwin:1000", "darwin:1001"), false);
 });
 
@@ -25,6 +28,31 @@ test("reclaims locks from a prior boot even when the PID is alive", () => {
       "acquired",
     );
     assert.equal(fs.existsSync(lock), false);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("reclaims a lock whose owner PID was reused by an unrelated process", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "airo-lock-pid-reuse-"));
+  const lock = path.join(directory, "history.lock");
+  try {
+    // The recorded PID is our own (very much alive), but its start-time
+    // signature does not match our real one — as if the OS had reused this
+    // PID for an unrelated process since the lock was written. A liveness
+    // check based on the PID alone would treat this lock as held forever.
+    fs.writeFileSync(
+      lock,
+      JSON.stringify({
+        pid: process.pid,
+        token: "stale-owner-token",
+        startedAt: "not-this-processs-actual-start-signature",
+      }),
+    );
+    assert.equal(
+      withFileLock(lock, () => "acquired", { timeoutMs: 5000 }),
+      "acquired",
+    );
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -85,6 +113,36 @@ test("serializes asynchronous owners and orders multi-file locks", async () => {
       withFileLocks([path.join(directory, "b.lock"), path.join(directory, "a.lock")], () => 42),
       42,
     );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("keeps acquisition blocked while a stale reclaimer has moved a live lock", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "airo-lock-reclaim-race-"));
+  const lock = path.join(directory, "history.lock");
+  const claim = `${lock}.999.test.stale`;
+  const order: string[] = [];
+  let moved!: () => void;
+  const didMove = new Promise<void>((resolve) => {
+    moved = resolve;
+  });
+  try {
+    const first = withFileLockAsync(lock, async () => {
+      order.push("first-start");
+      fs.renameSync(lock, claim);
+      moved();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      order.push("first-end");
+    });
+    await didMove;
+    const second = withFileLockAsync(lock, async () => {
+      order.push("second");
+    });
+    await Promise.all([first, second]);
+    assert.deepEqual(order, ["first-start", "first-end", "second"]);
+    assert.equal(fs.existsSync(lock), false);
+    assert.equal(fs.existsSync(claim), false);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

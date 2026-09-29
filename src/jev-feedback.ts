@@ -5,6 +5,7 @@ import { extractTaskFeatures } from "./evaluation.js";
 import { historyPath, newHistoryId, readFeedback, readHistory } from "./history.js";
 import { withFileLock } from "./file-lock.js";
 import { resolveRepositoryIdentity } from "./repository.js";
+import { recordSyncDeletions } from "./sync-deletions.js";
 import type { Agent, HistoryConfig, HistoryRecord, ModelTier, TaskFeatures } from "./types.js";
 
 export const JEV_MODEL = "jev-1.13.0";
@@ -246,6 +247,11 @@ export function resetJevFeedback(config: HistoryConfig): number {
   const file = jevFeedbackPath(config);
   return withFileLock(`${file}.lock`, () => {
     const records = readJevFeedback(config);
+    recordSyncDeletions(
+      historyPath(config),
+      "jev-feedback",
+      records.map((record) => record.id),
+    );
     try {
       fs.unlinkSync(file);
     } catch (error) {
@@ -261,10 +267,20 @@ function bucket(value: number | undefined, boundaries: number[]): string | undef
   return index < 0 ? `>${boundaries.at(-1)}` : `<=${boundaries[index]}`;
 }
 
+export function sanitizeJevTask(task: string): string {
+  const withoutAttachments = task.replace(
+    /\n\nAttached local file\(s\) for inspection:\n[\s\S]*?\nUse the provider's local file inspection capability if available\.\s*$/,
+    "",
+  );
+  return withoutAttachments
+    .replace(/[a-zA-Z]:\\(?:[^\s\\]+\\)+[^\s,;]+/g, "[local-path]")
+    .replace(/(^|[\s("'])\/(?!\/)[^\s,;)"']+/g, "$1[local-path]");
+}
+
 function runPayload(config: HistoryConfig, records: HistoryRecord[]) {
   const explicit = readFeedbackForRun(config, records);
   return {
-    task: records[0].originalTask ?? records[0].task,
+    task: sanitizeJevTask(records[0].originalTask ?? records[0].task),
     phases: records.map((record) => ({
       phase: record.phaseKind ?? "single",
       task_features: {

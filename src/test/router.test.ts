@@ -44,6 +44,12 @@ test("routes architecture investigations to Claude with a deep model", () => {
   assert.equal(route.routingPolicyVersion, ROUTING_POLICY.version);
 });
 
+test("defensively ignores an unknown routing policy", () => {
+  const invalid = config() as unknown as { policy: string };
+  invalid.policy = "gemini-heavy";
+  assert.doesNotThrow(() => routeTask("Fix a parser bug", invalid as RouterConfig));
+});
+
 test("routes a small test implementation to Codex with a fast model", () => {
   const route = routeTask("Add a unit test for this simple type", config());
 
@@ -265,6 +271,22 @@ test("asks for clarification when a routing instruction cannot be resolved", () 
   assert.match(routingClarification("switch to Grok", current) ?? "", /Grok/i);
   assert.equal(routingClarification("switch to the main branch", current), undefined);
   assert.equal(routingClarification("use automatic routing for this review", current), undefined);
+});
+
+test("does not mistake the auto model sentinel for an explicit Gemini request", () => {
+  const current = config();
+  for (const task of [
+    "Add a helper with auto-generated IDs to the parser",
+    "use auto routing to fix the lint errors",
+  ]) {
+    const request = userRoutingRequest(task, current);
+    const route = routeTask(task, current);
+    assert.equal(request.model, undefined);
+    assert.equal(request.agent, undefined);
+    assert.equal(route.userRequestedModel, undefined);
+    assert.equal(route.agentPinned, false);
+    assert.notEqual(route.agent, "gemini");
+  }
 });
 
 test("does not let a later sentence change the routing request", () => {

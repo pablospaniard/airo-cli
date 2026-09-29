@@ -60,9 +60,16 @@ export function decryptSyncPayload<T>(key: Buffer, envelope: SyncEnvelope, conte
   requireKey(key);
   if (envelope.version !== 1 || envelope.algorithm !== "aes-256-gcm")
     throw new Error("Unsupported AIRO sync envelope.");
-  const decipher = crypto.createDecipheriv("aes-256-gcm", key, unb64(envelope.nonce));
+  const tag = unb64(envelope.tag);
+  // Node accepts GCM tags as short as 4 bytes, which lets a malicious or
+  // compromised sync server drastically improve its odds of forging a
+  // ciphertext. Require the full 16-byte tag produced by encryptSyncPayload.
+  if (tag.length !== 16) throw new Error("Invalid AIRO sync authentication tag.");
+  const decipher = crypto.createDecipheriv("aes-256-gcm", key, unb64(envelope.nonce), {
+    authTagLength: 16,
+  });
   decipher.setAAD(Buffer.from(`airo-sync-v1\0${context}`, "utf8"));
-  decipher.setAuthTag(unb64(envelope.tag));
+  decipher.setAuthTag(tag);
   const plaintext = Buffer.concat([decipher.update(unb64(envelope.ciphertext)), decipher.final()]);
   return JSON.parse(plaintext.toString("utf8")) as T;
 }

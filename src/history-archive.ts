@@ -248,6 +248,60 @@ function mergeEvidence<T extends { id: string }>(
   return { records: [...byId.values()], imported, skipped };
 }
 
+function immutableHistory(
+  record: HistoryRecord,
+): Omit<HistoryRecord, "updatedAt" | "feedback" | "feedbackNote" | "evaluation" | "outcome"> {
+  const {
+    updatedAt: _updatedAt,
+    feedback: _feedback,
+    feedbackNote: _feedbackNote,
+    evaluation: _evaluation,
+    outcome: _outcome,
+    ...immutable
+  } = record;
+  return immutable;
+}
+
+function mergeHistoryEvidence(
+  current: HistoryRecord[],
+  incoming: HistoryRecord[],
+): { records: HistoryRecord[]; imported: number; skipped: number } {
+  const byId = new Map(current.map((record) => [record.id, record]));
+  let imported = 0;
+  let skipped = 0;
+  for (const record of incoming) {
+    const existing = byId.get(record.id);
+    if (!existing) {
+      byId.set(record.id, record);
+      imported++;
+      continue;
+    }
+    if (canonical(existing) === canonical(record)) {
+      skipped++;
+      continue;
+    }
+    if (canonical(immutableHistory(existing)) !== canonical(immutableHistory(record)))
+      throw new Error(`Archive history ID ${record.id} conflicts with local evidence.`);
+    const existingUpdated = Date.parse(existing.updatedAt ?? "");
+    const incomingUpdated = Date.parse(record.updatedAt ?? "");
+    if (
+      Number.isFinite(incomingUpdated) &&
+      (!Number.isFinite(existingUpdated) || incomingUpdated > existingUpdated)
+    ) {
+      byId.set(record.id, record);
+      imported++;
+    } else if (
+      Number.isFinite(existingUpdated) &&
+      (!Number.isFinite(incomingUpdated) || existingUpdated > incomingUpdated)
+    ) {
+      skipped++;
+    } else {
+      throw new Error(`Archive history ID ${record.id} has conflicting mutable evidence.`);
+    }
+  }
+  return { records: [...byId.values()], imported, skipped };
+}
+
 function writeJsonLines(file: string, records: unknown[]): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.tmp`;
@@ -277,7 +331,7 @@ export function importLearningArchive(
     const localFeedback = readFeedback(config).map(normalizeFeedback);
     const incomingHistory = payload.history.map((record) => normalizeHistory(record, config));
     const incomingFeedback = payload.feedback.map(normalizeFeedback);
-    const history = mergeEvidence(localHistory, incomingHistory, "history");
+    const history = mergeHistoryEvidence(localHistory, incomingHistory);
     const feedback = mergeEvidence(localFeedback, incomingFeedback, "feedback");
     const mergedHistory = history.records.sort(compareEvidence);
     const mergedFeedback = feedback.records.sort(compareEvidence);
