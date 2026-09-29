@@ -7,6 +7,7 @@ interface __BaseEnv_Env {
   AUTH_RATE_LIMITER: RateLimit;
   SYNC_RATE_LIMITER: RateLimit;
   GITHUB_CLIENT_ID: "Ov23li72JP3433SbMpe7";
+  GITHUB_CLIENT_SECRET: string;
 }
 declare namespace Cloudflare {
   interface GlobalProps {
@@ -19,7 +20,9 @@ type StringifyValues<EnvType extends Record<string, unknown>> = {
   [Binding in keyof EnvType]: EnvType[Binding] extends string ? EnvType[Binding] : string;
 };
 declare namespace NodeJS {
-  interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "GITHUB_CLIENT_ID">> {}
+  interface ProcessEnv extends StringifyValues<
+    Pick<Cloudflare.Env, "GITHUB_CLIENT_ID" | "GITHUB_CLIENT_SECRET">
+  > {}
 }
 
 // Begin runtime types

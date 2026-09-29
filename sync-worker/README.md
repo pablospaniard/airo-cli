@@ -4,11 +4,11 @@ This directory contains the optional Cloudflare Worker used by AIRO's developmen
 
 The CLI completes GitHub's device flow directly. It sends the resulting short-lived GitHub token once to the Worker, which validates the account with GitHub and discards the token. The Worker stores only hashes of AIRO session tokens and persists opaque encrypted event and setting envelopes in D1. Encryption and recovery-key handling happen in the CLI. Provider credentials, API keys, executable paths, permission settings, and Jev consent are outside the sync schema.
 
-The development deployment is available at `https://airo-sync.pablospaniard.workers.dev`. This does not make sync part of the currently published npm package.
+Deploy the Worker under an application-owned HTTPS URL and configure that URL explicitly in the client. This does not make sync part of the currently published npm package.
 
 ## Provisioning
 
-1. Create a GitHub OAuth App, enable Device Flow, and retain its public client ID.
+1. Create a GitHub OAuth App, enable Device Flow, and retain its client ID and client secret.
 2. Authenticate Wrangler and create the database:
 
    ```bash
@@ -17,14 +17,20 @@ The development deployment is available at `https://airo-sync.pablospaniard.work
    ```
 
 3. Replace the placeholder D1 database ID and GitHub client ID in `wrangler.jsonc`. Use a separate GitHub OAuth App and D1 database for each environment.
-4. Apply the migration and deploy:
+4. Store the OAuth app secret as a Worker secret. For local development, copy `.dev.vars.example` to `.dev.vars` and replace its placeholder:
+
+   ```bash
+   pnpm exec wrangler secret put GITHUB_CLIENT_SECRET --config sync-worker/wrangler.jsonc
+   ```
+
+5. Apply the migrations and deploy:
 
    ```bash
    pnpm exec wrangler d1 migrations apply airo-sync --remote --config sync-worker/wrangler.jsonc
    pnpm exec wrangler deploy --config sync-worker/wrangler.jsonc
    ```
 
-The GitHub client ID is public OAuth configuration, not a secret. Do not add a GitHub client secret: this implementation deliberately uses the device flow. GitHub access tokens exist only in CLI and Worker memory during identity exchange and are never persisted.
+The GitHub client ID is public OAuth configuration. The client secret is used only by the Worker to call GitHub's pinned `2022-11-28` OAuth token-check endpoint and prove that an incoming token belongs to this OAuth app; keep it in a Worker secret, never `wrangler.jsonc`. GitHub access tokens exist only in CLI and Worker memory during identity exchange and are never persisted.
 
 ## Local verification
 
@@ -46,11 +52,11 @@ The tests run in Cloudflare's Workers runtime integration with an isolated local
 - Devices can be listed and individually revoked.
 - Retried GitHub exchanges revoke prior token families for that device before issuing replacements.
 - Requests are size-bounded, validated, and rate-limited before storage.
-- History events are append-only and idempotent by account and event ID.
+- History events are append-only and idempotent by account, record kind, record ID, and keyed content version. A changed record creates a new cursor entry; clients apply the newest received version.
 - Settings use optimistic per-key revisions.
 - The first wrapped account key is immutable through the API, preventing another device from silently replacing it.
 - Account export returns the encrypted server-side representation. Account deletion cascades through D1.
 
 Cloudflare logs must never include request bodies, authorization headers, GitHub tokens, or encrypted envelopes. The Worker emits only structured path-level errors.
 
-This is a public CLI service, so the hostname and GitHub OAuth client ID are necessarily public and the binary is reproducible by third parties. Security therefore does not rely on an embedded application secret or a spoofable client header. Possession of a valid GitHub authorization is required to create a device session, and possession of that device's AIRO token is required for all private operations. Cloudflare Access is not placed in front of the public API because it would add a separate interactive identity gate that ordinary CLI users cannot satisfy transparently.
+This is a public CLI service, so the hostname and GitHub OAuth client ID are necessarily public and the binary is reproducible by third parties. The OAuth client secret stays server-side and binds identity exchange to AIRO's GitHub app; security does not rely on an embedded secret or spoofable client header. Possession of a valid authorization for that app is required to create a device session, and possession of that device's AIRO token is required for all private operations. Cloudflare Access is not placed in front of the public API because it would add a separate interactive identity gate that ordinary CLI users cannot satisfy transparently.

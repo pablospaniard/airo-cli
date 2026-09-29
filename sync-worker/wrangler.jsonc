@@ -7,6 +7,9 @@
   "vars": {
     "GITHUB_CLIENT_ID": "Ov23li72JP3433SbMpe7",
   },
+  "secrets": {
+    "required": ["GITHUB_CLIENT_SECRET"],
+  },
   "d1_databases": [
     {
       "binding": "DB",
