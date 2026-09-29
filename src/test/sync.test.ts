@@ -190,6 +190,30 @@ test("sync login resets a changed account namespace and remembers file credentia
   }
 });
 
+test("sync login rejects non-loopback HTTP servers before sending credentials", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "airo-sync-http-server-"));
+  const previousHome = process.env.HOME;
+  const previousFetch = globalThis.fetch;
+  process.env.HOME = home;
+  let fetched = false;
+  globalThis.fetch = async () => {
+    fetched = true;
+    throw new Error("unexpected fetch");
+  };
+  try {
+    await assert.rejects(
+      syncLogin({ server: "http://sync.example.com", onChallenge: () => {} }),
+      /must use HTTPS/,
+    );
+    assert.equal(fetched, false);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("sync login preserves the account key when reauthenticating the same account", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "airo-sync-relogin-"));
   const previousHome = process.env.HOME;

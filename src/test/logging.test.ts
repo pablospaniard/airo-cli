@@ -75,12 +75,15 @@ test("persists and renders every run-log event category", () => {
     assert.match(terminal, /Input needed/);
     assert.match(terminal, /"sessionId":"session\/name"/);
     assert.ok(fs.existsSync(logger.combinedPath));
+    assert.equal(fs.statSync(logger.runDir).mode & 0o777, 0o700);
+    assert.equal(fs.statSync(logger.combinedPath).mode & 0o777, 0o600);
     assert.match(fs.readFileSync(logger.phaseFile(meta), "utf8"), /stderr two/);
     assert.match(fs.readFileSync(logger.eventsFile(meta), "utf8"), /event/);
     assert.equal(
       fs.readFileSync(path.join(logger.runDir, "final-output.txt"), "utf8"),
       "## Done\n\n- passed\n",
     );
+    assert.equal(fs.statSync(path.join(logger.runDir, "final-output.txt")).mode & 0o777, 0o600);
     assert.equal(findRunLogs("run-unsafe-name"), logger.runDir);
     assert.equal(findRunLogs("missing"), undefined);
     assert.equal(recentRunDirs(1)[0].path, logger.runDir);

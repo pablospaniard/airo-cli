@@ -73,6 +73,47 @@ test("handles disabled, missing, malformed, and individually rated history", () 
   }
 });
 
+test("creates history and feedback evidence with private permissions", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-private-history-"));
+  const evidenceDir = path.join(dir, "evidence");
+  const config: HistoryConfig = {
+    enabled: true,
+    learningEnabled: true,
+    similarityThreshold: 0.25,
+    path: path.join(evidenceDir, "history.jsonl"),
+  };
+  const history: HistoryRecord = {
+    id: "private-record",
+    timestamp: "2026-01-01T00:00:00.000Z",
+    cwd: dir,
+    task: "private task",
+    agent: "codex",
+    modelTier: "fast",
+    model: "model",
+    effort: "low",
+    complexity: 1,
+    exitCode: 0,
+    durationMs: 1,
+  };
+  try {
+    appendHistory(config, history);
+    appendFeedback(config, {
+      id: "private-feedback",
+      timestamp: "2026-01-01T00:00:01.000Z",
+      scope: "phase",
+      targetId: history.id,
+      rating: "good",
+      source: "explicit",
+      confidence: 1,
+    });
+    assert.equal(fs.statSync(evidenceDir).mode & 0o777, 0o700);
+    assert.equal(fs.statSync(historyPath(config)).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(feedbackPath(config)).mode & 0o777, 0o600);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("derives positive and negative learning hints from similar feedback", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-learning-"));
   const config: HistoryConfig = {

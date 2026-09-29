@@ -64,6 +64,14 @@ test("exports encrypted evidence and imports it idempotently", () => {
       () => importLearningArchive(destination, archive, "incorrect passphrase"),
       /Unable to decrypt/,
     );
+    const shortenedTag = JSON.parse(fs.readFileSync(archive, "utf8"));
+    shortenedTag.cipher.tag = Buffer.alloc(4).toString("base64");
+    const shortTagArchive = path.join(dir, "short-tag.airo");
+    fs.writeFileSync(shortTagArchive, JSON.stringify(shortenedTag));
+    assert.throws(
+      () => importLearningArchive(destination, shortTagArchive, PASSPHRASE),
+      /Unable to decrypt/,
+    );
 
     const imported = importLearningArchive(destination, archive, PASSPHRASE);
     assert.deepEqual(imported.history, { imported: 1, skipped: 0, total: 1 });

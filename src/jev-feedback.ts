@@ -13,6 +13,7 @@ import {
 import { AGENTS } from "./providers.js";
 import { resolveRepositoryIdentity } from "./repository.js";
 import { recordSyncDeletions } from "./sync-deletions.js";
+import { ensurePrivateDirectory } from "./paths.js";
 import type { Agent, HistoryConfig, HistoryRecord, ModelTier, TaskFeatures } from "./types.js";
 
 export const JEV_MODEL = "jev-1.13.0";
@@ -121,7 +122,7 @@ export function isJevEnabled(config: HistoryConfig): boolean {
 }
 
 function writePrivateJson(file: string, value: unknown): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  ensurePrivateDirectory(path.dirname(file));
   const temporary = `${file}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
   fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   fs.renameSync(temporary, file);
@@ -239,7 +240,7 @@ function isJevFeedbackRecord(value: unknown): value is JevFeedbackRecord {
 function appendJevFeedback(config: HistoryConfig, records: JevFeedbackRecord[]): void {
   if (!records.length) return;
   const file = jevFeedbackPath(config);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  ensurePrivateDirectory(path.dirname(file));
   withFileLock(`${file}.lock`, () => {
     fs.appendFileSync(file, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`, {
       mode: 0o600,
@@ -279,6 +280,12 @@ export function sanitizeJevTask(task: string): string {
   );
   return (
     withoutAttachments
+      // UNC and extended-length Windows paths begin with two backslashes and
+      // otherwise bypass the drive-letter/relative Windows matcher below.
+      .replace(
+        /(^|[\s("'`])\\\\(?:\?\\)?(?:[^\\\r\n,;)"'`]+\\)+[^\\\r\n,;)"'`]+?(?=\s+(?:and|or|then|from|to|in|with|for)\b|[,\r\n;)"'`]|$)/gi,
+        "$1[local-path]",
+      )
       // Windows paths may contain spaces. Stop at punctuation, a closing quote,
       // or a natural-language connector rather than leaking the path one token
       // at a time.

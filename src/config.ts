@@ -175,10 +175,36 @@ function mergeConfig(parsed: any, sourceFile?: string): RouterConfig {
 }
 
 export function loadConfig(cwd = process.cwd()): { config: RouterConfig; path?: string } {
-  for (const file of configCandidates(cwd)) {
+  for (const [index, file] of configCandidates(cwd).entries()) {
     if (!fs.existsSync(file)) continue;
     const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-    return { config: mergeConfig(parsed, file), path: file };
+    const config = mergeConfig(parsed, file);
+    if (index < 2) {
+      // Repository configuration is untrusted input. It may tune routing, but
+      // executable paths, raw CLI arguments, and privilege policy must come
+      // from account-wide configuration (or the reviewed built-in defaults).
+      const trusted = loadGlobalConfig().config;
+      for (const agent of ["claude", "codex", "gemini", "copilot"] as const) {
+        config[agent].command = trusted[agent].command;
+        config[agent].args = trusted[agent].args;
+        config[agent].permissionMode = trusted[agent].permissionMode;
+      }
+      config.permissions = {
+        mode: parsed.permissions?.mode === "prompt" ? "prompt" : trusted.permissions.mode,
+        networkAccess:
+          parsed.permissions?.networkAccess === false ? false : trusted.permissions.networkAccess,
+      };
+      if (config.history.path) {
+        const relativeHistoryPath = path.relative(path.resolve(cwd), config.history.path);
+        if (
+          relativeHistoryPath === ".." ||
+          relativeHistoryPath.startsWith(`..${path.sep}`) ||
+          path.isAbsolute(relativeHistoryPath)
+        )
+          config.history.path = trusted.history.path;
+      }
+    }
+    return { config, path: file };
   }
   return { config: DEFAULT_CONFIG };
 }

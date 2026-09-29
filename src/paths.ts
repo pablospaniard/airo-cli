@@ -8,6 +8,23 @@ export function dataRootDir(): string {
   return fs.existsSync(current) || !fs.existsSync(legacy) ? current : legacy;
 }
 
+/** Create a directory privately; optionally tighten an existing app-owned directory. */
+export function ensurePrivateDirectory(directory: string, tightenExisting = false): void {
+  const existed = fs.existsSync(directory);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  if (!existed || tightenExisting)
+    try {
+      fs.chmodSync(directory, 0o700);
+    } catch {}
+}
+
+/** Tighten a sensitive file that may have been created by an older AIRO version. */
+export function ensurePrivateFile(file: string): void {
+  try {
+    fs.chmodSync(file, 0o600);
+  } catch {}
+}
+
 export function migrateLegacyPaths(home = os.homedir()): { migrated: string[]; errors: string[] } {
   const migrated: string[] = [];
   const errors: string[] = [];

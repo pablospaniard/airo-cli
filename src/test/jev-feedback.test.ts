@@ -122,7 +122,8 @@ test("Jev feedback is default-off and consent is local, versioned, and revocable
 test("Jev task sanitization removes attachment lists and local paths", () => {
   const task = [
     "Review /Users/me/secret-project/src/app.ts, src/customer/acme.ts, ./private/config.json,",
-    '"C:\\Users\\Jane Doe\\secret app.ts", docs\\Customer Files\\roadmap.md, and ~/secret',
+    '"C:\\Users\\Jane Doe\\secret app.ts", docs\\Customer Files\\roadmap.md, and ~/secret,',
+    '"\\\\server\\private share\\secret.txt" and "\\\\?\\C:\\private\\device.txt"',
     "",
     "Attached local file(s) for inspection:",
     "- /Users/me/secret-project/private.txt",
@@ -131,11 +132,11 @@ test("Jev task sanitization removes attachment lists and local paths", () => {
   const sanitized = sanitizeJevTask(task);
   assert.doesNotMatch(
     sanitized,
-    /Users|secret-project|customer|private|Jane Doe|Customer Files|~\/secret|Attached local file/,
+    /Users|secret-project|customer|private|Jane Doe|Customer Files|server|device|~\/secret|Attached local file/,
   );
   assert.equal(
     sanitized,
-    'Review [local-path], [local-path], [local-path],\n"[local-path]", [local-path], and [local-path]',
+    'Review [local-path], [local-path], [local-path],\n"[local-path]", [local-path], and [local-path],\n"[local-path]" and "[local-path]"',
   );
   assert.equal(
     sanitizeJevTask("Check /repo and https://example.com/docs plus http://localhost/file"),

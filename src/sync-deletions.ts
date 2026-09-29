@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { withFileLock } from "./file-lock.js";
+import { ensurePrivateDirectory, ensurePrivateFile } from "./paths.js";
 
 export type SyncDeletionKind = "history" | "feedback" | "jev-feedback";
 
@@ -26,10 +27,11 @@ export function recordSyncDeletions(
     const known = new Set(existing.map((item) => `${item.kind}:${item.id}`));
     const pending = additions.filter((id) => !known.has(`${kind}:${id}`));
     if (!pending.length) return;
-    fs.mkdirSync(path.dirname(file), { recursive: true });
+    ensurePrivateDirectory(path.dirname(file));
     fs.appendFileSync(file, pending.map((id) => JSON.stringify({ kind, id })).join("\n") + "\n", {
       mode: 0o600,
     });
+    ensurePrivateFile(file);
   });
 }
 
@@ -72,12 +74,13 @@ export function acknowledgeSyncDeletions(
       (item) => !removals.has(`${item.kind}:${item.id}`),
     );
     const temporary = `${file}.${process.pid}.tmp`;
-    fs.mkdirSync(path.dirname(file), { recursive: true });
+    ensurePrivateDirectory(path.dirname(file));
     fs.writeFileSync(
       temporary,
       kept.length ? `${kept.map((item) => JSON.stringify(item)).join("\n")}\n` : "",
       { mode: 0o600 },
     );
     fs.renameSync(temporary, file);
+    ensurePrivateFile(file);
   });
 }

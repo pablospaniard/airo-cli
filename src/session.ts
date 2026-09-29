@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import type { SessionState, SessionTurn } from "./types.js";
-import { dataRootDir } from "./paths.js";
+import { dataRootDir, ensurePrivateDirectory, ensurePrivateFile } from "./paths.js";
 import { findRunLogs } from "./logging.js";
 
 export interface SessionTranscriptTurn extends SessionTurn {
@@ -15,13 +15,13 @@ export interface SessionTranscript extends Omit<SessionState, "turns"> {
 
 function rootDir(): string {
   const dir = dataRootDir();
-  fs.mkdirSync(dir, { recursive: true });
+  ensurePrivateDirectory(dir, true);
   return dir;
 }
 
 function sessionsDir(): string {
   const dir = path.join(rootDir(), "sessions");
-  fs.mkdirSync(dir, { recursive: true });
+  ensurePrivateDirectory(dir, true);
   return dir;
 }
 
@@ -43,7 +43,9 @@ function readActiveMap(): Record<string, string> {
 }
 
 function writeActiveMap(map: Record<string, string>) {
-  fs.writeFileSync(activeMapPath(), JSON.stringify(map, null, 2) + "\n");
+  const file = activeMapPath();
+  fs.writeFileSync(file, JSON.stringify(map, null, 2) + "\n", { mode: 0o600 });
+  ensurePrivateFile(file);
 }
 
 export function createSession(originalTask: string, cwd = process.cwd()): SessionState {
@@ -63,7 +65,9 @@ export function createSession(originalTask: string, cwd = process.cwd()): Sessio
 
 export function saveSession(s: SessionState) {
   s.updatedAt = new Date().toISOString();
-  fs.writeFileSync(sessionPath(s.sessionId), JSON.stringify(s, null, 2) + "\n");
+  const file = sessionPath(s.sessionId);
+  fs.writeFileSync(file, JSON.stringify(s, null, 2) + "\n", { mode: 0o600 });
+  ensurePrivateFile(file);
 }
 
 export function loadSession(id: string): SessionState {

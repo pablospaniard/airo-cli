@@ -24,6 +24,15 @@ test("manages the complete session lifecycle", () => {
   fs.mkdirSync(cwd);
   try {
     const session = createSession("original task", cwd);
+    const dataDir = path.join(home, ".local", "share", "airo");
+    const sessionsDir = path.join(dataDir, "sessions");
+    assert.equal(fs.statSync(dataDir).mode & 0o777, 0o700);
+    assert.equal(fs.statSync(sessionsDir).mode & 0o777, 0o700);
+    assert.equal(
+      fs.statSync(path.join(sessionsDir, `${session.sessionId}.json`)).mode & 0o777,
+      0o600,
+    );
+    assert.equal(fs.statSync(path.join(dataDir, "active-sessions.json")).mode & 0o777, 0o600);
     assert.equal(getActiveSession(cwd)?.sessionId, session.sessionId);
     assert.equal(loadSession(session.sessionId).originalTask, "original task");
 
@@ -50,7 +59,6 @@ test("manages the complete session lifecycle", () => {
     assert.equal(getActiveSession(cwd), undefined);
     assert.throws(() => loadSession("missing"), /Session not found/);
 
-    const sessionsDir = path.join(home, ".local", "share", "airo", "sessions");
     fs.writeFileSync(path.join(sessionsDir, "bad.json"), "bad json");
     assert.equal(listSessions(cwd).length, 1);
     fs.writeFileSync(

@@ -199,12 +199,15 @@ function decryptArchive(inputFile: string, passphrase: string): LearningArchiveP
     throw new Error("Unsupported archive encryption parameters.");
   try {
     const key = deriveKey(passphrase, Buffer.from(archive.kdf.salt, "base64"), archive.kdf);
+    const tag = Buffer.from(archive.cipher.tag, "base64");
+    if (tag.length !== 16) throw new Error("Invalid authentication tag.");
     const decipher = crypto.createDecipheriv(
       "aes-256-gcm",
       key,
       Buffer.from(archive.cipher.iv, "base64"),
+      { authTagLength: 16 },
     );
-    decipher.setAuthTag(Buffer.from(archive.cipher.tag, "base64"));
+    decipher.setAuthTag(tag);
     const plaintext = Buffer.concat([
       decipher.update(Buffer.from(archive.ciphertext, "base64")),
       decipher.final(),

@@ -10,7 +10,7 @@ import {
   statusIcon,
   ui,
 } from "./ui.js";
-import { dataRootDir } from "./paths.js";
+import { dataRootDir, ensurePrivateDirectory, ensurePrivateFile } from "./paths.js";
 import { extractLocalArtifacts } from "./artifacts.js";
 
 export interface RunLoggerOptions {
@@ -42,7 +42,7 @@ function nowTime(): string {
 
 function dataDir(create = true): string {
   const dir = path.join(dataRootDir(), "logs");
-  if (create) fs.mkdirSync(dir, { recursive: true });
+  if (create) ensurePrivateDirectory(dir, true);
   return dir;
 }
 
@@ -64,14 +64,19 @@ export class RunLogger {
     this.level = options.level;
     this.persist = options.persist ?? true;
     const parent = this.sessionId ? `session-${safeName(this.sessionId)}` : "standalone";
-    this.runDir = path.join(dataDir(this.persist), parent, `run-${safeName(this.runId)}`);
-    if (this.persist) fs.mkdirSync(this.runDir, { recursive: true });
+    const parentDir = path.join(dataDir(this.persist), parent);
+    this.runDir = path.join(parentDir, `run-${safeName(this.runId)}`);
+    if (this.persist) {
+      ensurePrivateDirectory(parentDir, true);
+      ensurePrivateDirectory(this.runDir, true);
+    }
     this.combinedPath = path.join(this.runDir, "combined.log");
   }
 
   private append(file: string, value: string) {
     if (!this.persist) return;
-    fs.appendFileSync(file, value.endsWith("\n") ? value : `${value}\n`);
+    fs.appendFileSync(file, value.endsWith("\n") ? value : `${value}\n`, { mode: 0o600 });
+    ensurePrivateFile(file);
   }
 
   private console(value: string) {
@@ -258,7 +263,10 @@ export class RunLogger {
     this.event(success ? "final" : "failure", { text: clean });
     for (const artifact of extractLocalArtifacts(clean)) this.event("artifact", { ...artifact });
     const file = path.join(this.runDir, "final-output.txt");
-    if (this.persist) fs.writeFileSync(file, `${clean}\n`);
+    if (this.persist) {
+      fs.writeFileSync(file, `${clean}\n`, { mode: 0o600 });
+      ensurePrivateFile(file);
+    }
     this.append(
       this.combinedPath,
       `${nowTime()} [airo][final] ${clean.replace(/\n/g, "\n[final] ")}`,
