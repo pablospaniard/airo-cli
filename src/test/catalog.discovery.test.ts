@@ -160,7 +160,7 @@ test("codex falls back to its catalogue files when `debug` is not advertised", a
       JSON.stringify({ models: [{ slug: "cached-model" }] }),
     );
     const cache = await discoverCatalog("codex", config, { refresh: true });
-    assert.equal(cache.source, "provider-config");
+    assert.equal(cache.source, "catalog-file");
     assert.ok(cache.models.some((model) => model.id === "cached-model"));
 
     const custom = path.join(home, "custom-catalog.json");
@@ -185,7 +185,7 @@ test("a failing `debug models` does not hide the file catalogue", async () => {
       JSON.stringify({ models: [{ slug: "from-file" }] }),
     );
     const catalog = await discoverCatalog("codex", config);
-    assert.equal(catalog.source, "provider-config");
+    assert.equal(catalog.source, "catalog-file");
     assert.ok(catalog.models.some((model) => model.id === "from-file"));
   });
 });

@@ -1,38 +1,8 @@
-import { DEFAULT_CONFIG } from "./config.js";
-import { AGENTS } from "./providers.js";
-import type { RouterConfig } from "./types.js";
 import { agentColor, command, outputWidth, sectionRule, ui, visibleLength } from "./ui.js";
 import { VERSION } from "./version.js";
 
-function defaultsTable(config: RouterConfig): string[] {
-  const rows = AGENTS.flatMap((agent) =>
-    (["fast", "balanced", "deep"] as const).map((tier) => {
-      const profile = config[agent].models[tier];
-      return [agent, tier, profile.model, profile.effort ?? "auto"];
-    }),
-  );
-  const headers = ["Provider", "Tier", "Model", "Effort"];
-  const widths = headers.map((header, index) =>
-    Math.max(header.length, ...rows.map((row) => row[index].length)),
-  );
-  const formatRow = (row: string[], colorProvider = false) =>
-    row
-      .map((value, index) => {
-        const padded = value.padEnd(widths[index]);
-        return colorProvider && index === 0
-          ? agentColor(value as "claude" | "codex" | "gemini" | "copilot", padded)
-          : padded;
-      })
-      .join("  ");
-  return [
-    ui.gray(formatRow(headers)),
-    ui.gray(widths.map((width) => "─".repeat(width)).join("  ")),
-    ...rows.map((row) => formatRow(row, true)),
-  ];
-}
-
 /** The introduction shown immediately before the interactive first-run setup. */
-export function firstRunWelcome(config: RouterConfig = DEFAULT_CONFIG): string {
+export function firstRunWelcome(width = outputWidth()): string {
   const logo = [
     " █████╗ ██╗██████╗   ██████╗ ",
     "██╔══██╗██║██╔══██╗ ██╔═══██╗",
@@ -42,32 +12,64 @@ export function firstRunWelcome(config: RouterConfig = DEFAULT_CONFIG): string {
     "╚═╝  ╚═╝╚═╝╚═╝  ╚═╝  ╚═════╝ ",
   ].map((line) => ui.bold(ui.cyan(line)));
 
-  const width = outputWidth();
+  const contentWidth = Math.max(20, Math.min(84, width - 4));
+  const centered = (line: string) =>
+    line
+      ? `${" ".repeat(Math.max(0, Math.floor((width - visibleLength(line)) / 2)))}${line}`
+      : line;
+  const paragraph = (value: string) => {
+    const words = value.trim().split(/\s+/).filter(Boolean);
+    const wrapped: string[] = [];
+    let line = "";
+
+    for (const word of words) {
+      if (line && visibleLength(line) + 1 + visibleLength(word) > contentWidth) {
+        wrapped.push(line);
+        line = word;
+      } else {
+        line += `${line ? " " : ""}${word}`;
+      }
+    }
+    if (line) wrapped.push(line);
+    return wrapped;
+  };
+
   const lines = [
     "",
     ...logo,
     ui.dim("Adaptive Intelligence Routing & Orchestration"),
     ui.gray(`Version ${VERSION}`),
     "",
-    sectionRule("Welcome"),
-    `${ui.bold("AIRO")} routes each coding task between ${agentColor("claude", "Claude Code")}, ${agentColor("codex", "Codex CLI")}, ${agentColor("gemini", "Gemini CLI")}, and ${agentColor("copilot", "GitHub Copilot CLI")}, choosing a model tier for the work.`,
-    ui.gray("It uses your existing provider CLI logins; AIRO does not require another API key."),
+    sectionRule("Welcome", Math.min(68, contentWidth)),
+    ...paragraph(
+      `${ui.bold("AIRO")} routes each coding task between ${agentColor("claude", "Claude Code")}, ${agentColor("codex", "Codex CLI")}, ${agentColor("gemini", "Gemini CLI")}, and ${agentColor("copilot", "GitHub Copilot CLI")}, choosing a model tier for the work.`,
+    ),
+    ...paragraph(
+      ui.gray("It uses your existing provider CLI logins; AIRO does not require another API key."),
+    ),
     "",
-    sectionRule("Initial defaults"),
-    ...defaultsTable(config),
+    sectionRule("Automatic discovery", Math.min(68, contentWidth)),
+    ...paragraph(
+      ui.gray(
+        "AIRO detects installed supported providers and maps their available models onto fast, balanced, and deep tiers.",
+      ),
+    ),
+    ...paragraph(
+      ui.gray(
+        "Reviewed fallback profiles are used when a provider cannot expose its model catalog.",
+      ),
+    ),
     "",
-    `${ui.gray("Tie-break provider:")} ${agentColor(config.defaultAgent, config.defaultAgent)}`,
-    `${ui.gray("Choose models for these tiers, or press")} ${ui.bold("Enter")} ${ui.gray("to keep the displayed defaults.")}`,
-    `${ui.gray("Your settings will be saved to")} ${ui.cyan("~/.config/airo/config.json")}.`,
-    `${ui.gray("You can revisit them with")} ${command("airo setup")} ${ui.gray("and inspect them with")} ${command("airo models")}.`,
+    ...paragraph(
+      ui.gray(
+        "First run only asks for the provider execution permissions that AIRO must not assume.",
+      ),
+    ),
+    ...paragraph(
+      `${ui.gray("Inspect the current mapping with")} ${command("airo models")} ${ui.gray("and revisit permissions with")} ${command("airo setup")}.`,
+    ),
     "",
-  ].join("\n");
+  ];
 
-  return lines
-    .split("\n")
-    .map((line) => {
-      if (!line) return line;
-      return `${" ".repeat(Math.max(0, Math.floor((width - visibleLength(line)) / 2)))}${line}`;
-    })
-    .join("\n");
+  return lines.map(centered).join("\n");
 }

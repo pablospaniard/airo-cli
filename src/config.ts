@@ -7,11 +7,12 @@ import { dataRootDir } from "./paths.js";
 import type { Agent, Effort, ModelTier, Policy, RouterConfig, Rule } from "./types.js";
 
 export const CONFIG_NOTE =
-  "AIRO can use any model exposed by each provider; run `airo setup` to change the three automatic tier defaults.";
+  "AIRO discovers provider models automatically. Set modelRouting.mode to manual to pin the provider tier mappings below.";
 
 export const DEFAULT_CONFIG: RouterConfig = {
   policy: "balanced",
   defaultAgent: "codex",
+  modelRouting: { mode: "dynamic" },
   claude: {
     command: "claude",
     args: [],
@@ -74,7 +75,16 @@ export const DEFAULT_CONFIG: RouterConfig = {
 const POLICIES = new Set<Policy>(["balanced", "claude-heavy", "codex-heavy"]);
 const AGENT_IDS = new Set<Agent>(["claude", "codex", "gemini", "copilot"]);
 const MODEL_TIERS = new Set<ModelTier>(["fast", "balanced", "deep"]);
-const EFFORTS = new Set<Effort>(["auto", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const EFFORTS = new Set<Effort>([
+  "auto",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+]);
 
 export function validPolicy(value: unknown): value is Policy {
   return typeof value === "string" && POLICIES.has(value as Policy);
@@ -148,6 +158,11 @@ function mergeConfig(parsed: any): RouterConfig {
     codex: mergeProvider(DEFAULT_CONFIG.codex, parsed.codex),
     gemini: mergeProvider(DEFAULT_CONFIG.gemini, parsed.gemini),
     copilot: mergeProvider(DEFAULT_CONFIG.copilot, parsed.copilot),
+    // Configurations written before model routing was introduced contain
+    // deliberate model selections. Preserve those selections on upgrade.
+    modelRouting: {
+      mode: parsed.modelRouting?.mode === "dynamic" ? "dynamic" : "manual",
+    },
     permissions: { ...DEFAULT_CONFIG.permissions, ...parsed.permissions },
     history: { ...DEFAULT_CONFIG.history, ...parsed.history },
     orchestration: { ...DEFAULT_CONFIG.orchestration, ...parsed.orchestration },

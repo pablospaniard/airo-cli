@@ -49,6 +49,7 @@ test("sync settings exclude secrets and machine-specific configuration", () => {
   const serialized = JSON.stringify(settings);
   assert.doesNotMatch(serialized, /private\/bin|--secret|private\/history|fullAccess/);
   assert.equal((settings as { policy: string }).policy, config.policy);
+  assert.deepEqual(settings.modelRouting, { mode: "dynamic" });
   assert.deepEqual(
     (settings.providers as { codex: { models: unknown } }).codex.models,
     config.codex.models,
@@ -80,6 +81,15 @@ test("applying pulled settings keeps machine-local fields sync never carries", (
   assert.equal(applied.codex.command, "/opt/homebrew/bin/codex");
   assert.equal(applied.history.path, "/private/history.jsonl");
   assert.equal(applied.history.enabled, false);
+});
+
+test("treats synced settings from before model routing as manual", () => {
+  const local = structuredClone(DEFAULT_CONFIG);
+  const remote = safeSyncSettings(DEFAULT_CONFIG);
+  delete remote.modelRouting;
+
+  const applied = applySafeSettings(local, remote);
+  assert.equal(applied.modelRouting.mode, "manual");
 });
 
 test("credential-file fallback requires an explicit choice and restrictive permissions", () => {

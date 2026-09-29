@@ -57,6 +57,19 @@ export const INTERACTIVE_COMMANDS = [
   "/exit",
 ];
 
+/** Commands intentionally kept outside the live readline session. */
+export const INTERACTIVE_SHELL_HELP = [
+  ["airo setup", "review provider permissions"],
+  ["airo doctor", "check providers and paths"],
+  ["airo history export|import …", "move encrypted learning"],
+  ["airo repository id|link …", "manage learning scope"],
+  ["airo feedback jev status|enable|disable", "manage local Jev feedback"],
+  ["airo feedback jev inspect|reset", "inspect or clear Jev evidence"],
+  ["airo sync login|enable|now|status", "manage encrypted sync"],
+  ["airo sync devices|export|logout", "manage sync data and devices"],
+  ["airo sync delete-cloud-data --yes", "delete cloud data"],
+] as const;
+
 /** Normalize the path most terminals insert when a file is dragged into readline. */
 export function cleanDroppedPath(input: string): string {
   const value = input.trim();

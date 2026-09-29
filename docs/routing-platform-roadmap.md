@@ -2,9 +2,9 @@
 
 ## Status
 
-This document records the planned product and architecture direction for AIRO. It is a roadmap, not a description of functionality available in the current release.
+This document records implemented development milestones and the remaining product direction for AIRO. It is not a claim that development-branch functionality is already available in the current npm release.
 
-The current published package is [`airo-ai-router`](https://www.npmjs.com/package/airo-ai-router). Current behavior is documented in [Routing rules and learning](routing-and-learning.md). No development milestone below should be presented as part of the npm release until it completes the release process.
+The current published package is [`airo-ai-router@0.7.1`](https://www.npmjs.com/package/airo-ai-router). Source-tree behavior is documented in [Routing rules and learning](routing-and-learning.md). No development milestone below should be presented as part of the npm release until it completes the release process.
 
 Development status: Milestones 1 through 5 are complete on the development branch. Provider-neutral foundations, portable local learning, the unpublished Jev development evaluator, consented local post-run Jev feedback, and optional end-to-end encrypted Cloudflare sync are implemented. This status does not present the work as published until it passes the release process. Live pinned-model reports remain regenerable development evidence rather than committed runtime artifacts.
 
@@ -23,11 +23,11 @@ Development status: Milestones 1 through 5 are complete on the development branc
 
 AIRO must not discover an arbitrary executable and claim it as a supported provider. A provider becomes supported only after a developer adds it to the source-controlled provider registry and completes the integration contract.
 
-A provider adapter is expected to define:
+A provider adapter must define:
 
 - A stable provider identifier and display name
 - Default command and command/path resolution behavior
-- Authentication and account inspection
+- Authentication and account-inspection behavior, including an explicit unknown state when the CLI has no reliable probe
 - Model discovery and configured fallback profiles
 - Process invocation and permission behavior
 - Progress, final-output, error, and usage parsing
@@ -40,33 +40,34 @@ The current adapter contracts are compile-time exhaustive over the registered pr
 
 Provider support contract version 1 is a machine-readable audit of ten integration surfaces: registry metadata, configuration, routing policy, runtime invocation and parsing, failure classification, account inspection, model discovery, capability metadata, tests, and documentation. Test and documentation evidence is an exhaustive source-controlled map, so registering another provider cannot silently inherit a support claim. `airo doctor` reports this integration status separately from whether the configured executable is installed on the current machine.
 
-Support should not be announced until execution, permissions, authentication, models, usage reporting, fallback, and tests work together.
+Support is announced only when execution, permissions, account-state behavior, models, usage handling, fallback, and tests work together. Capability parity is not required when an upstream CLI lacks a stable interface, but every difference must be explicit in registry metadata and user-facing diagnostics.
 
 ### Dynamic behavior after registration
 
-For a registered provider, AIRO should dynamically:
+For a registered provider, AIRO dynamically:
 
 - Discover available models from the provider CLI or API when supported
-- Retain configured tier defaults when discovery is unavailable
+- Map discovered catalogs onto the generic fast, balanced, and deep tiers at runtime
+- Retain reviewed configured tier defaults when discovery is unavailable or manual mode is selected
 - Resolve an explicit command path, the inherited `PATH`, and only reliable provider-specific locations
 - Generate eligible provider/tier candidates from the registry
 - Apply the same generic scoring and local-learning policy to every provider
 - Consider every eligible provider during automatic fallback
 - Keep explicit provider selections pinned
 
-Executable discovery must remain deterministic. AIRO should not scan arbitrary filesystem locations or execute unknown binaries.
+Executable discovery remains deterministic. AIRO does not scan arbitrary filesystem locations or execute unknown binaries.
 
 ## Generic routing evolution
 
-The first implementation uses provider-neutral task features rather than provider-specific keyword scoring. Current features include:
+The implementation uses provider-neutral task features rather than provider-specific keyword scoring. Current stored features are:
 
-- Task category: investigation, implementation, validation, review, or research
+- Task category: debug, implementation, test, review, research, or general
 - Risk: low, medium, or high
-- Scope: localized, multi-file, cross-module, or architectural
-- Uncertainty and reproduction difficulty
-- Language and platform
-- Workflow phase
-- Verification requirements
+- Complexity: 1 through 5
+- Detected implementation language when present
+- Normalized local tokens and a locally generated 64-dimensional hashed embedding
+
+Workflow phase and verification requirements influence orchestration and outcome evaluation separately; they are not persisted as task-feature fields.
 
 Each supported provider supplies a reviewed cold-start capability profile. The generic policy generates every provider/tier candidate and scores it using task features, provider capabilities, tier suitability, shipped policy weights, and repository-local outcomes.
 
@@ -85,11 +86,11 @@ The shipped policy is a versioned, deterministic artifact. Every route and newly
 
 ## Jev boundaries
 
-TypeSafe Jev is an external decision model that returns typed choices, scores, probabilities, and confidence. AIRO should use it as an evaluator and feedback source rather than a required routing dependency. See [Jev and AIRO](jev-and-airo.md) for the detailed decision.
+TypeSafe Jev is an external decision model that returns typed choices, scores, probabilities, and confidence. AIRO uses it as an evaluator and optional feedback source rather than a required routing dependency. See [Jev and AIRO](jev-and-airo.md) for the detailed decision.
 
 ### Development use
 
-An unpublished development tool may use Jev to:
+The unpublished development tool uses Jev to:
 
 - Label semantic task dimensions
 - Review whether a selected route appears appropriate
@@ -103,9 +104,9 @@ The development evaluator lives outside the published runtime, uses a fake Jev e
 
 ### Optional production feedback
 
-The development branch offers optional, post-run Jev feedback. It:
+The development branch offers optional, post-run Jev feedback. It is designed to:
 
-- Be disabled by default
+- Remain disabled by default
 - Require a dedicated consent flow
 - Use an API key supplied by the user
 - Never store the API key in project configuration, history, logs, or sync
@@ -119,31 +120,30 @@ The development branch offers optional, post-run Jev feedback. It:
 
 The recommended sequence is local route, provider execution, outcome recording, optional Jev evaluation, and future local learning. Explicit user choices, custom rules, explicit historical feedback, and verified outcomes outrank Jev feedback.
 
-Suggested local separation:
+Implemented local separation:
 
 ```text
 history.jsonl                 execution journeys
 history.feedback.jsonl        user feedback
 history.jev-feedback.jsonl    validated Jev feedback
-routing-policy.local.json     bounded derived adjustments
 ```
 
-`routing-policy.local.json` is a rebuildable local cache, not a source of truth. AIRO recomputes it from versioned history and feedback, excludes it from export and synchronization, and may delete it safely at any time.
+AIRO computes bounded learning hints directly from versioned history and feedback at routing time. There is no mutable learned-policy file to export, synchronize, or overwrite.
 
 ## Portable history and learning
 
-Migration must not depend exclusively on a hosted service. AIRO should first define a versioned portable format and support encrypted export and import.
+Migration does not depend exclusively on a hosted service. AIRO provides a versioned portable format with encrypted export and import.
 
 ```bash
 airo history export --encrypted backup.airo
 airo history import backup.airo
 ```
 
-Import must be idempotent and preserve record identifiers, feedback relationships, schema versions, and policy provenance. Derived learning should be recomputed from merged evidence rather than treated as an opaque file to overwrite.
+Import is idempotent and preserves record identifiers, feedback relationships, schema versions, and policy provenance. Derived learning is recomputed from merged evidence rather than treated as an opaque file to overwrite.
 
 ### Stable repository identity
 
-Absolute working-directory paths cannot identify the same repository across machines. Future history records should use a stable `repositoryId` for learning scope while retaining `cwd` only as local display metadata.
+Absolute working-directory paths cannot identify the same repository across machines. Current history records use a stable `repositoryId` for learning scope while retaining `cwd` as local display metadata.
 
 For Git repositories, a plain hash of the normalized remote is not private: public repository URLs can be recovered through dictionary matching. For synchronized accounts, derive `repositoryId` with a domain-separated HMAC over the canonical remote using a dedicated account index key derived from, but distinct from, the account data-encryption key. Only the HMAC result leaves the machine. Portable archives carry the existing opaque ID so imports preserve identity without knowing the remote.
 
@@ -151,14 +151,13 @@ Repositories without a remote receive a random project ID. Linking another check
 
 ## Optional Cloudflare sync
 
-Cloud sync is an opt-in development-branch convenience for migration and multi-device continuity. The development service is deployed at `https://airo-sync.pablospaniard.workers.dev`; the client remains unreleased on npm. Local data remains authoritative, routing continues offline, and sync is invoked explicitly rather than as part of a provider run, so failure never changes a task's exit status.
+Cloud sync is an opt-in development-branch convenience for migration and multi-device continuity. The client uses an explicitly configured sync service URL and remains unreleased on npm. Local data remains authoritative, routing continues offline, and sync is invoked explicitly rather than as part of a provider run, so failure never changes a task's exit status.
 
 The implemented platform is:
 
 - A [Cloudflare Worker](https://developers.cloudflare.com/workers/) for authentication, authorization, validation, rate limiting, and sync endpoints
 - [Cloudflare D1](https://developers.cloudflare.com/d1/) for users, devices, encrypted settings, append-only sync events, cursors, and tombstones
-- R2 only when encrypted archives or payload sizes justify object storage
-- No Durable Object initially; append-only events and optimistic revisions are sufficient for expected CLI concurrency
+- No R2 or Durable Object for private sync; append-only D1 events and optimistic revisions are sufficient for expected CLI concurrency
 
 ### Authentication
 
@@ -173,11 +172,11 @@ airo sync login
   -> receive short-lived AIRO access and rotating refresh credentials
 ```
 
-End users do not need Cloudflare accounts. Device sessions must be individually revocable. Refresh tokens are stored in the operating-system credential store when possible, with a permission-restricted local file only as an explicit fallback; the server stores only token hashes.
+End users do not need Cloudflare accounts. Device sessions are individually revocable. Refresh tokens are stored in the operating-system credential store when possible, with a permission-restricted local file only as an explicit fallback; the server stores only token hashes.
 
 ### End-to-end encryption
 
-Cloudflare-managed encryption at rest is not sufficient for sensitive task history. Before upload, the client should encrypt private payloads with a random account data-encryption key. A recovery passphrase-derived key wraps that account key so a new authenticated machine can decrypt it locally.
+Cloudflare-managed encryption at rest is not sufficient for sensitive task history. Before upload, the client encrypts private payloads with a random account data-encryption key. A recovery passphrase-derived key wraps that account key so a new authenticated machine can decrypt it locally.
 
 The server stores only encrypted private payloads and the wrapped account key. Loss of the recovery passphrase and all authorized devices makes the data unrecoverable; setup must state this clearly.
 
@@ -185,11 +184,11 @@ Secrets never sync. Provider credentials, provider API keys, the user's Jev API 
 
 ### Append-only synchronization
 
-History sync should exchange immutable, globally identified events rather than whole JSONL files. Duplicate IDs are ignored, corrections create new events, deletions create tombstones, and every server insertion advances a pull cursor. Settings use per-key revisions instead of replacing an entire configuration document.
+History sync exchanges immutable, globally identified events rather than whole JSONL files. Duplicate IDs are ignored, corrections create new events, deletions create tombstones, and every server insertion advances a pull cursor. Settings use per-key revisions instead of replacing an entire configuration document.
 
 After a pull, each client deterministically rebuilds local learning from the merged evidence. This prevents one machine from silently overwriting another machine's history or policy.
 
-Expected controls include:
+Implemented controls are:
 
 ```bash
 airo sync login
@@ -197,8 +196,10 @@ airo sync enable --passphrase "a long recovery passphrase"
 airo sync now
 airo sync status
 airo sync devices
+airo sync devices revoke <device-id>
+airo sync export <file>
 airo sync logout
-airo sync delete-cloud-data
+airo sync delete-cloud-data --yes
 ```
 
 ## Research-consent milestone
@@ -354,7 +355,7 @@ Cloud sync consent never implies research consent. Local Jev consent never impli
 - **Versioning:** encrypted event envelopes, wrapped account keys, local sync state, account exports, and the D1 schema start at version 1. The Worker uses a pinned compatibility date and generated runtime types.
 - **Verification:** package tests cover authenticated encryption, recovery wrapping, account-key-separated repository indexes, and setting exclusions. Workers-runtime integration tests apply real D1 migrations and cover authentication, idempotent events, cursors, immutable account-key setup, and optimistic revisions. Wrangler's dry-run build and the full `pnpm validate` gate are required.
 - **Authentication and devices:** the CLI completes GitHub's browser-assisted device flow directly. It sends the resulting short-lived GitHub token once to the Worker, which verifies the account through GitHub and never persists the token. AIRO then issues short access tokens and rotating refresh-token families; only their hashes reach D1. Login retries revoke earlier token families for the same device before issuing replacements. A detected refresh-token replay revokes its family, and users can list or revoke devices independently.
-- **Security and privacy:** AES-256-GCM payload encryption and scrypt recovery wrapping happen locally. D1 receives ciphertext, a wrapped account key, keyed repository indexes, and operational metadata. Provider credentials, API keys, executable paths, permission settings, Jev consent, and recovery passphrases never sync. Setup accepts `--passphrase <string>` with an explicit shell-history/process-list warning; environment-variable and permission-restricted file inputs remain available. Existing local history uploads only when the user explicitly runs `airo sync now`.
+- **Security and privacy:** AES-256-GCM payload encryption and scrypt recovery wrapping happen locally. D1 receives ciphertext, a wrapped account key, keyed repository indexes, and operational metadata. Provider credentials, API keys, executable paths, permission settings, Jev consent, and recovery passphrases never sync. `airo sync enable` accepts `--passphrase <string>` with an explicit shell-history/process-list warning; environment-variable and permission-restricted file inputs remain available. Existing local history uploads only when the user explicitly runs `airo sync now`.
 - **Conflict and recovery behavior:** immutable event IDs are inserted once, pulls advance an account cursor, and divergent local immutable records fail closed. Settings use per-key optimistic revisions; simultaneous local and remote edits stop without overwriting either side. Losing the recovery passphrase and every authorized device makes cloud data unrecoverable.
 - **Operations and rollback:** the service supports encrypted account export, per-device revocation, logout, and cascading cloud-data deletion. Sync remains optional and can be disabled by signing out; local evidence remains authoritative and portable encrypted archives remain available without the service.
 
@@ -385,9 +386,9 @@ A milestone is not complete until it has:
 - Calibration and future versioning of provider capability weights
 - Future statistical policy training beyond the reviewed calibration-candidate workflow
 - Authentication provider beyond the initial GitHub flow
-- Credential-store implementation on each operating system
+- Credential-store support beyond the implemented macOS Keychain and Linux Secret Service adapters
 - Sync quotas, retention, and encrypted archive limits
-- Production Jev question set, confidence thresholds, and local boost bounds
+- Future calibration and versioning of the production Jev question set, confidence thresholds, and local boost bounds
 - Research retention period and policy-rebuild response to deletion
 - Jurisdiction and governance requirements for hosted services
 

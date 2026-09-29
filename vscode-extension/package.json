@@ -65,6 +65,18 @@
       {
         "command": "airo.openSettings",
         "title": "AIRO: Open Settings"
+      },
+      {
+        "command": "airo.syncStatus",
+        "title": "AIRO: Show Sync Status"
+      },
+      {
+        "command": "airo.syncNow",
+        "title": "AIRO: Sync Now"
+      },
+      {
+        "command": "airo.jevStatus",
+        "title": "AIRO: Show Jev Status"
       }
     ],
     "configuration": {
@@ -117,15 +129,31 @@
           ],
           "default": "live",
           "description": "AIRO output detail shown for sidebar tasks. Live is recommended so provider progress streams into the chat."
+        },
+        "airo.jevFeedback": {
+          "type": "string",
+          "enum": [
+            "inherit",
+            "disabled"
+          ],
+          "enumDescriptions": [
+            "Use the Jev consent setting from the local AIRO configuration.",
+            "Pass --no-jev for every task started from VS Code."
+          ],
+          "default": "inherit",
+          "description": "Controls optional Jev feedback for sidebar tasks. Enabling Jev still requires explicit consent through /jev enable or the CLI."
         }
       }
     }
   },
   "activationEvents": [
+    "onCommand:airo.jevStatus",
     "onCommand:airo.openHistory",
     "onCommand:airo.openSettings",
     "onCommand:airo.openTerminal",
     "onCommand:airo.runTask",
+    "onCommand:airo.syncNow",
+    "onCommand:airo.syncStatus",
     "onView:airo.sidebar"
   ],
   "extensionKind": [

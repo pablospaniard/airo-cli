@@ -431,6 +431,29 @@ process.stdout.write(JSON.stringify({type:"result", status:"success", stats:{inp
   }
 });
 
+test("lets Gemini resolve the auto model sentinel", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-runner-gemini-auto-"));
+  const command = path.join(dir, "mock-gemini");
+  fs.writeFileSync(
+    command,
+    "#!/usr/bin/env node\nprocess.stdout.write(process.argv.slice(2).join(' '));\n",
+  );
+  fs.chmodSync(command, 0o755);
+  try {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.gemini.command = command;
+    const route = routeTask("repair parser", config);
+    route.agent = "gemini";
+    route.model = "auto";
+
+    const run = await runAgent(route, "task", config, { headless: true, capture: true });
+    assert.doesNotMatch(run.output, /--model(?:\s|$)/);
+    assert.match(run.output, /--approval-mode default/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("returns only Claude's result event from a structured run", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-runner-"));
   const command = path.join(dir, "mock-claude");

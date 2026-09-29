@@ -1,7 +1,7 @@
 export type Agent = "claude" | "codex" | "gemini" | "copilot";
 export type Policy = "balanced" | "claude-heavy" | "codex-heavy";
 export type ModelTier = "fast" | "balanced" | "deep";
-export type Effort = "auto" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type Effort = "auto" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 export type FeedbackRating = "good" | "bad";
 export type PhaseKind = "analyze" | "implement" | "test" | "review" | "recover" | "clarify";
 export type OrchestrationMode = "auto" | "adaptive" | "single";
@@ -114,9 +114,15 @@ export interface PermissionsConfig {
   networkAccess: boolean;
 }
 
+export interface ModelRoutingConfig {
+  /** Discover and map provider models at runtime, or retain configured tier mappings verbatim. */
+  mode: "dynamic" | "manual";
+}
+
 export interface RouterConfig {
   policy: Policy;
   defaultAgent: Agent;
+  modelRouting: ModelRoutingConfig;
   claude: ProviderConfig;
   codex: ProviderConfig;
   gemini: ProviderConfig;

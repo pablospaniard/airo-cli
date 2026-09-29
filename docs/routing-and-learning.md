@@ -1,6 +1,6 @@
 # Routing rules and learning
 
-This document describes routing behavior in the source tree; the roadmap distinguishes development-branch milestones from the current npm release. For provider registration, portable learning, optional Jev feedback, encrypted sync, and research consent, see [Routing platform roadmap](routing-platform-roadmap.md). [Jev and AIRO](jev-and-airo.md) records Jev's narrower role.
+This document describes routing behavior in the current source tree. Published `airo-ai-router@0.7.1` predates the completed development-branch Milestones 1–5 additions; the roadmap tracks that release boundary. For provider registration, portable learning, optional Jev feedback, encrypted sync, and research consent, see [Routing platform roadmap](routing-platform-roadmap.md). [Jev and AIRO](jev-and-airo.md) records Jev's narrower role.
 
 AIRO makes a routing decision in two parts:
 
@@ -44,13 +44,13 @@ Custom rules are user-authored entries in the active AIRO configuration. They ar
 
 Each rule supports:
 
-| Field | Meaning |
-| --- | --- |
-| `name` | Human-readable name shown in the routing explanation. |
-| `pattern` | Case-insensitive JavaScript regular expression tested against the task. |
-| `agent` | Optional provider selection. |
-| `modelTier` | Optional `fast`, `balanced`, or `deep` selection. |
-| `effort` | Optional reasoning-effort override. |
+| Field       | Meaning                                                                 |
+| ----------- | ----------------------------------------------------------------------- |
+| `name`      | Human-readable name shown in the routing explanation.                   |
+| `pattern`   | Case-insensitive JavaScript regular expression tested against the task. |
+| `agent`     | Optional provider selection.                                            |
+| `modelTier` | Optional `fast`, `balanced`, or `deep` selection.                       |
+| `effort`    | Optional reasoning-effort override.                                     |
 
 Rules are evaluated in array order, and only the first match is applied. A malformed regular expression is ignored. A rule that selects an agent also gives that provider 100 scoring points, so it is decisive unless a stronger explicit selection overrides it.
 
@@ -98,6 +98,16 @@ Model discovery is also exhaustive across the provider registry. Each provider a
 
 The versioned provider support audit verifies registry metadata, configuration, routing policy, runtime behavior, failure classification, account inspection, discovery, capabilities, tests, and documentation for every registered provider. `airo doctor` shows this source integration status separately from local command availability; an integration can be supported even when its CLI is not installed on a particular machine.
 
+Current capability differences are explicit adapter metadata rather than different support levels:
+
+| Capability                     | Claude | Codex | Gemini                                  | Copilot                                 |
+| ------------------------------ | ------ | ----- | --------------------------------------- | --------------------------------------- |
+| Task execution/model selection | Yes    | Yes   | Yes                                     | Yes                                     |
+| Model discovery strategy       | Yes    | Yes   | CLI when advertised, otherwise fallback | CLI when advertised, otherwise fallback |
+| Deterministic account probe    | Yes    | Yes   | No; state is unknown                    | No; state is unknown                    |
+| Explicit effort control        | Yes    | Yes   | No; uses `auto`                         | No; uses `auto`                         |
+| Structured progress            | Yes    | Yes   | Yes                                     | Limited                                 |
+
 ## Complexity and model tier
 
 Complexity begins at `2` and is clamped to the range `1` through `5`.
@@ -118,24 +128,24 @@ It decreases for signals such as:
 
 The result maps to a tier:
 
-| Complexity | Tier |
-| --- | --- |
-| 1–2 | `fast` |
-| 3 | `balanced` |
-| 4–5 | `deep` |
+| Complexity | Tier       |
+| ---------- | ---------- |
+| 1–2        | `fast`     |
+| 3          | `balanced` |
+| 4–5        | `deep`     |
 
-The selected provider's configuration maps that tier to a concrete model and an optional effort value. Claude and Codex currently receive their configured effort controls; Gemini and Copilot do not, so their tiers differ by model selection and retain `auto` effort. A tier is an automatic profile, not a model allowlist.
+In dynamic mode, the selected provider's discovered catalog is mapped onto that tier at runtime. AIRO uses provider-neutral family signals when available and may spread an authoritative CLI or gateway catalog across the three tiers. A model found only in provider settings or the environment changes the tier it identifies but is not treated as the provider's complete entitlement catalog. Reviewed built-in profiles remain the fallback when discovery is incomplete. Setting `modelRouting.mode` to `manual` pins the configured tier profiles. Claude and Codex currently receive their resolved effort controls; Gemini and Copilot do not, so their tiers differ by model selection and retain `auto` effort. A tier is an automatic profile, not a model allowlist.
 
 ## Adaptive phase preferences
 
 When orchestration is active, the phase plan supplies defaults suited to each type of work:
 
-| Phase | Default provider | Typical tier |
-| --- | --- | --- |
-| Analyze | Claude | `balanced`, or `deep` for critical work |
-| Implement | Codex | `fast`, `balanced`, or `deep` according to scope |
-| Validate | Codex | Usually `fast` |
-| Review | Claude | `balanced`, or `deep` for critical work |
+| Phase     | Default provider | Typical tier                                     |
+| --------- | ---------------- | ------------------------------------------------ |
+| Analyze   | Claude           | `balanced`, or `deep` for critical work          |
+| Implement | Codex            | `fast`, `balanced`, or `deep` according to scope |
+| Validate  | Codex            | Usually `fast`                                   |
+| Review    | Claude           | `balanced`, or `deep` for critical work          |
 
 These preferences do not replace a provider, model, or tier explicitly selected by the user.
 
@@ -143,7 +153,7 @@ These preferences do not replace a provider, model, or tier explicitly selected 
 
 Learning is local, file-based, and repository-scoped by default. AIRO does not train a provider model or maintain a separate learned-weights file.
 
-The published npm release does not sync history between machines. The development branch implements portable encrypted export/import and optional end-to-end encrypted Cloudflare sync; these must not be presented as released npm behavior until the release process completes. Without explicitly enabling and invoking sync, the files below remain local.
+Published `airo-ai-router@0.7.1` does not sync history between machines. The development branch implements portable encrypted export/import and optional end-to-end encrypted Cloudflare sync; these must not be presented as released npm behavior until the release process completes. Without explicitly enabling and invoking sync, the files below remain local.
 
 Unless `history.path` is configured, records are stored at:
 
@@ -199,13 +209,13 @@ For each new task, AIRO calculates learning hints from existing records at routi
 
 Task similarity combines:
 
-| Component | Weight |
-| --- | --- |
-| Lexical token overlap | 60% |
-| Hashed-vector cosine similarity | 30% |
-| Matching task category | Up to 6% |
-| Matching language | Up to 2% |
-| Matching risk | Up to 2% |
+| Component                       | Weight   |
+| ------------------------------- | -------- |
+| Lexical token overlap           | 60%      |
+| Hashed-vector cosine similarity | 30%      |
+| Matching task category          | Up to 6% |
+| Matching language               | Up to 2% |
+| Matching risk                   | Up to 2% |
 
 Route utility primarily reflects the observed reward, with smaller penalties for token use and duration. Explicit feedback is the strongest evidence. Automatic evaluation uses process success, reported verification, missing verification, retries, recoveries, and later regression findings with lower confidence.
 

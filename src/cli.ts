@@ -6,6 +6,7 @@ import {
   brand,
   command as commandColor,
   divider,
+  outputWidth,
   panel,
   promptLabel,
   statusIcon,
@@ -16,7 +17,7 @@ import fs from "node:fs";
 import { loadConfig, writeProjectConfig } from "./config.js";
 import { runSetup } from "./setup.js";
 import { printModels } from "./models.js";
-import { catalogAge, discoverCatalog } from "./catalog.js";
+import { catalogAge, discoverCatalog, discoverCatalogs, resolveDynamicModels } from "./catalog.js";
 import {
   appendHistory,
   explainLearning,
@@ -61,6 +62,7 @@ import { VERSION } from "./version.js";
 import {
   cleanDroppedPath,
   INTERACTIVE_COMMANDS,
+  INTERACTIVE_SHELL_HELP,
   isSupportedAttachmentPath,
   parseInteractiveInput,
   taskArgs,
@@ -109,6 +111,11 @@ function requireText(file: string): string {
   return fs.readFileSync(file, "utf8");
 }
 
+async function runtimeRoutingConfig(config: ReturnType<typeof loadConfig>["config"]) {
+  if (config.modelRouting.mode === "manual") return config;
+  return resolveDynamicModels(config, await discoverCatalogs(config, { verifyExecutable: false }));
+}
+
 function help() {
   console.log("");
   console.log(divider(`AIRO v${VERSION}`));
@@ -136,7 +143,7 @@ function help() {
   console.log("");
   console.log(ui.bold("Models & setup"));
   console.log(
-    `  ${commandColor("airo setup")}                              ${ui.gray("configure the three automatic model tiers")}`,
+    `  ${commandColor("airo setup")}                              ${ui.gray("review provider execution permissions")}`,
   );
   console.log(
     `  ${commandColor("airo models")}                             ${ui.gray("show active model mapping")}`,
@@ -177,10 +184,19 @@ function help() {
     `  ${commandColor("airo feedback jev status|enable|disable")}  ${ui.gray("control optional local Jev feedback")}`,
   );
   console.log(
+    `  ${commandColor("airo feedback jev inspect|reset")}          ${ui.gray("inspect or clear local Jev evidence")}`,
+  );
+  console.log(
     `  ${commandColor("airo learning status|explain|reset")}       ${ui.gray("inspect or reset adaptive routing")}`,
   );
   console.log(
     `  ${commandColor("airo sync login|enable|now|status")}        ${ui.gray("manage optional encrypted cloud sync")}`,
+  );
+  console.log(
+    `  ${commandColor("airo sync devices|export|logout")}          ${ui.gray("manage sync devices and encrypted data")}`,
+  );
+  console.log(
+    `  ${commandColor("airo sync delete-cloud-data --yes")}        ${ui.gray("permanently delete the sync account data")}`,
   );
   console.log("");
   console.log(ui.bold("Sessions"));
@@ -661,13 +677,18 @@ function interactiveStatus(
 }
 
 function interactiveHelp(): string {
+  const shellCommands = INTERACTIVE_SHELL_HELP.map(
+    ([usage, description]) => `${commandColor(usage)}  ${ui.gray(description)}`,
+  );
   return panel(
-    "Interactive commands",
+    "Command reference",
     [
+      ui.bold("Interactive commands"),
+      `${commandColor("/help, /?")}          ${ui.gray("show this reference")}`,
       `${commandColor("/new [title]")}        ${ui.gray("start a fresh session")}`,
       `${commandColor("/status")}             ${ui.gray("show session and run preferences")}`,
       `${commandColor("/mode auto|adaptive|single")} ${ui.gray("set workflow mode")}`,
-      `${commandColor("/agent auto|claude|codex|gemini|copilot")} ${ui.gray("pin or auto-select a provider")}`,
+      `${commandColor("/agent auto|claude|codex|gemini|copilot")} ${ui.gray("select provider")}`,
       `${commandColor("/tier auto|fast|balanced|deep")} ${ui.gray("set model tier")}`,
       `${commandColor("/log compact|live|verbose")}  ${ui.gray("set output detail")}`,
       `${commandColor("/models")}             ${ui.gray("show active model mapping")}`,
@@ -678,12 +699,16 @@ function interactiveHelp(): string {
       `${commandColor("/no-jev <task>")}       ${ui.gray("run one task without sending it to Jev")}`,
       `${commandColor("/feedback good|bad [note]")} ${ui.gray("rate the latest run")}`,
       `${commandColor("/feedback phase <id> good|bad [note]")} ${ui.gray("rate one phase")}`,
-      `${commandColor("/learning status|explain <id>")} ${ui.gray("inspect learned routing")}`,
+      `${commandColor("/learning status|explain <id>|reset --yes")} ${ui.gray("inspect or reset learning")}`,
       `${commandColor("/sessions")}           ${ui.gray("list repository sessions")}`,
       `${commandColor("/clear")}              ${ui.gray("clear the screen")}`,
-      `${commandColor("/exit")}               ${ui.gray("exit interactive mode")}`,
+      `${commandColor("/exit, /quit")}        ${ui.gray("exit interactive mode")}`,
+      "",
+      ui.bold("Shell commands (exit the workspace first)"),
+      ...shellCommands,
+      `${commandColor("airo --help")}  ${ui.gray("show the full CLI reference")}`,
     ],
-    76,
+    outputWidth(),
   );
 }
 
@@ -928,7 +953,7 @@ async function main() {
   let { config, path } = loadConfig();
 
   if (shouldShowWelcome(raw, Boolean(process.stdin.isTTY))) {
-    console.log(firstRunWelcome(config));
+    console.log(firstRunWelcome());
   }
 
   if (shouldRunInitialSetup(raw, Boolean(process.stdin.isTTY), Boolean(path))) {
@@ -946,6 +971,7 @@ async function main() {
   }
 
   if (raw[0] === "account") {
+    config = await runtimeRoutingConfig(config);
     console.log(divider("Provider accounts"));
     for (const account of inspectAccounts(config)) {
       const icon =
@@ -1053,7 +1079,6 @@ async function main() {
       console.log(
         `${ui.bold("Status")} ${result.state?.enabled ? ui.green("enabled") : ui.yellow("disabled")}`,
       );
-      console.log(`${ui.bold("Server")} ${ui.cyan(result.state?.server ?? "not configured")}`);
       console.log(`${ui.bold("Account")} ${ui.cyan(result.state?.user?.login ?? "signed out")}`);
       console.log(
         `${ui.bold("Credentials")} ${result.credentials ? ui.green(result.credentialStore ?? "available") : ui.yellow("missing")}`,
@@ -1362,6 +1387,7 @@ async function main() {
     return;
   }
   if (raw[0] === "chat" || (raw.length === 0 && process.stdin.isTTY)) {
+    config = await runtimeRoutingConfig(config);
     await chatLoop(config, path);
     return;
   }
@@ -1406,6 +1432,7 @@ async function main() {
         `${statusIcon("ok")} ${ui.green("Created and activated session")} ${ui.bold(s.sessionId)}`,
       );
       if (raw.length > 2) {
+        config = await runtimeRoutingConfig(config);
         const args = parseArgs(raw.slice(2));
         process.exitCode = await execute(args, s, config, path);
       }
@@ -1452,6 +1479,7 @@ async function main() {
     session = getActiveSession();
     if (!session) throw new Error('No active session. Start with: airo session new "task"');
   } else if (!args.dryRun) session = createSession(args.task);
+  config = await runtimeRoutingConfig(config);
   process.exitCode = await execute(args, session, config, path);
 }
 

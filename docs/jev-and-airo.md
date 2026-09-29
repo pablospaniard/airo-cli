@@ -2,7 +2,7 @@
 
 ## Decision status
 
-Jev is not planned as a required production routing dependency or as a replacement for AIRO's router. The planned direction has two bounded uses:
+Jev is not a required routing dependency or a replacement for AIRO's router. The current source tree implements two bounded uses:
 
 1. An unpublished development evaluator that supplies semantic labels and decision feedback for improving AIRO's shipped routing policy. The Milestone 3 evaluator, split dataset, comparison report, and review gate are implemented on the development branch for synthetic privacy-reviewed fixtures only.
 2. An optional production feedback integration on the development branch that uses the user's API key, runs after a task, stores feedback locally, and may improve later automatic decisions.
@@ -31,15 +31,15 @@ Jev and AIRO operate at different layers:
 
 Jev can provide a semantic opinion about a decision. AIRO remains responsible for policy, execution, safety, availability, user intent, and learning.
 
-| Dimension | Jev | AIRO |
-| --- | --- | --- |
-| Primary role | Structured decision model | Local coding-agent router and orchestrator |
-| Input | Selected state and typed questions | Task, configuration, availability, phase, and local history |
-| Output | Choice, Score, or Noul values | Executable provider/model route and workflow |
-| Uncertainty | Probabilities and confidence | Heuristic evidence and local-learning confidence |
-| Execution | None | Provider CLI execution, fallback, recovery, and verification |
-| Adaptation | External model releases | Shipped policy plus repository-local outcomes and feedback |
-| Data boundary | Submitted state is sent to TypeSafe | Core routing and learning remain local |
+| Dimension     | Jev                                 | AIRO                                                         |
+| ------------- | ----------------------------------- | ------------------------------------------------------------ |
+| Primary role  | Structured decision model           | Local coding-agent router and orchestrator                   |
+| Input         | Selected state and typed questions  | Task, configuration, availability, phase, and local history  |
+| Output        | Choice, Score, or Noul values       | Executable provider/model route and workflow                 |
+| Uncertainty   | Probabilities and confidence        | Heuristic evidence and local-learning confidence             |
+| Execution     | None                                | Provider CLI execution, fallback, recovery, and verification |
+| Adaptation    | External model releases             | Shipped policy plus repository-local outcomes and feedback   |
+| Data boundary | Submitted state is sent to TypeSafe | Core routing and learning remain local                       |
 
 AIRO's additive provider scores are not probabilities. Its `learningConfidence` measures the effective amount of similar evidence, not the probability that a route will succeed. Jev probabilities must not be numerically added to those values without a separately evaluated calibration model.
 
@@ -160,7 +160,7 @@ airo feedback jev status
 airo feedback jev enable
 airo feedback jev disable
 airo feedback jev inspect
-airo feedback jev reset
+airo feedback jev reset --yes
 airo --no-jev "task"
 ```
 
@@ -171,22 +171,22 @@ one-run opt-out without leaving the session.
 
 ## Cloud sync interaction
 
-If the user later enables encrypted multi-device sync, local Jev feedback may be synchronized as another client-encrypted event. The TypeSafe API key never syncs. A new machine decrypts the feedback locally and rebuilds learning from the merged evidence.
+When a development-branch user separately enables encrypted multi-device sync and runs `airo sync now`, local Jev feedback is synchronized as another client-encrypted event. The TypeSafe API key and Jev consent record never sync. A new machine decrypts the feedback locally and rebuilds learning from the merged evidence.
 
 End-to-end encrypted sync data is not available for global AIRO research. Research submission requires a separate granular consent and a separately constructed server-readable payload. See the research milestone in [Routing platform roadmap](routing-platform-roadmap.md).
 
 ## Risks and required controls
 
-| Risk | Control |
-| --- | --- |
-| Sensitive task text leaves the machine | Explicit opt-in, bounded payload, preview, and per-run opt-out |
-| Jev is mistaken for ground truth | Preserve confidence and combine it only with actual outcomes and user feedback |
-| Model behavior changes | Pin development evaluations and record the exact production model response |
-| External failure disrupts work | Evaluate after execution and fail open without changing the run result |
-| Feedback oversteers local routing | Minimum samples, confidence gate, bounded boost, decay, and reset |
-| Logs expose submitted state | Never log request bodies or credentials |
-| Synced feedback exposes content | Client-side encryption before upload |
-| Local feedback is reused for research | Separate opt-in and separate payload; no consent inference |
+| Risk                                   | Control                                                                        |
+| -------------------------------------- | ------------------------------------------------------------------------------ |
+| Sensitive task text leaves the machine | Explicit opt-in, bounded payload, preview, and per-run opt-out                 |
+| Jev is mistaken for ground truth       | Preserve confidence and combine it only with actual outcomes and user feedback |
+| Model behavior changes                 | Pin development evaluations and record the exact production model response     |
+| External failure disrupts work         | Evaluate after execution and fail open without changing the run result         |
+| Feedback oversteers local routing      | Minimum samples, confidence gate, bounded boost, decay, and reset              |
+| Logs expose submitted state            | Never log request bodies or credentials                                        |
+| Synced feedback exposes content        | Client-side encryption before upload                                           |
+| Local feedback is reused for research  | Separate opt-in and separate payload; no consent inference                     |
 
 Jev 1.13 is documented as literal, less reliable with irrelevant state, vulnerable to adversarial content in state, and unsuitable for arithmetic. Keep state narrow, questions precise, numeric calculations in code, and responses schema-validated.
 
@@ -202,14 +202,14 @@ Development evaluation is ready only when:
 
 Optional production feedback is ready only when:
 
-- Core routing works identically when the feature is disabled or unavailable
-- Consent and data categories are explicit
-- No credential or excluded content reaches logs or storage
-- Feedback is local, inspectable, bounded, and resettable
-- Explicit routes cannot be changed
-- Timeout, authentication, rate-limit, and malformed-response paths are tested
-- Cloud sync and research remain separately consented
+- [x] Core routing works identically when the feature is disabled or unavailable
+- [x] Consent and data categories are explicit
+- [x] No credential or excluded content reaches logs or storage
+- [x] Feedback is local, inspectable, bounded, and resettable
+- [x] Explicit routes cannot be changed
+- [x] Timeout, authentication, rate-limit, and malformed-response paths are tested
+- [x] Cloud sync and research remain separately consented
 
-## Recommendation
+## Current decision
 
-Build the provider-neutral router, portable history, and development evaluation harness before adding production Jev feedback. Introduce the production option only when evaluation demonstrates useful routing improvements and the consent, privacy, failure, and reset behavior is complete.
+Keep Jev post-run, optional, bounded, and subordinate to local outcomes and explicit user choices. Do not move it into live route selection or use it for research collection without a new reviewed design, evidence, and consent boundary.

@@ -1,6 +1,9 @@
 {
   "policy": "balanced",
   "defaultAgent": "codex",
+  "modelRouting": {
+    "mode": "dynamic"
+  },
   "claude": {
     "command": "claude",
     "args": [],
@@ -110,5 +113,5 @@
     "level": "live",
     "persist": true
   },
-  "_comment": "AIRO can use any model exposed by each provider; run `airo setup` to change the three automatic tier defaults."
+  "_comment": "AIRO discovers provider models automatically. Set modelRouting.mode to manual to pin the provider tier mappings above."
 }
