@@ -5,9 +5,9 @@
 Jev is not planned as a required production routing dependency or as a replacement for AIRO's router. The planned direction has two bounded uses:
 
 1. An unpublished development evaluator that supplies semantic labels and decision feedback for improving AIRO's shipped routing policy. The Milestone 3 evaluator, split dataset, comparison report, and review gate are implemented on the development branch for synthetic privacy-reviewed fixtures only.
-2. A future optional production feedback integration that uses the user's API key, runs after a task, stores feedback locally, and may improve later automatic decisions.
+2. An optional production feedback integration on the development branch that uses the user's API key, runs after a task, stores feedback locally, and may improve later automatic decisions.
 
-The development evaluator is not part of the published runtime and does not run in CI against the external service. Optional production feedback remains unimplemented. The complete provider, learning, sync, and research roadmap is recorded in [Routing platform roadmap](routing-platform-roadmap.md).
+The development evaluator is not part of the published runtime and does not run in CI against the external service. Optional production feedback is implemented on the development branch but is not yet part of the published npm package. The complete provider, learning, sync, and research roadmap is recorded in [Routing platform roadmap](routing-platform-roadmap.md).
 
 The findings and development CLI interface here are based on public documentation reviewed on September 27, 2026. Jev is an external, evolving service, so its API, model versions, data practices, and limitations must be verified again before future integration changes or production use.
 

@@ -143,7 +143,7 @@ These preferences do not replace a provider, model, or tier explicitly selected 
 
 Learning is local, file-based, and repository-scoped by default. AIRO does not train a provider model or maintain a separate learned-weights file.
 
-The current release does not sync history between machines. Portable encrypted export/import and optional end-to-end encrypted cloud sync are roadmap items, not current commands. Until those milestones ship, users must treat the files below as local data and migrate them manually if needed.
+The published npm release does not sync history between machines. The development branch implements portable encrypted export/import and optional end-to-end encrypted Cloudflare sync; these must not be presented as released npm behavior until the release process completes. Without explicitly enabling and invoking sync, the files below remain local.
 
 Unless `history.path` is configured, records are stored at:
 
@@ -290,7 +290,7 @@ Typed answers are schema-validated and stored separately in `history.jev-feedbac
 
 New history and feedback records use schema version 1. History records also carry a stable `repositoryId`. Records created before these fields existed remain readable and are upgraded when exported or merged; the JSONL configuration and storage paths do not change.
 
-For a Git checkout with an `origin`, AIRO normalizes the remote, removes embedded credentials, and stores a SHA-256-derived local identifier. This lets another checkout of the same remote share repository-scoped learning without exposing the remote itself in history. Because public remote hashes may still be discoverable by dictionary matching, this identifier must remain local or inside an encrypted archive; it is not the identifier planned for cloud sync. A future synchronized account will use a domain-separated HMAC instead.
+For a Git checkout with an `origin`, AIRO normalizes the remote, removes embedded credentials, and stores a SHA-256-derived local identifier. This lets another checkout of the same remote share repository-scoped learning without exposing the remote itself in history. Because public remote hashes may still be discoverable by dictionary matching, this identifier remains local or inside an encrypted archive. Development-branch cloud sync derives a separate domain-separated HMAC identifier using the account key before any repository identifier leaves the machine.
 
 For a repository without an origin, AIRO stores a random project identifier in the local repository index. Inspect and transfer it explicitly when moving to another checkout:
 
