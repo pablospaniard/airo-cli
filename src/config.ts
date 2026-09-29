@@ -146,8 +146,8 @@ function mergeProvider(base: RouterConfig["claude"], value: any): RouterConfig["
   };
 }
 
-function mergeConfig(parsed: any): RouterConfig {
-  return {
+function mergeConfig(parsed: any, sourceFile?: string): RouterConfig {
+  const config: RouterConfig = {
     ...DEFAULT_CONFIG,
     ...parsed,
     policy: validPolicy(parsed.policy) ? parsed.policy : DEFAULT_CONFIG.policy,
@@ -169,13 +169,16 @@ function mergeConfig(parsed: any): RouterConfig {
     logging: { ...DEFAULT_CONFIG.logging, ...parsed.logging },
     rules: normalizedRules(parsed.rules),
   };
+  if (config.history.path && !path.isAbsolute(config.history.path) && sourceFile)
+    config.history.path = path.resolve(path.dirname(sourceFile), config.history.path);
+  return config;
 }
 
 export function loadConfig(cwd = process.cwd()): { config: RouterConfig; path?: string } {
   for (const file of configCandidates(cwd)) {
     if (!fs.existsSync(file)) continue;
     const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-    return { config: mergeConfig(parsed), path: file };
+    return { config: mergeConfig(parsed, file), path: file };
   }
   return { config: DEFAULT_CONFIG };
 }
@@ -190,7 +193,7 @@ export function loadGlobalConfig(): { config: RouterConfig; path?: string } {
       : undefined;
   if (!readable) return { config: DEFAULT_CONFIG };
   return {
-    config: mergeConfig(JSON.parse(fs.readFileSync(readable, "utf8"))),
+    config: mergeConfig(JSON.parse(fs.readFileSync(readable, "utf8")), file),
     path: file,
   };
 }
@@ -234,7 +237,9 @@ export function updateGlobalConfig(mutate: (config: RouterConfig) => RouterConfi
       fs.unlinkSync(recovery);
     }
     const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : undefined;
-    const current = before ? mergeConfig(JSON.parse(before)) : structuredClone(DEFAULT_CONFIG);
+    const current = before
+      ? mergeConfig(JSON.parse(before), file)
+      : structuredClone(DEFAULT_CONFIG);
     const next = mutate(current);
     const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
     fs.writeFileSync(
