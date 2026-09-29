@@ -1,6 +1,6 @@
 # Routing rules and learning
 
-This document describes behavior in the current `airo-ai-router` release. For the planned provider registry, portable learning, Jev feedback, encrypted sync, and research-consent milestones, see [Routing platform roadmap](routing-platform-roadmap.md). [Jev and AIRO](jev-and-airo.md) records the planned narrower role for Jev.
+This document describes routing behavior in the source tree; the roadmap distinguishes development-branch milestones from the current npm release. For provider registration, portable learning, optional Jev feedback, encrypted sync, and research consent, see [Routing platform roadmap](routing-platform-roadmap.md). [Jev and AIRO](jev-and-airo.md) records Jev's narrower role.
 
 AIRO makes a routing decision in two parts:
 
@@ -233,7 +233,7 @@ Learned evidence cannot override an explicitly selected model or tier. A learned
 - `minimumSamples` prevents route changes based on insufficient evidence.
 - `halfLifeDays` controls how quickly older evidence loses weight.
 - `explorationRate` is the probability of selecting an under-observed tier when no learned route already wins.
-- `repositoryScoped` prevents evidence from one working directory from influencing another.
+- `repositoryScoped` prevents evidence from one stable repository identity from influencing another. Legacy records without an identity still compare their absolute working directory.
 
 ## Inspecting decisions and evidence
 
@@ -264,3 +264,49 @@ Reset feedback-derived learning evidence:
 ```bash
 airo learning reset --yes
 ```
+
+## Optional local Jev feedback
+
+On the development branch, Jev can evaluate a completed journey and provide a lower-priority signal for future automatic routes. It never selects the current route, is disabled by default, and is not required for core operation.
+
+```bash
+airo feedback jev enable
+export TYPESAFE_API_KEY="..."
+airo feedback jev status
+airo feedback jev inspect
+airo feedback jev disable
+airo feedback jev reset --yes
+airo --no-jev "task"
+```
+
+Within the interactive workspace, run `/no-jev task` or `--no-jev task` to opt
+that task out without ending the session.
+
+Enablement records versioned consent in a permission-restricted local file. The API key remains in the environment. After provider execution and ordinary history recording, AIRO sends one batched request containing task text, phase/task features, selected provider and tier, bucketed outcomes, and an explicit rating when present. It does not copy provider output, source, diffs, configuration, repository metadata, paths, feedback notes, environment variables, or transcripts into the structured request. Because any text supplied by a user can itself contain sensitive values, use `--no-jev` for a task that should remain entirely local.
+
+Typed answers are schema-validated and stored separately in `history.jev-feedback.jsonl`; task text is not duplicated there. Only internally consistent provider/tier judgments at or above the confidence threshold can enter learning. They must meet the same repository scope, similarity sample floor, and recency rules as ordinary evidence, and are capped below the maximum ordinary-history adjustment. Explicit current choices and custom rules remain authoritative. `permissions.networkAccess: false` suppresses the optional request. Network, authentication, rate-limit, timeout, malformed-response, and model-version failures are fail-open and do not alter the completed run's exit status.
+
+## Portable history and stable repository identity
+
+New history and feedback records use schema version 1. History records also carry a stable `repositoryId`. Records created before these fields existed remain readable and are upgraded when exported or merged; the JSONL configuration and storage paths do not change.
+
+For a Git checkout with an `origin`, AIRO normalizes the remote, removes embedded credentials, and stores a SHA-256-derived local identifier. This lets another checkout of the same remote share repository-scoped learning without exposing the remote itself in history. Because public remote hashes may still be discoverable by dictionary matching, this identifier must remain local or inside an encrypted archive; it is not the identifier planned for cloud sync. A future synchronized account will use a domain-separated HMAC instead.
+
+For a repository without an origin, AIRO stores a random project identifier in the local repository index. Inspect and transfer it explicitly when moving to another checkout:
+
+```bash
+airo repository id
+airo repository link local-v1:<uuid>
+```
+
+Create and merge a portable archive with:
+
+```bash
+export AIRO_ARCHIVE_PASSPHRASE="a long passphrase from your password manager"
+airo history export --encrypted backup.airo
+airo history import backup.airo
+```
+
+Alternatively, use `--passphrase-file <path>` with a permission-restricted file. Passphrases must contain at least 12 characters and are never accepted as command arguments. The archive uses scrypt key derivation and authenticated AES-256-GCM encryption. It includes the same potentially sensitive task text, output excerpts, telemetry, and feedback notes present in local history, so encryption does not remove the need to protect the archive and passphrase.
+
+Import is idempotent. It preserves record IDs and relationships, skips byte-equivalent logical records already present, rejects an ID with different content, sorts merged evidence deterministically, and creates timestamped copies of existing JSONL files before the first write. AIRO imports no derived routing cache: learning is rebuilt from the merged source evidence, so one machine cannot overwrite another machine's learned state with an opaque policy file.

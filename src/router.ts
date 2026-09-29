@@ -1,6 +1,7 @@
 import { extractTaskFeatures } from "./evaluation.js";
 import { validAgent, validEffort, validModelTier } from "./config.js";
-import { learningHints } from "./history.js";
+import { learningHints, learningRepositoryId } from "./history.js";
+import { jevLearningHints } from "./jev-feedback.js";
 import { AGENTS, effectiveEffort, routingCapabilityScore } from "./providers.js";
 import { ROUTING_POLICY } from "./routing-policy.js";
 import type {
@@ -305,13 +306,17 @@ export function routeTask(task: string, config: RouterConfig): RouteResult {
     if (bias) add(reasons, candidate, bias, `${config.policy} policy`);
   }
 
-  const learned = learningHints(task, config.history);
+  const repositoryId = learningRepositoryId(config.history);
+  const learned = learningHints(task, config.history, repositoryId);
+  const jevLearned = jevLearningHints(task, config.history, repositoryId);
   const agents = [...AGENTS];
   for (const candidate of agents) {
     const boost = learned.agentBoosts[candidate];
     if (boost !== 0) add(reasons, candidate, boost, "history feedback on similar tasks");
+    const jevBoost = jevLearned.agentBoosts[candidate];
+    if (jevBoost !== 0) add(reasons, candidate, jevBoost, "bounded Jev feedback on similar tasks");
   }
-  modelReasons.push(...learned.notes);
+  modelReasons.push(...learned.notes, ...jevLearned.notes);
 
   const scores = Object.fromEntries(
     agents.map((candidate) => [
@@ -336,10 +341,16 @@ export function routeTask(task: string, config: RouterConfig): RouteResult {
 
   let modelTier = userRequestedTier ?? forcedTier ?? automaticCandidate.modelTier;
   if (!userRequestedTier && !forcedTier && config.history.learningEnabled) {
-    const scores = learned.tierBoosts;
+    const scores = Object.fromEntries(
+      MODEL_TIERS.map((tier) => [tier, learned.tierBoosts[tier] + jevLearned.tierBoosts[tier]]),
+    ) as Record<ModelTier, number>;
     const best = (Object.keys(scores) as ModelTier[]).sort((a, b) => scores[b] - scores[a])[0];
-    if (scores[best] >= 1.25 && scores[best] > scores[modelTier] + 0.5) {
-      modelReasons.push(`history favored ${best} tier for similar tasks`);
+    const evidenceStrength =
+      Math.max(0, learned.tierBoosts[best]) / 1.25 +
+      Math.max(0, jevLearned.tierBoosts[best]) / 0.65;
+    const enoughEvidence = evidenceStrength >= 1;
+    if (enoughEvidence && scores[best] > scores[modelTier] + 0.3) {
+      modelReasons.push(`local learning favored ${best} tier for similar tasks`);
       modelTier = best;
     }
   }
@@ -408,7 +419,7 @@ export function routeTask(task: string, config: RouterConfig): RouteResult {
     reasons,
     modelReasons,
     matchedRule,
-    learningConfidence: learned.confidence,
+    learningConfidence: Math.max(learned.confidence, jevLearned.confidence),
     expectedUtility: learned.routeUtilities[routeKey],
     routingPolicyVersion: ROUTING_POLICY.version,
   };

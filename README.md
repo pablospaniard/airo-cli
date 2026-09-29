@@ -133,9 +133,31 @@ airo --dry-run --explain "migrate this legacy module"
 
 AIRO extracts provider-neutral task features, generates every registered provider/tier candidate, and scores each candidate using reviewed capability profiles, tier suitability, configuration rules, and feedback from similar prior work. A `fast`, `balanced`, or `deep` tier is a default choice, not a restriction.
 
-See [Routing rules and learning](docs/routing-and-learning.md) for the complete current decision precedence, custom-rule behavior, history format, and learning algorithm. [Jev and AIRO](docs/jev-and-airo.md) records the planned development-evaluation and optional local-feedback boundaries. The [routing platform roadmap](docs/routing-platform-roadmap.md) covers provider-neutral routing, portable learning, encrypted cloud sync, and the deferred research-consent architecture.
+See [Routing rules and learning](docs/routing-and-learning.md) for the complete current decision precedence, custom-rule behavior, history format, and learning algorithm. [Jev and AIRO](docs/jev-and-airo.md) records the development-evaluation and optional local-feedback boundaries. The [routing platform roadmap](docs/routing-platform-roadmap.md) covers provider-neutral routing, portable learning, encrypted cloud sync, and the deferred research-consent architecture.
 
 The roadmap is not released functionality. The current package keeps history and learning local, does not require Jev or an AIRO account, and does not upload routing journeys to an AIRO service.
+
+Developers can run the unpublished Jev evaluation harness against versioned synthetic calibration and held-out cases. It requires a separately installed Jev CLI, an exact model ID, and the CLI's own TypeSafe credential configuration:
+
+```bash
+pnpm evaluate:jev -- --model jev-1.13.0 --dataset all --output .airo-dev/jev-routing-report.json
+```
+
+The report compares AIRO and Jev against reviewed labels and identifies human-review candidates; it cannot modify the production routing policy. See [Jev and AIRO](docs/jev-and-airo.md) for the privacy boundary and review protocol.
+
+On the development branch, users can also enable optional post-run Jev feedback. It is off by default and requires dedicated data-sharing consent plus the user's own environment-only key:
+
+```bash
+airo feedback jev enable
+export TYPESAFE_API_KEY="..."
+airo "task"                    # local route and execution happen before Jev
+airo --no-jev "sensitive task" # one-run opt-out
+```
+
+Inside the interactive workspace, use `/no-jev sensitive task` (or the equivalent
+`--no-jev sensitive task`) for the same one-run opt-out.
+
+Use `airo feedback jev status|inspect|disable` to control it and `airo feedback jev reset --yes` to remove its separate local evidence. The consent screen lists the bounded fields sent to TypeSafe. Task text leaves the machine; AIRO does not add source, diffs, provider output, repository metadata, paths, credentials, environment variables, notes, or transcripts as separate fields. Because task text may itself contain sensitive values, use `--no-jev` whenever the task must remain entirely local. Jev failure never changes the completed run's exit status, and accepted feedback can only add a confidence-gated, decayed, bounded hint to future unpinned routes.
 
 Out of the box, the automatic defaults are:
 
@@ -316,6 +338,21 @@ airo learning explain <run-or-phase-id>
 airo learning reset --yes
 ```
 
+Move history and feedback to another machine with an encrypted, versioned archive:
+
+```bash
+export AIRO_ARCHIVE_PASSPHRASE="a long passphrase from your password manager"
+airo history export --encrypted backup.airo
+
+# On the other machine:
+export AIRO_ARCHIVE_PASSPHRASE="a long passphrase from your password manager"
+airo history import backup.airo
+```
+
+For automation, `--passphrase-file <path>` reads the passphrase from a permission-restricted file. AIRO deliberately does not accept passphrases directly as command arguments. Import merges immutable history and feedback IDs, ignores identical duplicates, rejects conflicting IDs, and creates timestamped backups before changing existing files. Repeating the same import is safe. The archive contains routing evidence—including task text and excerpts—so keep both the archive and passphrase private.
+
+Repository-scoped learning uses a stable repository ID instead of requiring the same absolute checkout path. Git repositories with an `origin` derive a local ID from the normalized remote. Repositories without one receive a random ID; run `airo repository id` on the source and `airo repository link <id>` in the destination checkout when you want both to share learning. Remote-derived IDs are stored only locally or inside encrypted archives; future cloud sync must replace them with keyed account identifiers.
+
 For every new phase, AIRO stores task features, a local hashed feature embedding, route/model/effort, latency and token telemetry, and a deterministic evaluation. Successful provider exit, reported verification, missing verification, retries, recovery, and later regression-review findings contribute with different confidence levels. Explicit feedback remains the strongest signal. AIRO does not train provider models or let a producing model award itself an unverified success.
 
 The router combines these outcomes with its normal request signals. Similar observations are time-decayed, model/provider/tier performance is tracked separately, cost and latency reduce route utility, and learned tier changes require a minimum amount of effective evidence. Learning is repository-scoped by default. Controlled exploration is available but disabled by default.
@@ -403,6 +440,9 @@ Claude runs use `permissionMode: "acceptEdits"` inside prompt mode so headless i
 | `airo session clear` | Clear the active repository session. |
 | `airo logs [run-id]` / `airo logs --follow <run-id>` | List, print, or follow persisted run logs. |
 | `airo history [limit]` | Show recent routing history. |
+| `airo history export --encrypted <file>` | Export versioned history and feedback as an encrypted archive. |
+| `airo history import <file>` | Idempotently merge an encrypted learning archive. |
+| `airo repository id` / `airo repository link <id>` | Inspect or link the stable repository learning scope. |
 | `airo usage [limit]` | Show provider-reported tokens and the historical default-model comparison. |
 | `airo feedback <good\|bad> [note]` | Teach the router from the latest completed run. |
 | `airo --help` / `airo --version` | Show help or the installed version. |
@@ -447,9 +487,9 @@ The hook runs `pnpm run validate`, which checks formatting, linting, types, and 
 
 ## Architecture roadmap
 
-Future work includes a complete provider-adapter contract, generic routing and fallback, portable local learning, optional post-run Jev feedback, and private multi-device sync. Research participation remains a separate, deferred opt-in.
+Milestones 1–4 are implemented on the development branch: provider-neutral routing foundations, portable local learning, the development Jev evaluator, and optional local Jev feedback. Private multi-device sync is next. Research participation remains a separate, deferred opt-in.
 
-See the [routing platform roadmap](docs/routing-platform-roadmap.md) and [Jev decision record](docs/jev-and-airo.md) for the planned boundaries and acceptance gates. None of those roadmap capabilities should be inferred from the current npm release.
+See the [routing platform roadmap](docs/routing-platform-roadmap.md) and [Jev decision record](docs/jev-and-airo.md) for boundaries and acceptance gates. Development-branch status must not be inferred as functionality in the current npm release until a new version is published.
 
 ## Compatibility aliases
 
