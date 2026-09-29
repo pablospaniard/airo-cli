@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { validAgent, validModelTier } from "./config.js";
 import {
   FEEDBACK_SCHEMA_VERSION,
   HISTORY_SCHEMA_VERSION,
@@ -9,6 +10,7 @@ import {
   readFeedback,
   readHistory,
 } from "./history.js";
+import { withFileLocks } from "./file-lock.js";
 import { resolveRepositoryIdentity } from "./repository.js";
 import type { FeedbackRecord, HistoryConfig, HistoryRecord } from "./types.js";
 
@@ -70,12 +72,12 @@ function normalizeHistory(
     !record.timestamp ||
     !record.cwd ||
     !record.task ||
-    !["claude", "codex", "gemini", "copilot"].includes(record.agent) ||
-    !["fast", "balanced", "deep"].includes(record.modelTier) ||
+    !validAgent(record.agent) ||
+    !validModelTier(record.modelTier) ||
     typeof record.exitCode !== "number" ||
     typeof record.durationMs !== "number"
   )
-    throw new Error("Archive contains an invalid history record.");
+    throw new Error(`Archive contains an invalid history record (${record?.id ?? "unknown ID"}).`);
   if (
     record.repositoryId !== undefined &&
     !/^(?:git-v1:[a-f0-9]{64}|local-v1:[0-9a-f-]{36})$/.test(record.repositoryId)
@@ -105,7 +107,7 @@ function normalizeFeedback(record: FeedbackRecord): FeedbackRecord {
     record.confidence < 0 ||
     record.confidence > 1
   )
-    throw new Error("Archive contains an invalid feedback record.");
+    throw new Error(`Archive contains an invalid feedback record (${record?.id ?? "unknown ID"}).`);
   return { ...record, schemaVersion: FEEDBACK_SCHEMA_VERSION };
 }
 
@@ -128,10 +130,15 @@ export function exportLearningArchive(
   if (fs.existsSync(target) && !options.overwrite)
     throw new Error(`Archive already exists: ${target}. Use --force to replace it.`);
 
-  const history = readHistory(config)
-    .map((record) => normalizeHistory(record, config))
-    .sort(compareEvidence);
-  const feedback = readFeedback(config).map(normalizeFeedback).sort(compareEvidence);
+  const { history, feedback } = withFileLocks(
+    [`${historyPath(config)}.lock`, `${feedbackPath(config)}.lock`],
+    () => ({
+      history: readHistory(config)
+        .map((record) => normalizeHistory(record, config))
+        .sort(compareEvidence),
+      feedback: readFeedback(config).map(normalizeFeedback).sort(compareEvidence),
+    }),
+  );
   const payload: LearningArchivePayload = {
     schemaVersion: LEARNING_ARCHIVE_VERSION,
     exportedAt: new Date().toISOString(),
@@ -159,7 +166,7 @@ export function exportLearningArchive(
     ciphertext: ciphertext.toString("base64"),
   };
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  const temporary = `${target}.${process.pid}.tmp`;
+  const temporary = `${target}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
   fs.writeFileSync(temporary, `${JSON.stringify(archive)}\n`, { mode: 0o600 });
   fs.renameSync(temporary, target);
   return {
@@ -243,7 +250,7 @@ function mergeEvidence<T extends { id: string }>(
 
 function writeJsonLines(file: string, records: unknown[]): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const temporary = `${file}.${process.pid}.tmp`;
+  const temporary = `${file}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
   fs.writeFileSync(
     temporary,
     records.length ? `${records.map((record) => JSON.stringify(record)).join("\n")}\n` : "",
@@ -258,52 +265,56 @@ export function importLearningArchive(
   passphrase: string,
 ): LearningArchiveResult {
   const payload = decryptArchive(inputFile, passphrase);
-  const incomingRepositoryIds = new Map(
-    payload.history.map((record) => [record.id, record.repositoryId]),
-  );
-  const localHistory = readHistory(config).map((record) =>
-    normalizeHistory(record, config, incomingRepositoryIds.get(record.id)),
-  );
-  const localFeedback = readFeedback(config).map(normalizeFeedback);
-  const incomingHistory = payload.history.map((record) => normalizeHistory(record, config));
-  const incomingFeedback = payload.feedback.map(normalizeFeedback);
-  const history = mergeEvidence(localHistory, incomingHistory, "history");
-  const feedback = mergeEvidence(localFeedback, incomingFeedback, "feedback");
-  const mergedHistory = history.records.sort(compareEvidence);
-  const mergedFeedback = feedback.records.sort(compareEvidence);
-  const phaseIds = new Set(mergedHistory.map((record) => record.id));
-  const runIds = new Set(mergedHistory.map((record) => record.runId ?? record.id));
-  for (const record of incomingFeedback) {
-    const exists =
-      record.scope === "phase" ? phaseIds.has(record.targetId) : runIds.has(record.targetId);
-    if (!exists) throw new Error(`Archive feedback ${record.id} references missing evidence.`);
-  }
-  const backups: string[] = [];
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-
-  if (history.imported || feedback.imported) {
-    for (const file of [historyPath(config), feedbackPath(config)]) {
-      if (!fs.existsSync(file)) continue;
-      const backup = `${file}.before-import-${stamp}`;
-      fs.copyFileSync(file, backup);
-      backups.push(backup);
+  const historyFile = historyPath(config);
+  const feedbackFile = feedbackPath(config);
+  return withFileLocks([`${historyFile}.lock`, `${feedbackFile}.lock`], () => {
+    const incomingRepositoryIds = new Map(
+      payload.history.map((record) => [record.id, record.repositoryId]),
+    );
+    const localHistory = readHistory(config).map((record) =>
+      normalizeHistory(record, config, incomingRepositoryIds.get(record.id)),
+    );
+    const localFeedback = readFeedback(config).map(normalizeFeedback);
+    const incomingHistory = payload.history.map((record) => normalizeHistory(record, config));
+    const incomingFeedback = payload.feedback.map(normalizeFeedback);
+    const history = mergeEvidence(localHistory, incomingHistory, "history");
+    const feedback = mergeEvidence(localFeedback, incomingFeedback, "feedback");
+    const mergedHistory = history.records.sort(compareEvidence);
+    const mergedFeedback = feedback.records.sort(compareEvidence);
+    const phaseIds = new Set(mergedHistory.map((record) => record.id));
+    const runIds = new Set(mergedHistory.map((record) => record.runId ?? record.id));
+    for (const record of incomingFeedback) {
+      const exists =
+        record.scope === "phase" ? phaseIds.has(record.targetId) : runIds.has(record.targetId);
+      if (!exists) throw new Error(`Archive feedback ${record.id} references missing evidence.`);
     }
-    writeJsonLines(historyPath(config), mergedHistory);
-    writeJsonLines(feedbackPath(config), mergedFeedback);
-  }
+    const backups: string[] = [];
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 
-  return {
-    history: {
-      imported: history.imported,
-      skipped: history.skipped,
-      total: mergedHistory.length,
-    },
-    feedback: {
-      imported: feedback.imported,
-      skipped: feedback.skipped,
-      total: mergedFeedback.length,
-    },
-    evidenceDigest: evidenceDigest(mergedHistory, mergedFeedback),
-    backupFiles: backups,
-  };
+    if (history.imported || feedback.imported) {
+      for (const file of [historyFile, feedbackFile]) {
+        if (!fs.existsSync(file)) continue;
+        const backup = `${file}.before-import-${stamp}`;
+        fs.copyFileSync(file, backup);
+        backups.push(backup);
+      }
+      writeJsonLines(historyFile, mergedHistory);
+      writeJsonLines(feedbackFile, mergedFeedback);
+    }
+
+    return {
+      history: {
+        imported: history.imported,
+        skipped: history.skipped,
+        total: mergedHistory.length,
+      },
+      feedback: {
+        imported: feedback.imported,
+        skipped: feedback.skipped,
+        total: mergedFeedback.length,
+      },
+      evidenceDigest: evidenceDigest(mergedHistory, mergedFeedback),
+      backupFiles: backups,
+    };
+  });
 }

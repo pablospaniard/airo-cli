@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -166,9 +167,69 @@ test("post-run evaluation sends a bounded payload and stores validated feedback 
     fs.appendFileSync(jevFeedbackPath(config), '{"schemaVersion":1,"id":"broken"}\n');
     assert.equal(readJevFeedback(config).length, 2);
     assert.equal((await evaluateRunWithJev(config, "run-1", { apiKey: "key" })).status, "skipped");
+    config.enabled = false;
     assert.equal(resetJevFeedback(config), 2);
     assert.deepEqual(readJevFeedback(config), []);
   } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("Jev reset waits for an in-flight append and reports every removed record", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "airo-jev-reset-lock-"));
+  const config = historyConfig(directory);
+  const ready = path.join(directory, "ready");
+  const release = path.join(directory, "release");
+  const resultFile = path.join(directory, "reset-result");
+  let blocker: ReturnType<typeof spawn> | undefined;
+  let resetter: ReturnType<typeof spawn> | undefined;
+  try {
+    appendHistory(config, record("phase-1"));
+    enableJev(config);
+    const evaluated = await evaluateRunWithJev(config, "run-1", {
+      apiKey: "key",
+      fetchImpl: async () =>
+        new Response(JSON.stringify(answerBody(1)), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    });
+    assert.equal(evaluated.status, "saved");
+    if (evaluated.status !== "saved") return;
+    const first = evaluated.records[0];
+    const second = { ...first, id: "concurrent-jev-record" };
+    const file = jevFeedbackPath(config);
+    const lock = `${file}.lock`;
+    blocker = spawn(process.execPath, [
+      "-e",
+      `const fs=require("node:fs");fs.writeFileSync(${JSON.stringify(lock)},process.pid+"\\nlegacy\\n",{flag:"wx"});fs.writeFileSync(${JSON.stringify(ready)},"ready");const timer=setInterval(()=>{if(!fs.existsSync(${JSON.stringify(release)}))return;clearInterval(timer);fs.appendFileSync(${JSON.stringify(file)},${JSON.stringify(`${JSON.stringify(second)}\n`)});fs.unlinkSync(${JSON.stringify(lock)})},5);`,
+    ]);
+    const readyDeadline = Date.now() + 2_000;
+    while (!fs.existsSync(ready) && Date.now() < readyDeadline)
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(fs.existsSync(ready), true);
+
+    const jevModule = new URL("../jev-feedback.js", import.meta.url).href;
+    resetter = spawn(process.execPath, [
+      "--input-type=module",
+      "-e",
+      `import fs from "node:fs";import {resetJevFeedback} from ${JSON.stringify(jevModule)};fs.writeFileSync(${JSON.stringify(resultFile)},String(resetJevFeedback(${JSON.stringify(config)})));`,
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(fs.existsSync(resultFile), false);
+    fs.writeFileSync(release, "release");
+    await new Promise<void>((resolve, reject) => {
+      resetter!.once("exit", (code: number | null) =>
+        code === 0 ? resolve() : reject(new Error(`reset exited ${code}`)),
+      );
+      resetter!.once("error", reject);
+    });
+    assert.equal(fs.readFileSync(resultFile, "utf8"), "2");
+    assert.equal(fs.existsSync(file), false);
+  } finally {
+    fs.writeFileSync(release, "release");
+    blocker?.kill();
+    resetter?.kill();
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
@@ -226,12 +287,43 @@ test("accepted Jev evidence requires samples and produces bounded local hints", 
     assert.ok(hints.tierBoosts.deep > 0);
     assert.ok(hints.tierBoosts.deep <= 0.75);
     assert.match(hints.notes[0], /bounded hint/);
-    assert.equal(
-      jevLearningHints("fix TypeScript parser bug", { ...config, minimumSamples: 10 }).observations,
-      0,
-    );
+    const belowThreshold = jevLearningHints("fix TypeScript parser bug", {
+      ...config,
+      minimumSamples: 10,
+    });
+    assert.equal(belowThreshold.observations, 2);
+    assert.ok(belowThreshold.confidence > 0 && belowThreshold.confidence < 1);
+    assert.deepEqual(belowThreshold.agentBoosts, {
+      claude: 0,
+      codex: 0,
+      gemini: 0,
+      copilot: 0,
+    });
     disableJev(config);
     assert.equal(jevLearningHints("fix TypeScript parser bug", config).observations, 0);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("assigns repository identity when evaluating legacy history", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "airo-jev-legacy-repository-"));
+  const config = historyConfig(directory);
+  const legacy = record("legacy-phase", "legacy-run");
+  try {
+    fs.writeFileSync(config.path!, `${JSON.stringify(legacy)}\n`);
+    enableJev(config);
+    const result = await evaluateRunWithJev(config, "legacy-run", {
+      apiKey: "key",
+      fetchImpl: async () =>
+        new Response(JSON.stringify(answerBody(1)), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    });
+    assert.equal(result.status, "saved");
+    if (result.status === "saved")
+      assert.match(result.records[0].repositoryId!, /^(?:git|local)-v1:/);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
