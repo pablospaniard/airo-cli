@@ -148,8 +148,13 @@ class SidebarProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   private activeChatId: string;
   private ready?: Promise<void>;
   private resolveReady?: () => void;
+  private viewAvailable: Promise<void>;
+  private resolveViewAvailable?: () => void;
 
   constructor(private session?: SessionSummary) {
+    this.viewAvailable = new Promise((resolve) => {
+      this.resolveViewAvailable = resolve;
+    });
     this.activeSession = Boolean(session);
     const chat = this.createChatState(session);
     this.activeChatId = chat.id;
@@ -166,10 +171,15 @@ class SidebarProvider implements vscode.WebviewViewProvider, vscode.Disposable {
       this.resolveReady = resolve;
     });
     this.initializeWebview(view.webview);
+    this.resolveViewAvailable?.();
+    this.resolveViewAvailable = undefined;
     view.onDidDispose(() => {
       this.view = undefined;
       this.ready = undefined;
       this.resolveReady = undefined;
+      this.viewAvailable = new Promise((resolve) => {
+        this.resolveViewAvailable = resolve;
+      });
     });
   }
 
@@ -201,7 +211,11 @@ class SidebarProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   }
 
   private async reveal(): Promise<void> {
-    if (!this.view) await vscode.commands.executeCommand("airo.sidebar.focus");
+    if (!this.view) {
+      const viewAvailable = this.viewAvailable;
+      await vscode.commands.executeCommand("airo.sidebar.focus");
+      if (!this.view) await viewAvailable;
+    }
     await this.ready;
     this.view?.show?.(true);
     this.post({ type: "focus" });

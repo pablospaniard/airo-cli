@@ -107,8 +107,13 @@ class SidebarProvider {
     activeChatId;
     ready;
     resolveReady;
+    viewAvailable;
+    resolveViewAvailable;
     constructor(session) {
         this.session = session;
+        this.viewAvailable = new Promise((resolve) => {
+            this.resolveViewAvailable = resolve;
+        });
         this.activeSession = Boolean(session);
         const chat = this.createChatState(session);
         this.activeChatId = chat.id;
@@ -124,10 +129,15 @@ class SidebarProvider {
             this.resolveReady = resolve;
         });
         this.initializeWebview(view.webview);
+        this.resolveViewAvailable?.();
+        this.resolveViewAvailable = undefined;
         view.onDidDispose(() => {
             this.view = undefined;
             this.ready = undefined;
             this.resolveReady = undefined;
+            this.viewAvailable = new Promise((resolve) => {
+                this.resolveViewAvailable = resolve;
+            });
         });
     }
     initializeWebview(webview) {
@@ -153,8 +163,12 @@ class SidebarProvider {
         void this.reveal().then(() => this.jev([], this.activeChatId));
     }
     async reveal() {
-        if (!this.view)
+        if (!this.view) {
+            const viewAvailable = this.viewAvailable;
             await vscode.commands.executeCommand("airo.sidebar.focus");
+            if (!this.view)
+                await viewAvailable;
+        }
         await this.ready;
         this.view?.show?.(true);
         this.post({ type: "focus" });

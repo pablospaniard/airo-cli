@@ -75,7 +75,16 @@ export const DEFAULT_CONFIG: RouterConfig = {
 const POLICIES = new Set<Policy>(["balanced", "claude-heavy", "codex-heavy"]);
 const AGENT_IDS = new Set<Agent>(["claude", "codex", "gemini", "copilot"]);
 const MODEL_TIERS = new Set<ModelTier>(["fast", "balanced", "deep"]);
-const EFFORTS = new Set<Effort>(["auto", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const EFFORTS = new Set<Effort>([
+  "auto",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+]);
 
 export function validPolicy(value: unknown): value is Policy {
   return typeof value === "string" && POLICIES.has(value as Policy);

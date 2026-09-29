@@ -53,6 +53,25 @@ test("loads and deeply merges project configuration", () => {
   }
 });
 
+test("preserves explicit dynamic routing and accepts ultra effort rules", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-config-dynamic-routing-"));
+  try {
+    fs.writeFileSync(
+      path.join(dir, ".airo.json"),
+      JSON.stringify({
+        modelRouting: { mode: "dynamic" },
+        rules: [{ name: "deep review", pattern: "review", effort: "ultra" }],
+      }),
+    );
+
+    const loaded = loadConfig(dir).config;
+    assert.equal(loaded.modelRouting.mode, "dynamic");
+    assert.equal(loaded.rules[0]?.effort, "ultra");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("normalizes invalid routing policy, agent, and custom rule fields", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-config-invalid-routing-"));
   try {
