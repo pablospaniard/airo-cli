@@ -1,4 +1,5 @@
 import { extractTaskFeatures } from "./evaluation.js";
+import { validAgent, validEffort, validModelTier } from "./config.js";
 import { learningHints } from "./history.js";
 import { jevLearningHints } from "./jev-feedback.js";
 import { AGENTS, effectiveEffort, routingCapabilityScore } from "./providers.js";
@@ -118,6 +119,8 @@ function configuredModelIn(
   for (const agent of AGENTS) {
     for (const tier of ["fast", "balanced", "deep"] as const) {
       const model = config[agent].models[tier].model;
+      // Provider sentinels are not model names users can explicitly request.
+      if (model.toLowerCase() === "auto") continue;
       const flexible = escapeRegex(model).replace(/[-._]+/g, "[-._\\s]+");
       const match = new RegExp(`\\b${flexible}\\b`, "i").exec(text);
       if (match) matches.push({ index: match.index, agent, model, tier });
@@ -258,12 +261,12 @@ export function routeTask(task: string, config: RouterConfig): RouteResult {
   for (const rule of config.rules) {
     try {
       if (new RegExp(rule.pattern, "i").test(task)) {
-        forcedAgent = rule.agent;
-        forcedTier = rule.modelTier;
-        forcedEffort = rule.effort;
+        forcedAgent = validAgent(rule.agent) ? rule.agent : undefined;
+        forcedTier = validModelTier(rule.modelTier) ? rule.modelTier : undefined;
+        forcedEffort = validEffort(rule.effort) ? rule.effort : undefined;
         matchedRule = rule.name;
-        if (rule.agent) add(reasons, rule.agent, 100, `matched rule: ${rule.name}`);
-        if (rule.modelTier) modelReasons.push(`rule ${rule.name} forced ${rule.modelTier} tier`);
+        if (forcedAgent) add(reasons, forcedAgent, 100, `matched rule: ${rule.name}`);
+        if (forcedTier) modelReasons.push(`rule ${rule.name} forced ${forcedTier} tier`);
         break;
       }
     } catch {
@@ -297,8 +300,9 @@ export function routeTask(task: string, config: RouterConfig): RouteResult {
     if (capability.points)
       add(reasons, candidate, capability.points, capability.reasons.join(" + "));
   }
+  const configuredBiases = ROUTING_POLICY.configuredBiases[config.policy] ?? {};
   for (const candidate of AGENTS) {
-    const bias = ROUTING_POLICY.configuredBiases[config.policy][candidate] ?? 0;
+    const bias = configuredBiases[candidate] ?? 0;
     if (bias) add(reasons, candidate, bias, `${config.policy} policy`);
   }
 

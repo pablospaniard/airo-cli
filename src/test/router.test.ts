@@ -267,6 +267,22 @@ test("asks for clarification when a routing instruction cannot be resolved", () 
   assert.equal(routingClarification("use automatic routing for this review", current), undefined);
 });
 
+test("does not mistake the auto model sentinel for an explicit Gemini request", () => {
+  const current = config();
+  for (const task of [
+    "Add a helper with auto-generated IDs to the parser",
+    "use auto routing to fix the lint errors",
+  ]) {
+    const request = userRoutingRequest(task, current);
+    const route = routeTask(task, current);
+    assert.equal(request.model, undefined);
+    assert.equal(request.agent, undefined);
+    assert.equal(route.userRequestedModel, undefined);
+    assert.equal(route.agentPinned, false);
+    assert.notEqual(route.agent, "gemini");
+  }
+});
+
 test("does not let a later sentence change the routing request", () => {
   const current = config();
   const request = userRoutingRequest("use Claude. Then make the implementation fast", current);
@@ -340,6 +356,25 @@ test("ignores malformed custom rule expressions", () => {
   });
 
   assert.doesNotThrow(() => routeTask("Add a component", custom));
+});
+
+test("ignores invalid custom rule values and unknown policies", () => {
+  const custom = config();
+  custom.policy = "unknown-policy" as RouterConfig["policy"];
+  custom.rules = [
+    {
+      name: "stale provider rule",
+      pattern: "component",
+      agent: "clude",
+      modelTier: "enormous",
+      effort: "extreme",
+    } as unknown as RouterConfig["rules"][number],
+  ];
+
+  const route = routeTask("Add a component", custom);
+  assert.equal(route.matchedRule, "stale provider rule");
+  assert.ok(["claude", "codex", "gemini", "copilot"].includes(route.agent));
+  assert.ok(["fast", "balanced", "deep"].includes(route.modelTier));
 });
 
 test("uses the configured default agent to break score ties", () => {
