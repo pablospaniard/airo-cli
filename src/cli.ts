@@ -74,8 +74,23 @@ import { AGENTS } from "./providers.js";
 import { buildUsageReport, nonCachedTokens, processedTokens } from "./usage.js";
 import { firstRunWelcome } from "./welcome.js";
 import { auditProviderSupport } from "./provider-support.js";
+import { exportLearningArchive, importLearningArchive } from "./history-archive.js";
+import { linkRepositoryIdentity, resolveRepositoryIdentity } from "./repository.js";
 import pathModule from "node:path";
 import { evaluateRoute, extractTaskFeatures } from "./evaluation.js";
+import {
+  disableJev,
+  enableJev,
+  evaluateRunWithJev,
+  isJevEnabled,
+  JEV_DISCLOSURE,
+  JEV_MODEL,
+  jevConsentPath,
+  jevFeedbackPath,
+  readJevConsent,
+  readJevFeedback,
+  resetJevFeedback,
+} from "./jev-feedback.js";
 
 function requireText(file: string): string {
   return fs.readFileSync(file, "utf8");
@@ -131,10 +146,22 @@ function help() {
     `  ${commandColor("airo history [limit]")}                    ${ui.gray("show routing history")}`,
   );
   console.log(
+    `  ${commandColor("airo history export --encrypted <file>")}  ${ui.gray("export portable learning evidence")}`,
+  );
+  console.log(
+    `  ${commandColor("airo history import <file>")}              ${ui.gray("merge a portable learning archive")}`,
+  );
+  console.log(
+    `  ${commandColor("airo repository id|link <id>")}            ${ui.gray("inspect or link the learning scope")}`,
+  );
+  console.log(
     `  ${commandColor("airo usage [limit]")}                      ${ui.gray("show token use and measured savings")}`,
   );
   console.log(
     `  ${commandColor("airo feedback good|bad ...")}              ${ui.gray("rate the latest run")}`,
+  );
+  console.log(
+    `  ${commandColor("airo feedback jev status|enable|disable")}  ${ui.gray("control optional local Jev feedback")}`,
   );
   console.log(
     `  ${commandColor("airo learning status|explain|reset")}       ${ui.gray("inspect or reset adaptive routing")}`,
@@ -160,6 +187,21 @@ function help() {
   console.log(`${statusIcon("info")} ${ui.dim("Set NO_COLOR=1 to disable ANSI colors.")}`);
 }
 
+function archivePassphrase(args: string[]): string {
+  const passphraseFileIndex = args.indexOf("--passphrase-file");
+  if (passphraseFileIndex >= 0) {
+    const file = args[passphraseFileIndex + 1];
+    if (!file) throw new Error("--passphrase-file requires a path.");
+    return fs.readFileSync(pathModule.resolve(file), "utf8").replace(/[\r\n]+$/, "");
+  }
+  const passphrase = process.env.AIRO_ARCHIVE_PASSPHRASE;
+  if (!passphrase)
+    throw new Error(
+      "Set AIRO_ARCHIVE_PASSPHRASE or use --passphrase-file. Passphrases are never accepted as command arguments.",
+    );
+  return passphrase;
+}
+
 function parseArgs(argv: string[]) {
   let agent: "auto" | Agent = "auto";
   let tier: ModelTier | undefined;
@@ -171,7 +213,8 @@ function parseArgs(argv: string[]) {
     explain = false,
     adaptive = false,
     single = false,
-    continueMode = false;
+    continueMode = false,
+    noJev = false;
   let logLevel: LogLevel | undefined;
   let sessionId: string | undefined;
   const taskParts: string[] = [];
@@ -188,6 +231,7 @@ function parseArgs(argv: string[]) {
     else if (arg === "--adaptive") adaptive = true;
     else if (arg === "--single") single = true;
     else if (arg === "--continue") continueMode = true;
+    else if (arg === "--no-jev") noJev = true;
     else if (arg === "--session") sessionId = argv[++i];
     else if (arg === "--log") {
       const v = argv[++i] as LogLevel;
@@ -213,6 +257,7 @@ function parseArgs(argv: string[]) {
     adaptive,
     single,
     continueMode,
+    noJev,
     sessionId,
     logLevel,
     task: taskParts.join(" ").trim(),
@@ -502,6 +547,17 @@ async function execute(
       routePreferences: { agent: args.preferredAgent, tier: args.preferredTier },
       routeOverrides: routeOverrides(args, config),
     });
+    if (!args.dryRun && !args.noJev && config.permissions.networkAccess) {
+      const feedback = await evaluateRunWithJev(config.history, result.runId);
+      if (feedback.status === "saved")
+        console.log(
+          `${statusIcon("ok")} ${ui.gray("Jev feedback saved locally for")} ${ui.bold(String(feedback.records.length))} ${ui.gray("phase(s)")}`,
+        );
+      else if (feedback.status === "error")
+        console.error(
+          `${statusIcon("error")} ${ui.yellow(`${feedback.reason}; run result is unchanged`)}`,
+        );
+    }
     if (session && !args.dryRun)
       appendTurn(session, {
         turnId: result.runId + "-turn",
@@ -519,6 +575,15 @@ async function execute(
     return result.exitCode;
   }
   const r = await singleRun(args, config, path, session, askUser);
+  if (!args.dryRun && !args.noJev && config.permissions.networkAccess) {
+    const feedback = await evaluateRunWithJev(config.history, r.runId);
+    if (feedback.status === "saved")
+      console.log(`${statusIcon("ok")} ${ui.gray("Jev feedback saved locally")}`);
+    else if (feedback.status === "error")
+      console.error(
+        `${statusIcon("error")} ${ui.yellow(`${feedback.reason}; run result is unchanged`)}`,
+      );
+  }
   if (session && !args.dryRun)
     appendTurn(session, {
       turnId: r.runId + "-turn",
@@ -594,6 +659,7 @@ function interactiveHelp(): string {
       `${commandColor("/usage [limit]")}      ${ui.gray("show token usage")}`,
       `${commandColor("/logs")}               ${ui.gray("show recent run logs")}`,
       `${commandColor("/attach <file-path>")} ${ui.gray("attach a local image, PDF, Markdown, or JSON file to the next task")}`,
+      `${commandColor("/no-jev <task>")}       ${ui.gray("run one task without sending it to Jev")}`,
       `${commandColor("/feedback good|bad [note]")} ${ui.gray("rate the latest run")}`,
       `${commandColor("/feedback phase <id> good|bad [note]")} ${ui.gray("rate one phase")}`,
       `${commandColor("/learning status|explain <id>")} ${ui.gray("inspect learned routing")}`,
@@ -740,7 +806,7 @@ async function chatLoop(config: any, path?: string) {
         else if (action.action === "explain") printLearningExplanation(config, action.targetId!);
         else if (!action.confirmed)
           console.log(
-            `${statusIcon("info")} ${ui.yellow("Use /learning reset --yes to remove learned feedback.")}`,
+            `${statusIcon("info")} ${ui.yellow("Use /learning reset --yes to remove ordinary learned feedback; Jev evidence has its own reset command.")}`,
           );
         else
           console.log(
@@ -792,7 +858,11 @@ async function chatLoop(config: any, path?: string) {
             console.log(
               `${statusIcon("ok")} ${ui.gray("attached dropped file")} ${ui.cyan(attachmentPath)}`,
             );
-            action = { kind: "task", task: "Inspect the attached file" };
+            action = {
+              kind: "task",
+              task: "Inspect the attached file",
+              noJev: action.noJev,
+            };
           } catch {
             // A normal task ending in a filename should still be routed normally.
           }
@@ -800,7 +870,9 @@ async function chatLoop(config: any, path?: string) {
         const attachmentContext = attachments.length
           ? `\n\nAttached local file(s) for inspection:\n${attachments.map((file) => `- ${file}`).join("\n")}\nUse the provider's local file inspection capability if available.`
           : "";
-        const args = parseArgs(taskArgs(`${action.task}${attachmentContext}`, preferences));
+        const args = parseArgs(
+          taskArgs(`${action.task}${attachmentContext}`, preferences, { noJev: action.noJev }),
+        );
         attachments = [];
         const adaptive = args.adaptive || (!args.single && shouldOrchestrate(args.task, config));
         console.log(
@@ -916,11 +988,58 @@ async function main() {
     return;
   }
   if (raw[0] === "history") {
+    if (raw[1] === "export") {
+      const encrypted = raw.indexOf("--encrypted");
+      const output = encrypted >= 0 ? raw[encrypted + 1] : undefined;
+      if (!output || output.startsWith("--"))
+        throw new Error("Use: airo history export --encrypted <archive.airo> [--force]");
+      const result = exportLearningArchive(config.history, output, archivePassphrase(raw), {
+        overwrite: raw.includes("--force"),
+      });
+      console.log(
+        `${statusIcon("ok")} ${ui.gray("encrypted archive written:")} ${ui.cyan(pathModule.resolve(output))}`,
+      );
+      console.log(
+        `${ui.gray("Evidence")} ${result.history.total} phase(s), ${result.feedback.total} feedback record(s) · digest ${result.evidenceDigest.slice(0, 12)}`,
+      );
+      return;
+    }
+    if (raw[1] === "import") {
+      const input = raw[2];
+      if (!input || input.startsWith("--"))
+        throw new Error("Use: airo history import <archive.airo>");
+      const result = importLearningArchive(config.history, input, archivePassphrase(raw));
+      console.log(
+        `${statusIcon("ok")} ${ui.gray("learning evidence merged:")} ${ui.cyan(pathModule.resolve(input))}`,
+      );
+      console.log(
+        `${ui.gray("History")} ${result.history.imported} imported · ${result.history.skipped} already present · ${result.history.total} total`,
+      );
+      console.log(
+        `${ui.gray("Feedback")} ${result.feedback.imported} imported · ${result.feedback.skipped} already present · ${result.feedback.total} total · digest ${result.evidenceDigest.slice(0, 12)}`,
+      );
+      if (result.backupFiles.length)
+        console.log(
+          `${ui.gray("Backups")} ${result.backupFiles.map((file) => ui.cyan(file)).join(", ")}`,
+        );
+      return;
+    }
     const limit = Math.max(1, Number(raw[1] ?? 15));
     for (const r of readHistory(config.history).slice(-limit).reverse())
       console.log(
         `${r.id}${r.runId ? ` run=${r.runId}` : ""}${r.sessionId ? ` session=${r.sessionId}` : ""} ${r.agent}/${r.model} ${r.effort} exit=${r.exitCode} ${r.feedback ?? ""}`,
       );
+    return;
+  }
+  if (raw[0] === "repository") {
+    const storageDir = pathModule.dirname(historyPath(config.history));
+    if (!raw[1] || raw[1] === "id") {
+      const identity = resolveRepositoryIdentity(process.cwd(), storageDir);
+      console.log(`${identity.id} ${ui.gray(`(${identity.source})`)}`);
+    } else if (raw[1] === "link" && raw[2]) {
+      linkRepositoryIdentity(process.cwd(), storageDir, raw[2]);
+      console.log(`${statusIcon("ok")} ${ui.gray("repository linked to")} ${ui.cyan(raw[2])}`);
+    } else throw new Error("Use: airo repository id|link <repository-id>");
     return;
   }
   if (raw[0] === "usage") {
@@ -970,6 +1089,86 @@ async function main() {
     return;
   }
   if (raw[0] === "feedback") {
+    if (raw[1] === "jev") {
+      const action = raw[2] ?? "status";
+      if (action === "status") {
+        const consent = readJevConsent(config.history);
+        const enabled = isJevEnabled(config.history);
+        console.log(divider("Optional local Jev feedback"));
+        console.log(
+          `${ui.bold("Status")} ${enabled ? ui.green("enabled") : ui.yellow("disabled")}`,
+        );
+        console.log(
+          `${ui.bold("API key")} ${process.env.TYPESAFE_API_KEY ? ui.green("available in environment") : ui.yellow("not set")}`,
+        );
+        console.log(`${ui.bold("Model")} ${ui.cyan(JEV_MODEL)}`);
+        console.log(
+          `${ui.bold("Records")} ${ui.cyan(String(readJevFeedback(config.history).length))}`,
+        );
+        console.log(`${ui.bold("Consent")} ${ui.cyan(jevConsentPath(config.history))}`);
+        console.log(`${ui.bold("Feedback")} ${ui.cyan(jevFeedbackPath(config.history))}`);
+        if (consent?.enabled && !enabled)
+          console.log(
+            `${statusIcon("info")} ${ui.yellow("Consent notice changed; review and enable again before another request.")}`,
+          );
+        return;
+      }
+      if (action === "enable") {
+        if (!config.history.enabled)
+          throw new Error("Enable local history before enabling Jev feedback.");
+        console.log(divider("Jev data-sharing consent"));
+        for (const line of JEV_DISCLOSURE) console.log(`${ui.gray("•")} ${line}`);
+        let accepted = raw.includes("--accept-data-sharing");
+        if (!accepted && process.stdin.isTTY) {
+          console.log(
+            `${statusIcon("info")} ${ui.yellow('Type "ENABLE JEV" to accept this disclosure.')}`,
+          );
+          accepted = (await askTerminal("Jev consent")) === "ENABLE JEV";
+        }
+        if (!accepted)
+          throw new Error(
+            "Consent was not recorded. Review the disclosure and re-run with --accept-data-sharing, or enable interactively.",
+          );
+        enableJev(config.history);
+        console.log(`${statusIcon("ok")} ${ui.green("Optional local Jev feedback enabled.")}`);
+        if (!process.env.TYPESAFE_API_KEY)
+          console.log(
+            `${statusIcon("info")} ${ui.yellow("Set TYPESAFE_API_KEY in your environment before running a task.")}`,
+          );
+        return;
+      }
+      if (action === "disable") {
+        disableJev(config.history);
+        console.log(
+          `${statusIcon("ok")} ${ui.gray("Jev feedback disabled; existing local records were preserved.")}`,
+        );
+        return;
+      }
+      if (action === "inspect") {
+        const limitArg = raw.find((_value: string, index: number) => raw[index - 1] === "--limit");
+        const limit = Math.max(1, Number(limitArg ?? 20));
+        const records = readJevFeedback(config.history).slice(-limit).reverse();
+        console.log(divider("Local Jev feedback"));
+        if (!records.length)
+          console.log(`${statusIcon("info")} ${ui.gray("No Jev feedback yet.")}`);
+        for (const record of records)
+          console.log(
+            `${record.id} ${record.selected.agent}/${record.selected.tier} → ${record.suggested.agent}/${record.suggested.tier} ${record.acceptedIntoLearning ? ui.green("accepted") : ui.yellow("observed")} ${ui.gray(`confidence=${Math.min(record.provider.confidence, record.tier.confidence).toFixed(2)} model=${record.model}`)}`,
+          );
+        return;
+      }
+      if (action === "reset") {
+        if (!raw.includes("--yes"))
+          throw new Error(
+            "Jev reset removes local Jev feedback. Re-run with: airo feedback jev reset --yes",
+          );
+        console.log(
+          `${statusIcon("ok")} ${ui.gray("removed")} ${ui.bold(String(resetJevFeedback(config.history)))} ${ui.gray("Jev feedback record(s); consent was preserved")}`,
+        );
+        return;
+      }
+      throw new Error("Use: airo feedback jev status|enable|disable|inspect|reset");
+    }
     const phase = raw[1] === "phase";
     const targetId = phase ? raw[2] : undefined;
     const rating = raw[phase ? 3 : 1] as FeedbackRating;
@@ -991,7 +1190,7 @@ async function main() {
     else if (action === "reset") {
       if (!raw.includes("--yes"))
         throw new Error(
-          "Learning reset removes all feedback. Re-run with: airo learning reset --yes",
+          "Learning reset removes ordinary feedback-derived learning; Jev evidence has its own reset command. Re-run with: airo learning reset --yes",
         );
       console.log(
         `${statusIcon("ok")} ${ui.gray("removed")} ${ui.bold(String(resetLearning(config.history)))} ${ui.gray("feedback record(s); routing history was preserved")}`,
