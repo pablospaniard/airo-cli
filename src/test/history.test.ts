@@ -66,7 +66,7 @@ test("handles disabled, missing, malformed, and individually rated history", () 
     assert.equal(setFeedback(enabled, "bad", "one", "slow")[0].feedbackNote, "slow");
     assert.equal(setFeedback(enabled, "good", "last")[0].feedback, "good");
     assert.throws(() => setFeedback(enabled, "good", "missing"), /not found/);
-    assert.match(newHistoryId(), /^[0-9a-f]{8}$/);
+    assert.match(newHistoryId(), /^[0-9a-f]{32}$/);
     assert.match(newRunId(), /^[0-9a-f]{12}$/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
