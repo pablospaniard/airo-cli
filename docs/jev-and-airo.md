@@ -164,6 +164,9 @@ airo feedback jev reset
 airo --no-jev "task"
 ```
 
+In the interactive workspace, `/no-jev task` and `--no-jev task` apply the same
+one-run opt-out without leaving the session.
+
 `disable` preserves the local records but immediately removes their routing influence. `reset --yes` deletes those records while preserving consent. Jev requests time out after five seconds and all network, authentication, rate-limit, model-version, and validation failures leave the completed provider run and its exit status unchanged.
 
 ## Cloud sync interaction

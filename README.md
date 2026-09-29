@@ -154,6 +154,9 @@ airo "task"                    # local route and execution happen before Jev
 airo --no-jev "sensitive task" # one-run opt-out
 ```
 
+Inside the interactive workspace, use `/no-jev sensitive task` (or the equivalent
+`--no-jev sensitive task`) for the same one-run opt-out.
+
 Use `airo feedback jev status|inspect|disable` to control it and `airo feedback jev reset --yes` to remove its separate local evidence. The consent screen lists the bounded fields sent to TypeSafe. Task text leaves the machine; AIRO does not add source, diffs, provider output, repository metadata, paths, credentials, environment variables, notes, or transcripts as separate fields. Because task text may itself contain sensitive values, use `--no-jev` whenever the task must remain entirely local. Jev failure never changes the completed run's exit status, and accepted feedback can only add a confidence-gated, decayed, bounded hint to future unpinned routes.
 
 Out of the box, the automatic defaults are:

@@ -20,6 +20,16 @@ test("treats regular interactive input as a task", () => {
     kind: "task",
     task: "fix the parser",
   });
+  assert.deepEqual(parseInteractiveInput("--no-jev keep this local"), {
+    kind: "task",
+    task: "keep this local",
+    noJev: true,
+  });
+  assert.deepEqual(parseInteractiveInput("/no-jev keep this local"), {
+    kind: "task",
+    task: "keep this local",
+    noJev: true,
+  });
 });
 
 test("parses interactive preference commands", () => {
@@ -93,6 +103,8 @@ test("returns guidance for invalid interactive commands", () => {
   assert.match(parseInteractiveInput("/feedback phase abc maybe").kind, /error/);
   assert.match(parseInteractiveInput("/feedback maybe").kind, /error/);
   assert.match(parseInteractiveInput("/learning explain").kind, /error/);
+  assert.match(parseInteractiveInput("--no-jev").kind, /error/);
+  assert.match(parseInteractiveInput("/no-jev").kind, /error/);
   assert.match(parseInteractiveInput("/wat").kind, /error/);
 });
 
@@ -135,6 +147,10 @@ test("builds CLI arguments from interactive preferences", () => {
       "compact",
       "ship it",
     ],
+  );
+  assert.deepEqual(
+    taskArgs("keep this local", { mode: "auto", agent: "auto", logLevel: "live" }, { noJev: true }),
+    ["--continue", "--no-jev", "--log", "live", "keep this local"],
   );
 });
 
