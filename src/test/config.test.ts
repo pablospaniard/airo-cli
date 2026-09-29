@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import fs from "node:fs";
+import fs, { type PathLike } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -140,6 +140,37 @@ test("updateGlobalConfig aborts instead of overwriting a save that lands mid-upd
     assert.equal(loadGlobalConfig().config.policy, "claude-heavy");
     assert.equal(loadGlobalConfig().config.defaultAgent, "codex");
   } finally {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("updateGlobalConfig preserves an editor save published during its commit", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-config-update-publish-race-"));
+  const previousHome = process.env.HOME;
+  const originalRename = fs.renameSync;
+  process.env.HOME = dir;
+  try {
+    const file = writeGlobalConfig({ ...structuredClone(DEFAULT_CONFIG), policy: "codex-heavy" });
+    let injected = false;
+    fs.renameSync = ((oldPath: PathLike, newPath: PathLike) => {
+      originalRename(oldPath, newPath);
+      if (!injected && oldPath === file && newPath === `${file}.update`) {
+        injected = true;
+        writeGlobalConfig({ ...structuredClone(DEFAULT_CONFIG), policy: "claude-heavy" });
+      }
+    }) as typeof fs.renameSync;
+
+    assert.throws(
+      () => updateGlobalConfig((current) => ({ ...current, defaultAgent: "gemini" })),
+      /changed on disk/,
+    );
+    assert.equal(injected, true);
+    assert.equal(loadGlobalConfig().config.policy, "claude-heavy");
+    assert.equal(loadGlobalConfig().config.defaultAgent, "codex");
+  } finally {
+    fs.renameSync = originalRename;
     if (previousHome === undefined) delete process.env.HOME;
     else process.env.HOME = previousHome;
     fs.rmSync(dir, { recursive: true, force: true });

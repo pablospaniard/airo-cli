@@ -255,16 +255,7 @@ async function revokeFamily(env: Env, familyId: string): Promise<Response> {
   );
 }
 
-// A rotation is recognized as the continuation of an already-consumed row's
-// retry chain only within this window of that row's revocation, and only a
-// bounded number of hops past it. Idempotent-retry recognition requires
-// knowing the exact per-attempt requestIdHash, which is never sent back to
-// the client and only ever appears in the one request that carried it — but
-// bounding it in time and depth too keeps a captured (request, id) pair from
-// being usable to ride an old, abandoned rotation chain into whatever live
-// session it may have grown into long after the fact.
-const IDEMPOTENT_RETRY_WINDOW_SECONDS = 60;
-const IDEMPOTENT_RETRY_MAX_HOPS = 5;
+const IDEMPOTENT_RETRY_MAX_HOPS = 100;
 
 // Given a row that was consumed by a rotation carrying `requestIdHash`,
 // finds the live tip of its retry chain (if any) and continues rotating it.
@@ -288,8 +279,7 @@ async function continueIdempotentRotation(
     !row.rotation_id ||
     !requestIdHash ||
     row.request_id_hash !== requestIdHash ||
-    !row.revoked_at ||
-    now() - row.revoked_at > IDEMPOTENT_RETRY_WINDOW_SECONDS
+    !row.revoked_at
   )
     return undefined;
   let parentId = row.id;
@@ -305,16 +295,28 @@ async function continueIdempotentRotation(
     )
       .bind(row.family_id, parentId)
       .first<SessionRow>();
-    if (!next) return undefined;
+    if (!next)
+      return error(409, "refresh_retry_unavailable", "The refresh retry result is unavailable.");
     if (!next.revoked_at) {
-      if (next.device_revoked_at || next.expires_at <= now()) return undefined;
+      if (next.device_revoked_at || next.expires_at <= now())
+        return error(401, "invalid_refresh", "Refresh token expired or revoked.");
       const limited = await rateLimit(env.AUTH_RATE_LIMITER, `refresh:${next.user_id}`);
       if (limited) return limited;
       return rotateSession(env, next, requestIdHash);
     }
+    // A row records the request ID that consumed it. Crossing a row consumed
+    // by a newer attempt would let a delayed retry invalidate that newer
+    // attempt's live credentials, so every revoked link must belong to this
+    // exact retry chain.
+    if (!next.rotation_id || next.request_id_hash !== requestIdHash)
+      return error(
+        409,
+        "refresh_retry_superseded",
+        "A newer refresh attempt superseded this retry.",
+      );
     parentId = next.id;
   }
-  return undefined;
+  return error(409, "refresh_retry_chain_too_long", "The refresh retry chain is too long.");
 }
 
 // Rotates a still-valid refresh session into a fresh access/refresh pair.
@@ -338,8 +340,10 @@ async function rotateSession(
       "UPDATE sessions SET revoked_at = ?, rotation_id = ?, request_id_hash = ? WHERE id = ? AND revoked_at IS NULL",
     ).bind(createdAt, rotationId, requestIdHash, row.id),
     env.DB.prepare(
-      "UPDATE sessions SET revoked_at = ? WHERE family_id = ? AND id != ? AND revoked_at IS NULL",
-    ).bind(createdAt, row.family_id, row.id),
+      `UPDATE sessions SET revoked_at = ?
+        WHERE family_id = ? AND id != ? AND revoked_at IS NULL
+          AND EXISTS (SELECT 1 FROM sessions WHERE id = ? AND rotation_id = ?)`,
+    ).bind(createdAt, row.family_id, row.id, row.id, rotationId),
     env.DB.prepare(
       `INSERT INTO sessions(id, family_id, user_id, device_id, token_hash, kind, expires_at, created_at, rotated_from)
        SELECT ?, ?, ?, ?, ?, 'access', ?, ?, ?

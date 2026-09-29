@@ -493,6 +493,64 @@ describe("sync Worker", () => {
     expect((await refresh(last!.refreshToken)).status).toBe(200);
   });
 
+  it("recovers a persisted refresh retry after more than a minute", async () => {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const refreshToken = "d".repeat(43);
+    const rotationRequestId = "delayed-retry-".padEnd(20, "x");
+    await env.DB.prepare(
+      "INSERT INTO sessions(id, family_id, user_id, device_id, token_hash, kind, expires_at, created_at) VALUES(?, ?, ?, ?, ?, 'refresh', ?, ?)",
+    )
+      .bind(
+        "refresh-delayed",
+        "family-delayed",
+        "user-test",
+        "device-test",
+        await hash(refreshToken),
+        timestamp + 3600,
+        timestamp,
+      )
+      .run();
+
+    expect((await refresh(refreshToken, rotationRequestId)).status).toBe(200);
+    await env.DB.prepare("UPDATE sessions SET revoked_at = ? WHERE id = ?")
+      .bind(timestamp - 3600, "refresh-delayed")
+      .run();
+    expect((await refresh(refreshToken, rotationRequestId)).status).toBe(200);
+  });
+
+  it("does not let an old retry cross a newer rotation request", async () => {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const refreshToken = "s".repeat(43);
+    const oldRequestId = "old-attempt-".padEnd(20, "x");
+    const newRequestId = "new-attempt-".padEnd(20, "x");
+    await env.DB.prepare(
+      "INSERT INTO sessions(id, family_id, user_id, device_id, token_hash, kind, expires_at, created_at) VALUES(?, ?, ?, ?, ?, 'refresh', ?, ?)",
+    )
+      .bind(
+        "refresh-superseded",
+        "family-superseded",
+        "user-test",
+        "device-test",
+        await hash(refreshToken),
+        timestamp + 3600,
+        timestamp,
+      )
+      .run();
+
+    expect((await refresh(refreshToken, oldRequestId)).status).toBe(200);
+    const retry = await refresh(refreshToken, oldRequestId);
+    const retryTokens = await retry.json<{ refreshToken: string }>();
+    const current = await refresh(retryTokens.refreshToken, newRequestId);
+    const currentTokens = await current.json<{ accessToken: string }>();
+
+    const delayed = await refresh(refreshToken, oldRequestId);
+    expect(delayed.status).toBe(409);
+    expect(await delayed.json()).toMatchObject({
+      error: { code: "refresh_retry_superseded" },
+    });
+    expect((await statusFor(currentTokens.accessToken)).status).toBe(200);
+  });
+
   it("revokes the family when a rotated refresh token is reused without a matching rotation request ID", async () => {
     const timestamp = Math.floor(Date.now() / 1000);
     const refreshToken = "r".repeat(43);

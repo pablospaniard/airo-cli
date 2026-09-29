@@ -177,6 +177,51 @@ function ownerIsAlive(owner: LockOwner): boolean {
   return true;
 }
 
+function staleClaimFiles(file: string): string[] {
+  const directory = path.dirname(file);
+  const prefix = `${path.basename(file)}.`;
+  try {
+    return fs
+      .readdirSync(directory)
+      .filter((name: string) => name.startsWith(prefix) && name.endsWith(".stale"))
+      .map((name: string) => path.join(directory, name));
+  } catch {
+    return [];
+  }
+}
+
+// A stale-lock claim remains visible as a recovery gate for its entire
+// lifetime. New owners must not enter while a reclaimer has temporarily moved
+// the public lock path. If the reclaimer crashed, restore a captured live
+// owner with an atomic hard link, or discard a captured stale owner.
+function reconcileStaleClaims(
+  file: string,
+  incompleteLockGraceMs: number,
+  legacyLockGraceMs: number,
+): void {
+  for (const claim of staleClaimFiles(file)) {
+    try {
+      const owner = readOwner(claim);
+      const age = Date.now() - fs.statSync(claim).mtimeMs;
+      const stale =
+        (owner && (!ownerIsAlive(owner) || (!owner.bootId && age > legacyLockGraceMs))) ||
+        (!owner && age > incompleteLockGraceMs);
+      if (stale) {
+        fs.unlinkSync(claim);
+        continue;
+      }
+      try {
+        fs.linkSync(claim, file);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+      if (fs.readFileSync(file, "utf8") === fs.readFileSync(claim, "utf8")) fs.unlinkSync(claim);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+}
+
 function tryAcquire(
   file: string,
   incompleteLockGraceMs: number,
@@ -191,10 +236,19 @@ function tryAcquire(
   });
   const candidate = `${file}.${process.pid}.${crypto.randomUUID()}.candidate`;
   try {
+    reconcileStaleClaims(file, incompleteLockGraceMs, legacyLockGraceMs);
+    if (staleClaimFiles(file).length) return undefined;
     // Publish a completely written owner record with one atomic link. No
     // observer can mistake our in-progress write for an abandoned lock.
     fs.writeFileSync(candidate, token, { flag: "wx", mode: 0o600 });
     fs.linkSync(candidate, file);
+    // A reclaimer may have published its gate after our first check. Do not
+    // enter until that claim is resolved, and also verify nobody replaced
+    // our public link before we return ownership to the caller.
+    if (staleClaimFiles(file).length || fs.readFileSync(file, "utf8") !== token) {
+      release(file, { token });
+      return undefined;
+    }
     return { token };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
@@ -220,6 +274,7 @@ function tryAcquire(
           if ((renameError as NodeJS.ErrnoException).code === "ENOENT") return undefined;
           throw renameError;
         }
+        let removeClaim = true;
         try {
           const reread = readOwner(claim);
           const sameOwner = owner
@@ -230,12 +285,20 @@ function tryAcquire(
             // rename (e.g. a legitimate new owner). It is no longer the
             // stale instance we decided to reclaim, so put it back rather
             // than discarding a possibly live lock.
-            fs.renameSync(claim, file);
+            try {
+              fs.linkSync(claim, file);
+            } catch (restoreError) {
+              if ((restoreError as NodeJS.ErrnoException).code !== "EEXIST") throw restoreError;
+              // Keep the claim as a recovery gate unless the public path is
+              // already another link to exactly the owner we captured.
+              removeClaim = fs.readFileSync(file, "utf8") === fs.readFileSync(claim, "utf8");
+            }
           }
         } finally {
-          try {
-            fs.unlinkSync(claim);
-          } catch {}
+          if (removeClaim)
+            try {
+              fs.unlinkSync(claim);
+            } catch {}
         }
       }
     } catch (statError) {
@@ -254,6 +317,16 @@ function release(file: string, handle: LockHandle): void {
     if (fs.readFileSync(file, "utf8") === handle.token) fs.unlinkSync(file);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  // If a stale reclaimer moved this live lock between acquisition and
+  // release, remove that captured link too. The reclaimer will observe the
+  // missing claim and must not resurrect an owner whose operation completed.
+  for (const claim of staleClaimFiles(file)) {
+    try {
+      if (fs.readFileSync(claim, "utf8") === handle.token) fs.unlinkSync(claim);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
   }
 }
 

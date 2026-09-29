@@ -117,3 +117,33 @@ test("serializes asynchronous owners and orders multi-file locks", async () => {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("keeps acquisition blocked while a stale reclaimer has moved a live lock", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "airo-lock-reclaim-race-"));
+  const lock = path.join(directory, "history.lock");
+  const claim = `${lock}.999.test.stale`;
+  const order: string[] = [];
+  let moved!: () => void;
+  const didMove = new Promise<void>((resolve) => {
+    moved = resolve;
+  });
+  try {
+    const first = withFileLockAsync(lock, async () => {
+      order.push("first-start");
+      fs.renameSync(lock, claim);
+      moved();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      order.push("first-end");
+    });
+    await didMove;
+    const second = withFileLockAsync(lock, async () => {
+      order.push("second");
+    });
+    await Promise.all([first, second]);
+    assert.deepEqual(order, ["first-start", "first-end", "second"]);
+    assert.equal(fs.existsSync(lock), false);
+    assert.equal(fs.existsSync(claim), false);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

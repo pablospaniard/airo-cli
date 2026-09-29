@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import crypto from "node:crypto";
 import type { Agent, Policy, RouterConfig } from "./types.js";
 import { withFileLock } from "./file-lock.js";
 import { dataRootDir } from "./paths.js";
@@ -151,9 +152,14 @@ export function loadConfig(cwd = process.cwd()): { config: RouterConfig; path?: 
 /** Load only account-wide configuration, never a repository override. */
 export function loadGlobalConfig(): { config: RouterConfig; path?: string } {
   const file = globalConfigPath();
-  if (!fs.existsSync(file)) return { config: DEFAULT_CONFIG };
+  const readable = fs.existsSync(file)
+    ? file
+    : fs.existsSync(`${file}.update`)
+      ? `${file}.update`
+      : undefined;
+  if (!readable) return { config: DEFAULT_CONFIG };
   return {
-    config: mergeConfig(JSON.parse(fs.readFileSync(file, "utf8")), file),
+    config: mergeConfig(JSON.parse(fs.readFileSync(readable, "utf8")), file),
     path: file,
   };
 }
@@ -171,7 +177,22 @@ export function writeProjectConfig(cwd = process.cwd()): string {
 export function writeGlobalConfig(config: RouterConfig): string {
   const file = globalConfigPath();
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify({ _comment: CONFIG_NOTE, ...config }, null, 2) + "\n");
+  const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(
+      temporary,
+      JSON.stringify({ _comment: CONFIG_NOTE, ...config }, null, 2) + "\n",
+      {
+        flag: "wx",
+        mode: 0o600,
+      },
+    );
+    fs.renameSync(temporary, file);
+  } finally {
+    try {
+      fs.unlinkSync(temporary);
+    } catch {}
+  }
   return file;
 }
 
@@ -185,33 +206,71 @@ export function writeGlobalConfig(config: RouterConfig): string {
  * should go through this instead of pairing loadGlobalConfig/writeGlobalConfig
  * directly.
  *
- * The lock only serializes callers that go through it — it cannot make a
- * text editor's direct save wait, since the editor never takes it. To avoid
- * silently discarding such a save anyway, the raw file is re-read immediately
- * before writing and compared against what `mutate` was given; a change
- * aborts the update instead of overwriting it. That still leaves a short,
- * unavoidable window between that final check and the write itself — no
- * advisory lock can bind a writer that never asked for it — but narrows it
- * to the minimum this scheme can offer.
+ * The lock serializes cooperating callers. Publication also moves the exact
+ * file we read to a recovery path and creates the replacement with an
+ * exclusive hard link. An editor save before the move changes the captured
+ * bytes; a save during the move occupies the destination. Both become a
+ * conflict instead of being overwritten.
  */
 export function updateGlobalConfig(mutate: (config: RouterConfig) => RouterConfig): RouterConfig {
   return withFileLock(path.join(dataRootDir(), "global-config.lock"), () => {
     const file = globalConfigPath();
-    const readRaw = () => (fs.existsSync(file) ? fs.readFileSync(file, "utf8") : undefined);
-    // Read the raw file once and derive both the config `mutate` sees and
-    // the "before" snapshot from that SAME read. Reading them separately
-    // (loadGlobalConfig(), then a second readRaw() to snapshot) would let an
-    // intervening write land between the two reads: mutate would still see
-    // fully fresh data, but the change-check below would compare against
-    // the now-stale first read and reject a perfectly valid update.
-    const before = readRaw();
-    const current = before === undefined ? DEFAULT_CONFIG : mergeConfig(JSON.parse(before), file);
+    const recovery = `${file}.update`;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    if (fs.existsSync(recovery)) {
+      if (!fs.existsSync(file)) fs.linkSync(recovery, file);
+      fs.unlinkSync(recovery);
+    }
+    const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : undefined;
+    const current = before
+      ? mergeConfig(JSON.parse(before), file)
+      : structuredClone(DEFAULT_CONFIG);
     const next = mutate(current);
-    if (readRaw() !== before)
-      throw new Error(
-        `${file} changed on disk while it was being updated; no changes were written.`,
-      );
-    writeGlobalConfig(next);
-    return next;
+    const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    fs.writeFileSync(
+      temporary,
+      JSON.stringify({ _comment: CONFIG_NOTE, ...next }, null, 2) + "\n",
+      { flag: "wx", mode: 0o600 },
+    );
+    let captured = false;
+    try {
+      if (before === undefined) {
+        try {
+          fs.linkSync(temporary, file);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+          throw new Error(
+            `${file} changed on disk while it was being updated; no changes were written.`,
+          );
+        }
+      } else {
+        fs.renameSync(file, recovery);
+        captured = true;
+        if (fs.readFileSync(recovery, "utf8") !== before)
+          throw new Error(
+            `${file} changed on disk while it was being updated; no changes were written.`,
+          );
+        try {
+          fs.linkSync(temporary, file);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+          throw new Error(
+            `${file} changed on disk while it was being updated; no changes were written.`,
+          );
+        }
+      }
+      return next;
+    } finally {
+      if (captured && !fs.existsSync(file))
+        try {
+          fs.linkSync(recovery, file);
+        } catch {}
+      try {
+        fs.unlinkSync(recovery);
+      } catch {}
+      try {
+        fs.unlinkSync(temporary);
+      } catch {}
+    }
   });
 }
