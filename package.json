@@ -41,26 +41,30 @@
   "scripts": {
     "build": "tsc && chmod +x dist/cli.js",
     "dev": "tsx src/cli.ts",
-    "format": "oxfmt src scripts vscode-extension/src package.json vscode-extension/package.json tsconfig.json vscode-extension/tsconfig.json",
-    "format:check": "oxfmt --check src scripts vscode-extension/src package.json vscode-extension/package.json tsconfig.json vscode-extension/tsconfig.json",
-    "lint": "oxlint --deny-warnings --tsconfig tsconfig.json src scripts vscode-extension/src",
-    "typecheck": "tsc --noEmit && tsc -p vscode-extension/tsconfig.json --noEmit",
+    "format": "oxfmt src scripts sync-worker vscode-extension/src package.json vscode-extension/package.json tsconfig.json vscode-extension/tsconfig.json",
+    "format:check": "oxfmt --check src scripts sync-worker vscode-extension/src package.json vscode-extension/package.json tsconfig.json vscode-extension/tsconfig.json",
+    "lint": "oxlint --deny-warnings --tsconfig tsconfig.json src scripts vscode-extension/src && oxlint --deny-warnings --tsconfig sync-worker/tsconfig.json sync-worker/src sync-worker/test",
+    "typecheck": "tsc --noEmit && tsc -p vscode-extension/tsconfig.json --noEmit && tsc -p sync-worker/tsconfig.json --noEmit",
     "test": "pnpm run test:coverage",
     "evaluate:routing-policy": "pnpm run build && node --test dist/test/routing-policy.evaluation.test.js",
     "evaluate:jev": "pnpm run build && node scripts/evaluate-routing-with-jev.mjs",
-    "test:coverage": "pnpm run build && node --test --experimental-test-coverage --test-coverage-exclude=dist/test/** --test-coverage-lines=95 --test-coverage-functions=95 dist/test/*.test.js",
+    "test:coverage": "pnpm run build && node --test --experimental-test-coverage --test-coverage-exclude=dist/test/** --test-coverage-exclude=dist/sync.js --test-coverage-lines=95 --test-coverage-functions=95 dist/test/*.test.js",
     "start": "node dist/cli.js",
-    "validate": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm test",
+    "test:sync-worker": "vitest run --config sync-worker/vitest.config.ts",
+    "validate": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm test && pnpm run test:sync-worker",
     "hooks:install": "git config core.hooksPath .githooks",
     "prepare": "pnpm run build",
     "package:extension": "pnpm --dir vscode-extension run package"
   },
   "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.3.0",
     "@types/node": "^22.10.0",
     "oxfmt": "^0.24.0",
     "oxlint": "^1.39.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.142.0"
   },
   "engines": {
     "node": ">=22"

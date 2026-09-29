@@ -79,6 +79,19 @@ import { linkRepositoryIdentity, resolveRepositoryIdentity } from "./repository.
 import pathModule from "node:path";
 import { evaluateRoute, extractTaskFeatures } from "./evaluation.js";
 import {
+  deleteCloudData,
+  enableSync,
+  exportCloudData,
+  syncDevices,
+  syncLogin,
+  syncLogout,
+  syncNow,
+  syncPassphrase,
+  syncRevokeDevice,
+  syncStatePath,
+  syncStatus,
+} from "./sync.js";
+import {
   disableJev,
   enableJev,
   evaluateRunWithJev,
@@ -165,6 +178,9 @@ function help() {
   );
   console.log(
     `  ${commandColor("airo learning status|explain|reset")}       ${ui.gray("inspect or reset adaptive routing")}`,
+  );
+  console.log(
+    `  ${commandColor("airo sync login|enable|now|status")}        ${ui.gray("manage optional encrypted cloud sync")}`,
   );
   console.log("");
   console.log(ui.bold("Sessions"));
@@ -986,6 +1002,121 @@ async function main() {
       );
     }
     return;
+  }
+  if (raw[0] === "sync") {
+    const action = raw[1] ?? "status";
+    const allowFile = raw.includes("--allow-credential-file");
+    if (action === "login") {
+      const serverIndex = raw.indexOf("--server");
+      const server = serverIndex >= 0 ? raw[serverIndex + 1] : undefined;
+      const result = await syncLogin({
+        server,
+        allowCredentialFile: allowFile,
+        onChallenge: (url, code) => {
+          console.log(`${statusIcon("info")} Open ${ui.cyan(url)} and enter ${ui.bold(code)}.`);
+          console.log(`${ui.gray("Waiting for browser authorization…")}`);
+        },
+      });
+      console.log(
+        `${statusIcon("ok")} ${ui.green(`Signed in as ${result.login}`)} ${ui.gray(`· credentials: ${result.credentialStore}`)}`,
+      );
+      return;
+    }
+    if (action === "enable") {
+      console.log(divider("Encrypted cloud sync"));
+      console.log(
+        `${statusIcon("info")} ${ui.yellow("Keep your recovery passphrase safe. If it and every authorized device are lost, synchronized data cannot be recovered.")}`,
+      );
+      console.log(
+        `${ui.gray("Provider credentials, API keys, executable paths, local permission settings, and Jev consent never sync.")}`,
+      );
+      const passphrase = syncPassphrase(raw);
+      if (passphrase.source === "argument") {
+        console.log(
+          `${statusIcon("info")} ${ui.yellow("A command-line passphrase may be retained in shell history or briefly visible to other local processes.")}`,
+        );
+      }
+      await enableSync(passphrase.value, allowFile);
+      console.log(`${statusIcon("ok")} ${ui.green("End-to-end encrypted sync enabled.")}`);
+      return;
+    }
+    if (action === "now") {
+      const result = await syncNow(config, allowFile);
+      console.log(
+        `${statusIcon("ok")} ${ui.green("Sync complete")} ${ui.gray(`· ${result.pushed} uploaded · ${result.pulled} merged`)}`,
+      );
+      return;
+    }
+    if (action === "status") {
+      const result = syncStatus(allowFile);
+      console.log(divider("Encrypted cloud sync"));
+      console.log(
+        `${ui.bold("Status")} ${result.state?.enabled ? ui.green("enabled") : ui.yellow("disabled")}`,
+      );
+      console.log(`${ui.bold("Server")} ${ui.cyan(result.state?.server ?? "not configured")}`);
+      console.log(`${ui.bold("Account")} ${ui.cyan(result.state?.user?.login ?? "signed out")}`);
+      console.log(
+        `${ui.bold("Credentials")} ${result.credentials ? ui.green(result.credentialStore ?? "available") : ui.yellow("missing")}`,
+      );
+      console.log(`${ui.bold("Last sync")} ${ui.cyan(result.state?.lastSyncAt ?? "never")}`);
+      console.log(`${ui.bold("State")} ${ui.cyan(syncStatePath())}`);
+      return;
+    }
+    if (action === "devices") {
+      if (raw[2] === "revoke") {
+        if (!raw[3]) throw new Error("Use: airo sync devices revoke <device-id>");
+        await syncRevokeDevice(raw[3], allowFile);
+        console.log(`${statusIcon("ok")} ${ui.gray("Sync device revoked.")}`);
+        return;
+      }
+      const devices = await syncDevices(allowFile);
+      console.log(divider("Sync devices"));
+      for (const device of devices) {
+        const state = device.revokedAt
+          ? ui.red("revoked")
+          : device.current
+            ? ui.cyan("current")
+            : ui.green("authorized");
+        console.log(
+          `${statusIcon(device.revokedAt ? "error" : device.current ? "ok" : "info")} ${ui.bold(device.name)} ${ui.gray(device.id)} ${state}`,
+        );
+      }
+      return;
+    }
+    if (action === "export") {
+      const output = raw[2];
+      if (!output || output.startsWith("--"))
+        throw new Error("Use: airo sync export <file> [--force]");
+      const file = await exportCloudData(output, {
+        allowFile,
+        overwrite: raw.includes("--force"),
+      });
+      console.log(
+        `${statusIcon("ok")} ${ui.gray("Cloud account export written:")} ${ui.cyan(file)}`,
+      );
+      return;
+    }
+    if (action === "logout") {
+      await syncLogout(allowFile);
+      console.log(
+        `${statusIcon("ok")} ${ui.gray("Signed out and removed local sync credentials.")}`,
+      );
+      return;
+    }
+    if (action === "delete-cloud-data") {
+      if (!raw.includes("--yes"))
+        throw new Error(
+          "This permanently deletes synchronized cloud data. Re-run with: airo sync delete-cloud-data --yes",
+        );
+      await deleteCloudData(allowFile);
+      console.log(
+        `${statusIcon("ok")} ${ui.gray("Cloud sync account and encrypted data deleted.")}`,
+      );
+      return;
+    }
+    throw new Error(
+      "Use: airo sync login|enable|now|status|devices|export|logout|delete-cloud-data",
+    );
   }
   if (raw[0] === "history") {
     if (raw[1] === "export") {

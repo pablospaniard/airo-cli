@@ -14,6 +14,7 @@ import { dataRootDir } from "./paths.js";
 import { enrichHistoryRecord, extractTaskFeatures } from "./evaluation.js";
 import { withFileLock, withFileLocks } from "./file-lock.js";
 import { resolveRepositoryIdentity } from "./repository.js";
+import { recordSyncDeletions } from "./sync-deletions.js";
 
 export const HISTORY_SCHEMA_VERSION = 1;
 export const FEEDBACK_SCHEMA_VERSION = 1;
@@ -62,15 +63,35 @@ export function newRunId(): string {
   return crypto.randomBytes(6).toString("hex");
 }
 
-function writeHistory(file: string, records: HistoryRecord[]): void {
+function latestLocalHistoryPath(config: HistoryConfig): string {
+  return `${historyPath(config)}.latest-local.json`;
+}
+
+function writeAtomic(file: string, value: string): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
-  fs.writeFileSync(
-    temporary,
-    records.length ? `${records.map((record) => JSON.stringify(record)).join("\n")}\n` : "",
-    { mode: 0o600 },
-  );
+  fs.writeFileSync(temporary, value, { mode: 0o600 });
   fs.renameSync(temporary, file);
+}
+
+function writeHistory(file: string, records: HistoryRecord[]): void {
+  writeAtomic(
+    file,
+    records.length ? `${records.map((record) => JSON.stringify(record)).join("\n")}\n` : "",
+  );
+}
+
+function latestLocalRecord(config: HistoryConfig, records: HistoryRecord[]): HistoryRecord {
+  try {
+    const marker = JSON.parse(fs.readFileSync(latestLocalHistoryPath(config), "utf8")) as {
+      id?: string;
+    };
+    const local = records.find((record) => record.id === marker.id);
+    if (local) return local;
+  } catch {}
+  return [...records]
+    .sort((a, b) => a.timestamp.localeCompare(b.timestamp) || a.id.localeCompare(b.id))
+    .at(-1)!;
 }
 
 export function appendHistory(config: HistoryConfig, record: HistoryRecord): void {
@@ -79,18 +100,15 @@ export function appendHistory(config: HistoryConfig, record: HistoryRecord): voi
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const repositoryId =
     record.repositoryId ?? resolveRepositoryIdentity(record.cwd, path.dirname(file)).id;
-  withFileLock(`${file}.lock`, () =>
-    fs.appendFileSync(
-      file,
-      JSON.stringify(
-        enrichHistoryRecord({
-          ...record,
-          schemaVersion: HISTORY_SCHEMA_VERSION,
-          repositoryId,
-        }),
-      ) + "\n",
-    ),
-  );
+  withFileLock(`${file}.lock`, () => {
+    const saved = enrichHistoryRecord({
+      ...record,
+      schemaVersion: HISTORY_SCHEMA_VERSION,
+      repositoryId,
+    });
+    fs.appendFileSync(file, JSON.stringify(saved) + "\n");
+    writeAtomic(latestLocalHistoryPath(config), `${JSON.stringify({ id: saved.id })}\n`);
+  });
 }
 
 export function feedbackPath(config: HistoryConfig): string {
@@ -140,18 +158,22 @@ export function setScopedFeedback(
     confidence?: number;
   } = {},
 ): FeedbackRecord {
-  const records = readHistory(config);
-  if (!records.length) throw new Error("No routing history yet.");
   const scope = options.scope ?? "run";
-  const latest = records.at(-1)!;
-  const targetId = options.targetId ?? (scope === "run" ? (latest.runId ?? latest.id) : latest.id);
-  const exists =
-    scope === "run"
-      ? records.some(
-          (record) => record.runId === targetId || (!record.runId && record.id === targetId),
-        )
-      : records.some((record) => record.id === targetId);
-  if (!exists) throw new Error(`${scope === "run" ? "Run" : "Phase"} ${targetId} not found.`);
+  const targetId = withFileLock(`${historyPath(config)}.lock`, () => {
+    const records = readHistory(config);
+    if (!records.length) throw new Error("No routing history yet.");
+    const latest = latestLocalRecord(config, records);
+    const selected =
+      options.targetId ?? (scope === "run" ? (latest.runId ?? latest.id) : latest.id);
+    const exists =
+      scope === "run"
+        ? records.some(
+            (record) => record.runId === selected || (!record.runId && record.id === selected),
+          )
+        : records.some((record) => record.id === selected);
+    if (!exists) throw new Error(`${scope === "run" ? "Run" : "Phase"} ${selected} not found.`);
+    return selected;
+  });
   const feedback: FeedbackRecord = {
     schemaVersion: FEEDBACK_SCHEMA_VERSION,
     id: newHistoryId(),
@@ -241,12 +263,12 @@ export function setFeedback(
     let targets: number[] = [];
 
     if (!id || id === "last") {
-      const last = records[records.length - 1];
+      const last = latestLocalRecord(config, records);
       if (last.runId)
         targets = records
           .map((record, index) => (record.runId === last.runId ? index : -1))
           .filter((index) => index >= 0);
-      else targets = [records.length - 1];
+      else targets = [records.findIndex((record) => record.id === last.id)];
     } else {
       const byRun = records
         .map((record, index) => (record.runId === id ? index : -1))
@@ -507,11 +529,20 @@ export function resetLearning(config: HistoryConfig): number {
   const feedbackFile = feedbackPath(config);
   const historyFile = historyPath(config);
   return withFileLocks([`${historyFile}.lock`, `${feedbackFile}.lock`], () => {
-    const count = readFeedback(config).length;
-    if (fs.existsSync(feedbackFile)) fs.unlinkSync(feedbackFile);
-    const records = readHistory(config).map(
-      ({ feedback: _feedback, feedbackNote: _note, ...record }) => record,
+    const feedback = readFeedback(config);
+    const count = feedback.length;
+    recordSyncDeletions(
+      historyFile,
+      "feedback",
+      feedback.map((record) => record.id),
     );
+    if (fs.existsSync(feedbackFile)) fs.unlinkSync(feedbackFile);
+    const updatedAt = new Date().toISOString();
+    const records = readHistory(config).map((record) => {
+      if (record.feedback === undefined && record.feedbackNote === undefined) return record;
+      const { feedback: _feedback, feedbackNote: _note, ...withoutFeedback } = record;
+      return { ...withoutFeedback, updatedAt };
+    });
     if (records.length) writeHistory(historyFile, records);
     return count;
   });
