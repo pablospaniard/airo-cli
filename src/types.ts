@@ -7,6 +7,7 @@ export type PhaseKind = "analyze" | "implement" | "test" | "review" | "recover" 
 export type OrchestrationMode = "auto" | "adaptive" | "single";
 export type LogLevel = "compact" | "live" | "verbose";
 export type PermissionMode = "prompt" | "fullAccess";
+export type ProviderFailure = "usage limit" | "authentication";
 
 export interface Rule {
   name: string;
@@ -131,6 +132,16 @@ export interface ScoreReason {
   reason: string;
 }
 
+export interface RouteCandidate {
+  agent: Agent;
+  modelTier: ModelTier;
+  model: string;
+  effort: Effort;
+  providerScore: number;
+  tierScore: number;
+  totalScore: number;
+}
+
 export interface RouteResult {
   agent: Agent;
   modelTier: ModelTier;
@@ -150,6 +161,7 @@ export interface RouteResult {
   matchedRule?: string;
   learningConfidence?: number;
   expectedUtility?: number;
+  routingPolicyVersion: string;
 }
 
 export interface HistoryRecord {
@@ -168,6 +180,8 @@ export interface HistoryRecord {
   model: string;
   effort: Effort;
   complexity: number;
+  /** Shipped cold-start policy used to make this routing decision. */
+  routingPolicyVersion?: string;
   exitCode: number;
   durationMs: number;
   outputExcerpt?: string;

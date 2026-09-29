@@ -1,11 +1,11 @@
 # Routing rules and learning
 
-For research into adding a semantic decision model to this routing flow, see [Jev and AIRO: concepts, differences, and integration options](jev-and-airo.md).
+This document describes behavior in the current `airo-ai-router` release. For the planned provider registry, portable learning, Jev feedback, encrypted sync, and research-consent milestones, see [Routing platform roadmap](routing-platform-roadmap.md). [Jev and AIRO](jev-and-airo.md) records the planned narrower role for Jev.
 
 AIRO makes a routing decision in two parts:
 
 1. Select a provider (`claude`, `codex`, `gemini`, or `copilot`).
-2. Select a model tier (`fast`, `balanced`, or `deep`) and use the model and effort configured for that provider and tier.
+2. Select a model tier (`fast`, `balanced`, or `deep`) and use the configured model plus any effort control implemented by that provider adapter.
 
 In an adaptive workflow, AIRO repeats this decision for every phase. Analysis, implementation, validation, and review can therefore use different providers or model tiers.
 
@@ -63,18 +63,40 @@ AIRO loads the first configuration file it finds in this order:
 
 It does not merge rule arrays from several configuration files.
 
-## Built-in task signals
+## Task features and provider capabilities
 
-Built-in signals are regular expressions defined in `src/router.ts`. Unlike custom rules, a signal adds or subtracts scoring or complexity points rather than forcing an entire route.
+AIRO first extracts provider-neutral task features: category, risk, complexity, language, and local hashed tokens. A versioned, source-controlled routing-policy artifact declares reviewed cold-start weights for task categories, high-risk work, fast or complex tasks, tier suitability, and configured policy biases. There are no separate Claude and Codex keyword-scoring tables.
 
-Provider signals broadly favor:
+For every decision, AIRO generates a candidate for each registered provider and each `fast`, `balanced`, and `deep` tier. A candidate's initial score combines:
 
-- Claude for investigation, root-cause analysis, architecture, concurrency, security, migrations, large refactors, and long compound requests.
-- Codex for implementation, tests, typing, formatting, scaffolding, components, endpoints, and localized changes.
+- The provider's capability score for the task features
+- Tier suitability for the calculated complexity
+- An optional configured policy bias
+- Time-decayed evidence learned from similar local outcomes
 
-The configured routing policy can add a small Claude or Codex bias. Historical evidence can add positive or negative points for all providers. Gemini and Copilot do not currently have dedicated built-in keyword tables; they can be selected explicitly, by a custom rule, by learned evidence, or as the configured default.
+Custom rules and explicit choices retain their higher precedence. Cold-start capability values are versioned source data, not self-modifying production weights; they require tests and review when changed.
+
+Every route and new history record includes the routing-policy version that produced it. Historical records without this optional field remain readable. Developers can run `pnpm evaluate:routing-policy` against the reviewed fixture corpus; the fixture data and evaluator are development-only and are not inputs to production routing.
 
 The provider with the highest total score wins. If several providers tie and `defaultAgent` is among them, `defaultAgent` wins; otherwise AIRO uses the first highest-scoring provider in its candidate order.
+
+## Current fallback behavior
+
+Automatic fallback uses the source-controlled provider registry:
+
+1. Exclude the selected provider and every provider already ruled out during this run.
+2. Rank the remaining providers by their task-specific routing score.
+3. Break equal scores with the stable registry priority: Claude, Codex, Gemini, then Copilot.
+4. Skip commands that are not available.
+5. After authentication or usage-limit failure, also skip a candidate whose adapter confirms that it is signed out.
+
+Account inspection is defined by an exhaustive provider adapter contract. Gemini and Copilot do not yet have reliable account probes, so their adapters report authentication as unknown until execution. Missing-command fallback checks executable availability only. An explicitly selected provider never falls back.
+
+Every registered provider has an explicit runtime adapter for command construction, progress parsing, and provider-level failure classification. Shared authentication and usage-limit patterns are currently reused by all four adapters, but the exhaustive adapter boundary allows a provider to specialize those patterns without changing routing or orchestration. The adapter also identifies the task-prompt argument so command diagnostics can redact task text instead of assuming that every provider places the prompt last.
+
+Model discovery is also exhaustive across the provider registry. Each provider adapter owns its local discovery strategy, cache-invalidation inputs, and optional gateway lookup. Failed or unavailable probes retain configured and built-in model IDs instead of shrinking the selectable catalog.
+
+The versioned provider support audit verifies registry metadata, configuration, routing policy, runtime behavior, failure classification, account inspection, discovery, capabilities, tests, and documentation for every registered provider. `airo doctor` shows this source integration status separately from local command availability; an integration can be supported even when its CLI is not installed on a particular machine.
 
 ## Complexity and model tier
 
@@ -102,7 +124,7 @@ The result maps to a tier:
 | 3 | `balanced` |
 | 4–5 | `deep` |
 
-The selected provider's configuration maps that tier to a concrete model and effort. A tier is therefore an automatic profile, not a model allowlist.
+The selected provider's configuration maps that tier to a concrete model and an optional effort value. Claude and Codex currently receive their configured effort controls; Gemini and Copilot do not, so their tiers differ by model selection and retain `auto` effort. A tier is an automatic profile, not a model allowlist.
 
 ## Adaptive phase preferences
 
@@ -120,6 +142,8 @@ These preferences do not replace a provider, model, or tier explicitly selected 
 ## What learning stores
 
 Learning is local, file-based, and repository-scoped by default. AIRO does not train a provider model or maintain a separate learned-weights file.
+
+The current release does not sync history between machines. Portable encrypted export/import and optional end-to-end encrypted cloud sync are roadmap items, not current commands. Until those milestones ship, users must treat the files below as local data and migrate them manually if needed.
 
 Unless `history.path` is configured, records are stored at:
 

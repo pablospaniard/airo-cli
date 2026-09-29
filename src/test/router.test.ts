@@ -5,16 +5,20 @@ import path from "node:path";
 import test from "node:test";
 import { DEFAULT_CONFIG } from "../config.js";
 import { appendHistory } from "../history.js";
+import { ROUTING_POLICY } from "../routing-policy.js";
 import {
   applyRoutePreferences,
   applyRouteOverrides,
   applyPhasePreference,
+  fallbackIfMissing,
+  fallbackProvider,
   needsRecovery,
   planPhases,
   shouldOrchestrate,
 } from "../orchestrator.js";
 import {
   agentForModel,
+  generateRouteCandidates,
   requestedModel,
   requestedModelTier,
   routeTask,
@@ -37,6 +41,7 @@ test("routes architecture investigations to Claude with a deep model", () => {
   assert.equal(route.modelTier, "deep");
   assert.equal(route.model, DEFAULT_CONFIG.claude.models.deep.model);
   assert.ok(route.claudeScore > route.codexScore);
+  assert.equal(route.routingPolicyVersion, ROUTING_POLICY.version);
 });
 
 test("routes a small test implementation to Codex with a fast model", () => {
@@ -45,6 +50,68 @@ test("routes a small test implementation to Codex with a fast model", () => {
   assert.equal(route.agent, "codex");
   assert.equal(route.modelTier, "fast");
   assert.equal(route.model, DEFAULT_CONFIG.codex.models.fast.model);
+  assert.ok(route.reasons.some((reason) => /test capability/.test(reason.reason)));
+});
+
+test("generates and scores every registered provider and tier candidate", () => {
+  const current = config();
+  const scores = { claude: 4, codex: 2, gemini: 1, copilot: 0 };
+  const candidates = generateRouteCandidates(current, scores, 5);
+
+  assert.equal(candidates.length, 12);
+  assert.deepEqual(
+    new Set(candidates.map((candidate) => candidate.agent)),
+    new Set(["claude", "codex", "gemini", "copilot"]),
+  );
+  assert.equal(
+    candidates.find((candidate) => candidate.agent === "claude" && candidate.modelTier === "deep")
+      ?.totalScore,
+    6,
+  );
+  assert.equal(
+    candidates.find((candidate) => candidate.agent === "gemini" && candidate.modelTier === "deep")
+      ?.effort,
+    "auto",
+  );
+});
+
+test("falls back across every registered provider using route scores", () => {
+  const current = config();
+  current.claude.command = "/missing/claude";
+  current.codex.command = "/missing/codex";
+  current.gemini.command = process.execPath;
+  current.copilot.command = process.execPath;
+  const route = routeTask("Investigate an architecture regression", current);
+  route.agentScores = { claude: 10, codex: 8, gemini: 3, copilot: 5 };
+
+  const fallback = fallbackIfMissing(route, current);
+
+  assert.equal(fallback.agent, "copilot");
+  assert.equal(fallback.model, current.copilot.models.deep.model);
+  assert.match(fallback.modelReasons.at(-1)!, /fallback copilot/);
+});
+
+test("skips a signed-out fallback and continues through the provider registry", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-generic-fallback-"));
+  const signedOut = path.join(dir, "signed-out-codex");
+  fs.writeFileSync(signedOut, "#!/bin/sh\nprintf 'Not logged in'\n");
+  fs.chmodSync(signedOut, 0o755);
+  try {
+    const current = config();
+    current.codex.command = signedOut;
+    current.gemini.command = process.execPath;
+    current.copilot.command = "/missing/copilot";
+    const route = routeTask("Investigate an architecture regression", current);
+    route.agentScores = { claude: 10, codex: 8, gemini: 5, copilot: 3 };
+    const ruledOut = new Set<RouterConfig["defaultAgent"]>();
+
+    const fallback = fallbackProvider(route, current, "authentication", ruledOut);
+
+    assert.equal(fallback?.agent, "gemini");
+    assert.equal(ruledOut.has("codex"), true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("honors an explicit request for the most powerful model", () => {
@@ -76,6 +143,9 @@ test("routes explicit models outside the automatic tier defaults", () => {
   });
   assert.equal(agentForModel("sonnet", current), "claude");
   assert.equal(agentForModel("o3", current), "codex");
+  assert.equal(agentForModel("gpt-4.1", current), "codex");
+  assert.equal(agentForModel("claude-haiku-4.5", current), "copilot");
+  assert.equal(agentForModel("gpt-5.3-codex", current), "copilot");
   assert.equal(agentForModel("unknown-model", current), undefined);
   assert.equal(requestedModel("use GPT for this task", current), undefined);
   assert.equal(codex.agent, "codex");
@@ -97,9 +167,26 @@ test("understands human-style provider, model, and tier overrides", () => {
   assert.equal(gemini.agent, "gemini");
   assert.equal(gemini.modelTier, "fast");
   assert.equal(gemini.model, current.gemini.models.fast.model);
+  assert.equal(gemini.effort, "auto");
   assert.equal(codex.agent, "codex");
   assert.equal(codex.modelTier, "deep");
   assert.equal(codex.model, current.codex.models.deep.model);
+});
+
+test("normalizes unsupported provider effort overrides", () => {
+  const current = config();
+  const route = applyRouteOverrides(
+    routeTask("implement this endpoint", current),
+    {
+      agent: "copilot",
+      tier: "deep",
+      effort: "high",
+    },
+    current,
+  );
+
+  assert.equal(route.agent, "copilot");
+  assert.equal(route.effort, "auto");
 });
 
 test("pins the provider only when the user chose it", () => {
@@ -180,6 +267,22 @@ test("asks for clarification when a routing instruction cannot be resolved", () 
   assert.equal(routingClarification("use automatic routing for this review", current), undefined);
 });
 
+test("does not mistake the auto model sentinel for an explicit Gemini request", () => {
+  const current = config();
+  for (const task of [
+    "Add a helper with auto-generated IDs to the parser",
+    "use auto routing to fix the lint errors",
+  ]) {
+    const request = userRoutingRequest(task, current);
+    const route = routeTask(task, current);
+    assert.equal(request.model, undefined);
+    assert.equal(request.agent, undefined);
+    assert.equal(route.userRequestedModel, undefined);
+    assert.equal(route.agentPinned, false);
+    assert.notEqual(route.agent, "gemini");
+  }
+});
+
 test("does not let a later sentence change the routing request", () => {
   const current = config();
   const request = userRoutingRequest("use Claude. Then make the implementation fast", current);
@@ -253,6 +356,25 @@ test("ignores malformed custom rule expressions", () => {
   });
 
   assert.doesNotThrow(() => routeTask("Add a component", custom));
+});
+
+test("ignores invalid custom rule values and unknown policies", () => {
+  const custom = config();
+  custom.policy = "unknown-policy" as RouterConfig["policy"];
+  custom.rules = [
+    {
+      name: "stale provider rule",
+      pattern: "component",
+      agent: "clude",
+      modelTier: "enormous",
+      effort: "extreme",
+    } as unknown as RouterConfig["rules"][number],
+  ];
+
+  const route = routeTask("Add a component", custom);
+  assert.equal(route.matchedRule, "stale provider rule");
+  assert.ok(["claude", "codex", "gemini", "copilot"].includes(route.agent));
+  assert.ok(["fast", "balanced", "deep"].includes(route.modelTier));
 });
 
 test("uses the configured default agent to break score ties", () => {

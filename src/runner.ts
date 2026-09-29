@@ -1,5 +1,12 @@
 import { spawn, spawnSync } from "node:child_process";
-import type { Agent, AgentRunResult, RouteResult, RouterConfig, TokenUsage } from "./types.js";
+import type {
+  Agent,
+  AgentRunResult,
+  ProviderFailure,
+  RouteResult,
+  RouterConfig,
+  TokenUsage,
+} from "./types.js";
 import type { PhaseLogMeta, RunLogger } from "./logging.js";
 
 export function commandExists(command: string): boolean {
@@ -9,7 +16,7 @@ export function commandExists(command: string): boolean {
 
 /** Provider errors that usually mean this account/model cannot serve the request right now. */
 export function isUsageLimitError(text: string, exitCode?: number): boolean {
-  if (!text && exitCode === 0) return false;
+  if (!text || exitCode === 0) return false;
   return /(?:usage|quota|rate|session|request|message|token)[ -]?(?:limit|limited|exhausted|exceeded)|(?:hit|reached|exceeded|ran out of).{0,40}(?:limit|quota|credits?|balance)|(?:credit|credits|balance)[ -]?(?:limit|exhausted|insufficient)|too many requests|(?:429|resource_exhausted|rate_limit_error|quota_exceeded)|billing.{0,30}(?:limit|disabled|past due)|out of credits/i.test(
     text,
   );
@@ -40,64 +47,126 @@ export function commandVersion(command: string): string {
   return (result.stdout || result.stderr || "").trim() || `exit ${result.status}`;
 }
 
-function argsForRoute(
+export interface ProviderInvocation {
+  args: string[];
+  env: NodeJS.ProcessEnv;
+  /** Index of the task prompt in args, so diagnostics can redact it. */
+  promptArgIndex: number;
+}
+
+export interface ProviderRuntimeAdapter {
+  buildInvocation: (
+    route: RouteResult,
+    prompt: string,
+    config: RouterConfig,
+    headless: boolean,
+    structuredProgress: boolean,
+    elevated?: boolean,
+  ) => ProviderInvocation;
+  parseProgress: (event: unknown) => ParsedProviderEvent;
+  /** Classify failures that allow an automatic route to try another provider. */
+  classifyFailure: (text: string, exitCode?: number) => ProviderFailure | undefined;
+}
+
+function classifyCommonProviderFailure(
+  text: string,
+  exitCode?: number,
+): ProviderFailure | undefined {
+  if (isProviderAuthError(text, exitCode)) return "authentication";
+  if (isUsageLimitError(text, exitCode)) return "usage limit";
+  return undefined;
+}
+
+function claudeInvocation(
   route: RouteResult,
   prompt: string,
   config: RouterConfig,
   headless: boolean,
   structuredProgress: boolean,
   elevated = false,
-): { args: string[]; env: any } {
-  const provider = config[route.agent];
-  const env: any = { ...process.env };
+): ProviderInvocation {
+  const provider = config.claude;
+  const env: NodeJS.ProcessEnv = { ...process.env };
   const args = [...(provider.args ?? [])];
+  if (headless) args.push("-p");
+  args.push("--model", route.model);
+  if (structuredProgress && headless) args.push("--output-format", "stream-json", "--verbose");
+  const effectivePermissionMode =
+    elevated || config.permissions.mode === "fullAccess"
+      ? "bypassPermissions"
+      : provider.permissionMode;
+  if (headless && effectivePermissionMode) args.push("--permission-mode", effectivePermissionMode);
+  if (route.effort !== "auto") env.CLAUDE_CODE_EFFORT_LEVEL = route.effort;
+  const promptArgIndex = args.push(prompt) - 1;
+  return { args, env, promptArgIndex };
+}
 
-  if (route.agent === "claude") {
-    if (headless) args.push("-p");
-    args.push("--model", route.model);
-    if (structuredProgress && headless) args.push("--output-format", "stream-json", "--verbose");
-    const effectivePermissionMode =
-      elevated || config.permissions.mode === "fullAccess"
-        ? "bypassPermissions"
-        : provider.permissionMode;
-    if (headless && effectivePermissionMode)
-      args.push("--permission-mode", effectivePermissionMode);
-    if (route.effort !== "auto") env.CLAUDE_CODE_EFFORT_LEVEL = route.effort;
-    args.push(prompt);
-  } else if (route.agent === "codex") {
-    if (elevated || config.permissions.mode === "fullAccess") {
-      args.push("--sandbox", "danger-full-access");
-    } else {
-      args.push("--sandbox", "workspace-write");
-      if (config.permissions.networkAccess)
-        args.push("-c", "sandbox_workspace_write.network_access=true");
-    }
-    // AIRO owns the approval UI and retries an approved action with an elevated
-    // sandbox. The headless child has no interactive stdin for nested prompts.
-    args.push("--ask-for-approval", "never");
-    if (headless) args.push("exec");
-    if (structuredProgress && headless) args.push("--json");
-    args.push("--model", route.model);
-    if (route.effort !== "auto") args.push("-c", `model_reasoning_effort="${route.effort}"`);
-    args.push(prompt);
-  } else if (route.agent === "gemini") {
-    if (headless) args.push("--prompt", prompt);
-    args.push("--model", route.model);
-    args.push(
-      "--approval-mode",
-      elevated || config.permissions.mode === "fullAccess" ? "yolo" : "default",
-    );
-    if (elevated || config.permissions.mode === "fullAccess") args.push("--skip-trust");
-    if (structuredProgress && headless) args.push("--output-format", "stream-json");
+function codexInvocation(
+  route: RouteResult,
+  prompt: string,
+  config: RouterConfig,
+  headless: boolean,
+  structuredProgress: boolean,
+  elevated = false,
+): ProviderInvocation {
+  const provider = config.codex;
+  const args = [...(provider.args ?? [])];
+  if (elevated || config.permissions.mode === "fullAccess") {
+    args.push("--sandbox", "danger-full-access");
   } else {
-    if (headless) args.push("--prompt", prompt);
-    args.push("--model", route.model);
-    if (elevated || config.permissions.mode === "fullAccess") args.push("--allow-all");
-    else if (config.permissions.networkAccess) args.push("--allow-all-urls");
-    if (structuredProgress && headless) args.push("--silent");
-    if (!headless) args.push(prompt);
+    args.push("--sandbox", "workspace-write");
+    if (config.permissions.networkAccess)
+      args.push("-c", "sandbox_workspace_write.network_access=true");
   }
-  return { args, env };
+  // AIRO owns the approval UI and retries an approved action with an elevated
+  // sandbox. The headless child has no interactive stdin for nested prompts.
+  args.push("--ask-for-approval", "never");
+  if (headless) args.push("exec");
+  if (structuredProgress && headless) args.push("--json");
+  args.push("--model", route.model);
+  if (route.effort !== "auto") args.push("-c", `model_reasoning_effort="${route.effort}"`);
+  const promptArgIndex = args.push(prompt) - 1;
+  return { args, env: { ...process.env }, promptArgIndex };
+}
+
+function geminiInvocation(
+  route: RouteResult,
+  prompt: string,
+  config: RouterConfig,
+  headless: boolean,
+  structuredProgress: boolean,
+  elevated = false,
+): ProviderInvocation {
+  const provider = config.gemini;
+  const args = [...(provider.args ?? [])];
+  const promptArgIndex = headless ? args.push("--prompt", prompt) - 1 : -1;
+  args.push("--model", route.model);
+  args.push(
+    "--approval-mode",
+    elevated || config.permissions.mode === "fullAccess" ? "yolo" : "default",
+  );
+  if (elevated || config.permissions.mode === "fullAccess") args.push("--skip-trust");
+  if (structuredProgress && headless) args.push("--output-format", "stream-json");
+  return { args, env: { ...process.env }, promptArgIndex };
+}
+
+function copilotInvocation(
+  route: RouteResult,
+  prompt: string,
+  config: RouterConfig,
+  headless: boolean,
+  structuredProgress: boolean,
+  elevated = false,
+): ProviderInvocation {
+  const provider = config.copilot;
+  const args = [...(provider.args ?? [])];
+  const promptArgIndex = headless ? args.push("--prompt", prompt) - 1 : -1;
+  args.push("--model", route.model);
+  if (elevated || config.permissions.mode === "fullAccess") args.push("--allow-all");
+  else if (config.permissions.networkAccess) args.push("--allow-all-urls");
+  if (structuredProgress && headless) args.push("--silent");
+  const interactivePromptIndex = !headless ? args.push(prompt) - 1 : promptArgIndex;
+  return { args, env: { ...process.env }, promptArgIndex: interactivePromptIndex };
 }
 
 function compactJson(value: unknown, max = 140): string {
@@ -454,11 +523,65 @@ export function geminiProgress(event: any): ParsedProviderEvent {
   };
 }
 
+export const PROVIDER_RUNTIME_ADAPTERS = {
+  claude: {
+    buildInvocation: claudeInvocation,
+    parseProgress: claudeProgress,
+    classifyFailure: classifyCommonProviderFailure,
+  },
+  codex: {
+    buildInvocation: codexInvocation,
+    parseProgress: codexProgress,
+    classifyFailure: classifyCommonProviderFailure,
+  },
+  gemini: {
+    buildInvocation: geminiInvocation,
+    parseProgress: geminiProgress,
+    classifyFailure: classifyCommonProviderFailure,
+  },
+  copilot: {
+    buildInvocation: copilotInvocation,
+    parseProgress: genericProgress,
+    classifyFailure: classifyCommonProviderFailure,
+  },
+} satisfies Record<Agent, ProviderRuntimeAdapter>;
+
+export function providerRuntimeAdapter(agent: Agent): ProviderRuntimeAdapter {
+  return PROVIDER_RUNTIME_ADAPTERS[agent];
+}
+
+export function classifyProviderFailure(
+  agent: Agent,
+  text: string,
+  exitCode?: number,
+): ProviderFailure | undefined {
+  return providerRuntimeAdapter(agent).classifyFailure(text, exitCode);
+}
+
+export function buildProviderInvocation(
+  route: RouteResult,
+  prompt: string,
+  config: RouterConfig,
+  options: { headless: boolean; structuredProgress: boolean; elevated?: boolean },
+): ProviderInvocation {
+  return providerRuntimeAdapter(route.agent).buildInvocation(
+    route,
+    prompt,
+    config,
+    options.headless,
+    options.structuredProgress,
+    options.elevated,
+  );
+}
+
+export function diagnosticInvocationArgs(invocation: ProviderInvocation): string[] {
+  return invocation.args.map((arg, index) =>
+    index === invocation.promptArgIndex ? `<prompt:${arg.length} chars>` : arg,
+  );
+}
+
 export function progressFor(agent: Agent, event: any): ParsedProviderEvent {
-  if (agent === "claude") return claudeProgress(event);
-  if (agent === "codex") return codexProgress(event);
-  if (agent === "gemini") return geminiProgress(event);
-  return genericProgress(event);
+  return providerRuntimeAdapter(agent).parseProgress(event);
 }
 
 export async function runAgent(
@@ -477,17 +600,16 @@ export async function runAgent(
   const headless = options.headless ?? false;
   const capture = options.capture ?? false;
   const structuredProgress = Boolean(options.logger && headless);
-  const { args, env } = argsForRoute(
-    route,
-    prompt,
-    config,
+  const invocation = buildProviderInvocation(route, prompt, config, {
     headless,
     structuredProgress,
-    options.elevated,
-  );
+    elevated: options.elevated,
+  });
+  const { args, env } = invocation;
+  const diagnosticArgs = diagnosticInvocationArgs(invocation);
 
   options.logger?.metadata(
-    `command=${provider.command} args=${JSON.stringify(args.slice(0, -1))} promptChars=${prompt.length}`,
+    `command=${provider.command} args=${JSON.stringify(diagnosticArgs)} promptChars=${prompt.length}`,
   );
 
   if (!capture && !options.logger) {

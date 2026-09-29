@@ -3,7 +3,8 @@ import { loadConfig, writeGlobalConfig } from "./config.js";
 import type { Agent, Effort, ModelProfile, ModelTier, RouterConfig } from "./types.js";
 import { agentColor, divider, promptLabel, statusIcon, ui } from "./ui.js";
 import { detectDefaultModels } from "./account.js";
-import { AGENTS, discoverCatalogs } from "./catalog.js";
+import { discoverCatalogs } from "./catalog.js";
+import { AGENTS, providerDefinition } from "./providers.js";
 
 function ask(rl: any, question: string): Promise<string> {
   return new Promise((resolve) => rl.question(`${promptLabel()}${question} `, resolve));
@@ -83,6 +84,8 @@ async function pickTier(
     answer && Number(answer) >= 1 && Number(answer) <= models.length
       ? Number(answer) - 1
       : currentIndex;
+  if (!providerDefinition(agent).capabilities.effortControl)
+    return { model: models[idx], effort: "auto" };
   const effort = ((
     await ask(rl, `Effort for ${ui.bold(tier)} [${ui.dim(current.effort ?? "auto")}]:`)
   ).trim() ||
@@ -140,7 +143,7 @@ export async function runSetup(): Promise<string> {
     console.log("");
     console.log(divider("Tier mapping"));
     console.log(ui.dim("Map your selected models to fast / balanced / deep."));
-    for (const agent of ["claude", "codex", "gemini", "copilot"] as const) {
+    for (const agent of AGENTS) {
       console.log("");
       console.log(ui.bold(agentColor(agent, agent.toUpperCase())));
       for (const tier of ["fast", "balanced", "deep"] as const) {
@@ -166,7 +169,7 @@ export async function runSetup(): Promise<string> {
     console.log(divider("Usage comparison"));
     console.log(ui.dim("AIRO compares measured runs with each provider's normal default model."));
     const detectedDefaults = detectDefaultModels(config);
-    for (const agent of ["claude", "codex", "gemini", "copilot"] as const) {
+    for (const agent of AGENTS) {
       const current = config[agent].defaultModel;
       const automatic = detectedDefaults[agent] ?? "not detected";
       const hint = current ? current : `auto: ${automatic}`;

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import type { RouterConfig } from "./types.js";
+import type { Agent, Effort, ModelTier, Policy, RouterConfig, Rule } from "./types.js";
 
 export const CONFIG_NOTE =
   "AIRO can use any model exposed by each provider; run `airo setup` to change the three automatic tier defaults.";
@@ -32,18 +32,18 @@ export const DEFAULT_CONFIG: RouterConfig = {
     command: "gemini",
     args: [],
     models: {
-      fast: { model: "gemini-2.5-flash", effort: "low" },
-      balanced: { model: "gemini-2.5-pro", effort: "medium" },
-      deep: { model: "gemini-2.5-pro", effort: "high" },
+      fast: { model: "gemini-2.5-flash", effort: "auto" },
+      balanced: { model: "auto", effort: "auto" },
+      deep: { model: "gemini-2.5-pro", effort: "auto" },
     },
   },
   copilot: {
     command: "copilot",
     args: [],
     models: {
-      fast: { model: "gpt-4.1", effort: "low" },
-      balanced: { model: "claude-sonnet-4", effort: "medium" },
-      deep: { model: "claude-opus-4.1", effort: "high" },
+      fast: { model: "claude-haiku-4.5", effort: "auto" },
+      balanced: { model: "claude-sonnet-4.6", effort: "auto" },
+      deep: { model: "gpt-5.3-codex", effort: "auto" },
     },
   },
   permissions: { mode: "prompt", networkAccess: true },
@@ -67,6 +67,45 @@ export const DEFAULT_CONFIG: RouterConfig = {
   },
   rules: [],
 };
+
+const POLICIES = new Set<Policy>(["balanced", "claude-heavy", "codex-heavy"]);
+const AGENT_IDS = new Set<Agent>(["claude", "codex", "gemini", "copilot"]);
+const MODEL_TIERS = new Set<ModelTier>(["fast", "balanced", "deep"]);
+const EFFORTS = new Set<Effort>(["auto", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
+export function validPolicy(value: unknown): value is Policy {
+  return typeof value === "string" && POLICIES.has(value as Policy);
+}
+
+export function validAgent(value: unknown): value is Agent {
+  return typeof value === "string" && AGENT_IDS.has(value as Agent);
+}
+
+export function validModelTier(value: unknown): value is ModelTier {
+  return typeof value === "string" && MODEL_TIERS.has(value as ModelTier);
+}
+
+export function validEffort(value: unknown): value is Effort {
+  return typeof value === "string" && EFFORTS.has(value as Effort);
+}
+
+function normalizedRules(value: unknown): Rule[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object") return [];
+    const rule = candidate as Record<string, unknown>;
+    if (typeof rule.name !== "string" || typeof rule.pattern !== "string") return [];
+    return [
+      {
+        name: rule.name,
+        pattern: rule.pattern,
+        ...(validAgent(rule.agent) ? { agent: rule.agent } : {}),
+        ...(validModelTier(rule.modelTier) ? { modelTier: rule.modelTier } : {}),
+        ...(validEffort(rule.effort) ? { effort: rule.effort } : {}),
+      },
+    ];
+  });
+}
 
 export function configCandidates(cwd = process.cwd()): string[] {
   return [
@@ -102,6 +141,10 @@ export function loadConfig(cwd = process.cwd()): { config: RouterConfig; path?: 
       config: {
         ...DEFAULT_CONFIG,
         ...parsed,
+        policy: validPolicy(parsed.policy) ? parsed.policy : DEFAULT_CONFIG.policy,
+        defaultAgent: validAgent(parsed.defaultAgent)
+          ? parsed.defaultAgent
+          : DEFAULT_CONFIG.defaultAgent,
         claude: mergeProvider(DEFAULT_CONFIG.claude, parsed.claude),
         codex: mergeProvider(DEFAULT_CONFIG.codex, parsed.codex),
         gemini: mergeProvider(DEFAULT_CONFIG.gemini, parsed.gemini),
@@ -110,7 +153,7 @@ export function loadConfig(cwd = process.cwd()): { config: RouterConfig; path?: 
         history: { ...DEFAULT_CONFIG.history, ...parsed.history },
         orchestration: { ...DEFAULT_CONFIG.orchestration, ...parsed.orchestration },
         logging: { ...DEFAULT_CONFIG.logging, ...parsed.logging },
-        rules: Array.isArray(parsed.rules) ? parsed.rules : [],
+        rules: normalizedRules(parsed.rules),
       },
       path: file,
     };

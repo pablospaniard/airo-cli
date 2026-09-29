@@ -4,7 +4,7 @@
   <img src="docs/airo-setup.png" alt="AIRO's first-run model setup" width="760">
 </p>
 
-<p align="center">Adaptive Intelligence Routing &amp; Orchestration for Claude Code and Codex CLI.</p>
+<p align="center">Adaptive Intelligence Routing &amp; Orchestration for coding-agent CLIs.</p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/airo-ai-router"><img src="https://img.shields.io/npm/v/airo-ai-router?logo=npm&label=npm" alt="npm version"></a>
@@ -16,6 +16,8 @@
 
 AIRO accepts a task, chooses the right provider and model tier, and can coordinate a multi-phase workflow across agents. It runs locally with your existing CLI logins—no separate model API keys or proxy service required.
 
+The official npm package is [`airo-ai-router`](https://www.npmjs.com/package/airo-ai-router). Install it globally to use the `airo` command; `ai-router`, `airoute`, and `ai-route` are retained as compatibility aliases.
+
 ```text
 request → route → analyze → implement → test → review
                     Claude     Codex      Codex   Claude
@@ -25,7 +27,7 @@ request → route → analyze → implement → test → review
 
 - Routes each request independently using task signals, custom rules, and prior feedback.
 - Maps work onto configurable `fast`, `balanced`, and `deep` model tiers.
-- Hands complex tasks between Claude Code and Codex through a shared working tree.
+- Hands complex tasks between supported provider CLIs through a shared working tree.
 - Preserves logical session context even when the provider changes between turns.
 - Streams structured progress while keeping hidden reasoning private.
 - Separates live progress from the provider's final result.
@@ -48,8 +50,8 @@ That means one job can be served by multiple models and providers, and another r
 
 ### Built for the way agent work actually happens
 
-- **Seamless local integration.** Keep using the Claude Code and Codex CLI accounts you already have. AIRO runs in your repository, keeps the shared working tree, and needs no proxy, copied API keys, or separate hosted workspace.
-- **Adaptive multi-model workflows.** AIRO can assign a different provider, model tier, and effort level to analysis, implementation, validation, and review—then add a recovery phase only when the evidence calls for it.
+- **Seamless local integration.** Keep using the supported provider CLI accounts you already have. AIRO runs in your repository, keeps the shared working tree, and needs no proxy, copied API keys, or separate hosted workspace.
+- **Adaptive multi-model workflows.** AIRO can assign a different provider and model tier to analysis, implementation, validation, and review, including provider-supported effort controls—then add a recovery phase only when the evidence calls for it.
 - **Measured token efficiency.** Fast or balanced models handle routine work while deep models are reserved for difficult phases. `airo usage` reports provider telemetry and a clearly labeled historical estimate against comparable default-model runs.
 - **Sessions that survive context switches.** Continue a logical task even when the provider changes, restore past sessions, and keep concise task outcomes rather than exposing hidden reasoning.
 - **A real VS Code workspace.** The included extension provides a sidebar chat, rich phase indicators, attachments, session history, and parallel editor chats. Open a new chat without stopping an active one; the history view marks running chats so you can jump back to them.
@@ -82,7 +84,9 @@ The repository includes a VS Code extension in [`vscode-extension`](vscode-exten
 
 The extension invokes the AIRO CLI, so `airo-ai-router` must be installed (or the repository must be linked locally) in addition to any provider CLI. Provider CLIs do not need to be installed in a standard location, but every executable must be reachable either through `PATH` or an explicit command path. If VS Code cannot find `airo`, set **AIRO: Command** to the absolute path of the AIRO executable, such as `/Users/me/.local/bin/airo` or `/opt/homebrew/bin/airo`. The same setting is used by the sidebar and the **AIRO: Open Terminal** command.
 
-When AIRO picks the provider itself, it can fall back to the other provider if one CLI is missing, signed out (for example Codex reporting `401 Unauthorized`), or usage-limited; it only falls back to a provider that is actually signed in, and it stops retrying a provider that already failed that way during the run. A handover is announced the moment it happens: the CLI prints the new provider, and the VS Code sidebar repaints its header chip, phase chip, and activity accent and adds a short note explaining the change. An explicit choice is never substituted: if you pin a provider with `--agent`, `--model`, `/agent`, the VS Code provider setting, or by naming it in the prompt, AIRO uses that provider only and fails with a clear error instead of switching. Run `airo setup` at any time to revisit the model choices.
+Automatic fallback considers every registered provider. AIRO ranks alternatives by their score for the current task, then uses the registry's stable Claude → Codex → Gemini → Copilot priority to break ties. Missing-provider fallback checks command availability. After an authentication or usage-limit failure, AIRO also skips a candidate when its adapter can confirm that its account is signed out; Gemini and Copilot currently have no account probe, so their authentication state remains unknown until execution.
+
+A handover is announced the moment it happens: the CLI prints the new provider, and the VS Code sidebar repaints its header chip, phase chip, and activity accent and adds a short note explaining the change. An explicit choice is never substituted: if you pin a provider with `--agent`, `--model`, `/agent`, the VS Code provider setting, or by naming it in the prompt, AIRO uses that provider only and fails with a clear error instead of switching. Run `airo setup` at any time to revisit the model choices.
 
 ## Common workflows
 
@@ -127,9 +131,11 @@ airo --dry-run --explain "migrate this legacy module"
 
 ## Models and routing
 
-AIRO scores each request for provider and complexity signals, applies matching configuration rules, and can incorporate feedback from similar prior work. It then maps the work to a `fast`, `balanced`, or `deep` tier. A tier is a default choice, not a restriction.
+AIRO extracts provider-neutral task features, generates every registered provider/tier candidate, and scores each candidate using reviewed capability profiles, tier suitability, configuration rules, and feedback from similar prior work. A `fast`, `balanced`, or `deep` tier is a default choice, not a restriction.
 
-See [Routing rules and learning](docs/routing-and-learning.md) for the complete decision precedence, custom-rule behavior, history format, and learning algorithm. The [Jev and AIRO investigation](docs/jev-and-airo.md) compares AIRO with TypeSafe's Jev decision model and outlines a possible integration path.
+See [Routing rules and learning](docs/routing-and-learning.md) for the complete current decision precedence, custom-rule behavior, history format, and learning algorithm. [Jev and AIRO](docs/jev-and-airo.md) records the planned development-evaluation and optional local-feedback boundaries. The [routing platform roadmap](docs/routing-platform-roadmap.md) covers provider-neutral routing, portable learning, encrypted cloud sync, and the deferred research-consent architecture.
+
+The roadmap is not released functionality. The current package keeps history and learning local, does not require Jev or an AIRO account, and does not upload routing journeys to an AIRO service.
 
 Out of the box, the automatic defaults are:
 
@@ -141,6 +147,14 @@ Out of the box, the automatic defaults are:
 | Codex CLI | `fast` | `gpt-5.6-luna` | `low` |
 | Codex CLI | `balanced` | `gpt-5.6-terra` | `medium` |
 | Codex CLI | `deep` | `gpt-5.6-sol` | `xhigh` |
+| Gemini CLI | `fast` | `gemini-2.5-flash` | `auto` |
+| Gemini CLI | `balanced` | `auto` | `auto` |
+| Gemini CLI | `deep` | `gemini-2.5-pro` | `auto` |
+| GitHub Copilot CLI | `fast` | `claude-haiku-4.5` | `auto` |
+| GitHub Copilot CLI | `balanced` | `claude-sonnet-4.6` | `auto` |
+| GitHub Copilot CLI | `deep` | `gpt-5.3-codex` | `auto` |
+
+AIRO currently forwards effort settings only to Claude Code and Codex CLI. Gemini and Copilot tiers differ by model selection; their configured effort value remains `auto` until their provider adapters implement and test a stable effort interface.
 
 You can use any model your provider CLI subscription makes available. AIRO does not maintain an allowlist. The setup wizard asks which models you have access to and lets you assign three of them to the automatic tiers; use it again whenever your access changes:
 
@@ -149,26 +163,36 @@ airo setup
 airo models
 ```
 
-For a one-off request, name a model explicitly. AIRO infers Claude for names such as `opus`, `sonnet`, `haiku`, or `claude-*`, and Codex for names such as `gpt-*` or `codex-*`. You can also pin the provider yourself:
+For a one-off request, name a model explicitly. AIRO recognizes configured model IDs and common Claude, Codex, and Gemini naming patterns. You can also pin the provider yourself:
 
 ```bash
 airo --model opus "review this authentication change"
 airo --agent claude --model sonnet "explain this failing test"
 airo --agent codex --model gpt-6-astra "review this PR for regressions"
+airo --agent gemini --tier fast "summarize this module"
+airo --agent copilot --tier balanced "implement this endpoint"
 ```
 
-The `--model` value is passed to the selected provider CLI, so it must be a model that CLI accepts for your account. If an explicit model name is unfamiliar to AIRO, include `--agent claude` or `--agent codex`.
+The `--model` value is passed to the selected provider CLI, so it must be a model that CLI accepts for your account. If an explicit model name is unfamiliar to AIRO, include `--agent claude`, `--agent codex`, `--agent gemini`, or `--agent copilot`.
+
+Copilot hosts models from several vendors, so a `gpt-*` or `claude-*` name alone is not enough to infer Copilot safely. Use `--agent copilot` unless that exact model ID is already configured only for Copilot.
+
+### Provider coverage
+
+Claude Code and Codex CLI have explicit account probes, model-specific effort forwarding, and the broadest integration coverage. Gemini CLI and GitHub Copilot CLI provide execution, configured or discovered models, permissions, explicit routing, and automatic fallback eligibility, but they do not yet have account probes or receive AIRO effort settings. The roadmap defines the remaining contract they must meet before all providers have equivalent behavior.
 
 ### How AIRO detects your access
 
-AIRO uses the Claude Code and Codex CLI installations already on your machine. By default it invokes the commands `claude` and `codex`, so they must be available on the `PATH` inherited by AIRO. AIRO does not scan common install directories or discover arbitrary executable locations automatically.
+AIRO uses the supported provider CLI installations already on your machine. By default it invokes `claude`, `codex`, `gemini`, or `copilot`, so each provider you use must be available through the login-shell `PATH` resolved by AIRO. AIRO does not scan arbitrary executable locations automatically.
 
-If Claude Code or Codex was installed somewhere else, set that provider's command to an absolute executable path in `.airo.json` (project-specific) or `~/.config/airo/config.json` (global):
+If a provider CLI was installed somewhere else, set that provider's command to an absolute executable path in `.airo.json` (project-specific) or `~/.config/airo/config.json` (global):
 
 ```json
 {
   "claude": { "command": "/Users/me/tools/claude" },
-  "codex": { "command": "/opt/codex/bin/codex" }
+  "codex": { "command": "/opt/codex/bin/codex" },
+  "gemini": { "command": "/Users/me/tools/gemini" },
+  "copilot": { "command": "/Users/me/tools/copilot" }
 }
 ```
 
@@ -181,9 +205,9 @@ For example, a project using custom locations can contain:
 }
 ```
 
-You can also put the provider directories on `PATH`. This is usually easiest for terminal use, but GUI-launched VS Code processes may not load the same shell startup files. In that case, configure absolute provider paths in `.airo.json` or the global config, and configure the absolute AIRO CLI path separately in **AIRO: Command**. AIRO does not scan arbitrary directories automatically. The configured provider command may be a wrapper script, as long as it accepts the normal Claude Code or Codex CLI arguments.
+You can also put the provider directories on `PATH`. This is usually easiest for terminal use, but GUI-launched VS Code processes may not load the same shell startup files. In that case, configure absolute provider paths in `.airo.json` or the global config, and configure the absolute AIRO CLI path separately in **AIRO: Command**. AIRO does not scan arbitrary directories automatically. The configured provider command may be a wrapper script, as long as it accepts that provider CLI's normal arguments.
 
-AIRO asks each CLI for its login status and authentication method; that can identify whether the CLI is signed in, but providers may intentionally not expose your email address or a complete list of subscription entitlements. AIRO never reads or decodes your stored credentials.
+AIRO has explicit sign-in probes for Claude Code and Codex CLI. Gemini and Copilot expose command availability and model catalogs, but AIRO reports their authentication as `not inspected` because it does not currently probe their sign-in status or account identity. Provider CLIs may intentionally omit an email address or complete subscription entitlements. AIRO never reads or decodes stored credentials.
 
 Use these commands to see what AIRO can see:
 
@@ -192,13 +216,13 @@ airo doctor
 airo account
 ```
 
-`airo account` also reports each provider's configured comparison default. AIRO looks for that default in its own configuration first, then in `ANTHROPIC_MODEL` or Claude settings for Claude Code, and in Codex's `config.toml` for Codex. This default is used for the `airo usage` comparison; it does not limit which model you can run. If it cannot be found automatically, set it in `airo setup` or as `defaultModel` in that provider's AIRO configuration.
+`airo doctor` reports two separate kinds of readiness: whether each provider satisfies AIRO's versioned source integration contract, and whether its configured command is available on the current machine. `airo account` lists every registered provider. It reports verified sign-in status for Claude and Codex and an explicit unknown state for Gemini and Copilot. For comparison defaults, AIRO checks its own configuration first, then `ANTHROPIC_MODEL` or Claude settings for Claude Code and Codex's `config.toml` for Codex. Gemini and Copilot defaults come only from their configured `defaultModel`. A comparison default does not limit which model you can run; set it with `airo setup` or `defaultModel` in that provider's AIRO configuration.
 
 ## Sessions and interactive chat
 
 ### Start work and continue it
 
-Every task runs in an AIRO session. A session keeps a concise record of earlier outcomes so a follow-up has useful context, even if AIRO selects a different provider or model. It does not share the hidden conversation history of Claude or Codex between runs.
+Every task runs in an AIRO session. A session keeps a concise record of earlier outcomes so a follow-up has useful context, even if AIRO selects a different provider or model. It does not share a provider CLI's hidden conversation history between runs.
 
 ```bash
 airo "review this PR for regressions"          # starts a session
@@ -221,7 +245,7 @@ Run `airo` (or `airo chat`) to stay in a terminal workspace and send several tas
 
 ```text
 /mode auto|adaptive|single
-/agent auto|claude|codex
+/agent auto|claude|codex|gemini|copilot
 /tier auto|fast|balanced|deep
 /log compact|live|verbose
 /status
@@ -344,12 +368,12 @@ Claude runs use `permissionMode: "acceptEdits"` inside prompt mode so headless i
 
 | Problem | What to do |
 | --- | --- |
-| AIRO says a provider is unavailable | Run `airo doctor`. Install the missing `claude` or `codex` CLI, put it on `PATH`, or set `claude.command`/`codex.command` to its absolute path in AIRO configuration, then sign in with that CLI. |
+| AIRO says a provider is unavailable | Run `airo doctor`. Install the selected provider CLI, put it on `PATH`, or set that provider's `command` to its absolute path in AIRO configuration, then sign in with the provider CLI. |
 | The VS Code sidebar cannot start AIRO | Install or link `airo-ai-router`, then set **AIRO: Command** to the absolute `airo` executable path if `airo` is not on VS Code’s `PATH`. |
 | A dev server cannot bind to localhost | Approve AIRO's permission prompt with `yes`, `approve`, or the sidebar's **Approve** button. AIRO retries that continuation with elevated access and requires the agent to verify the local URL before reporting it. |
 | A generated image is missing | Ask the agent to generate it again. AIRO requires generated files to be persisted and verified, and the VS Code sidebar previews existing image artifacts inline. |
-| AIRO cannot tell whether I am signed in | Run `airo account`, then sign in or refresh the login using the provider's own CLI. Provider CLIs may not reveal an email address or subscription name; that is expected. |
-| My model is rejected | Confirm the model is available to your current provider subscription, then run it with `--agent claude` or `--agent codex` and `--model <model>`. Use `airo setup` to update automatic tier defaults. |
+| AIRO cannot tell whether I am signed in | `airo account` verifies Claude and Codex but reports Gemini and Copilot as `not inspected`; check those with the provider's own CLI. Provider CLIs may not reveal an email address or subscription name; that is expected. |
+| My model is rejected | Confirm the model is available to the selected provider subscription, then include `--agent <provider>` with `--model <model>`. Use `airo setup` to update automatic tier defaults. |
 | The comparison default is missing | Run `airo setup` and enter the provider's usual model when prompted, or set that provider's `defaultModel` in AIRO configuration. This only affects `airo usage` comparisons. |
 | Node will not run AIRO | Check `node --version`; AIRO requires Node.js 22 or newer. Upgrade Node, reinstall AIRO, and run `airo doctor` again. |
 | Claude asks for permission or cannot edit | Review the Claude `permissionMode` in AIRO configuration. The default is `acceptEdits`; choose `manual` or `plan` when you want stricter control. |
@@ -366,13 +390,13 @@ Claude runs use `permissionMode: "acceptEdits"` inside prompt mode so headless i
 | `airo --single "task"` | Run one selected or automatically routed agent. |
 | `airo --adaptive "task"` | Force the multi-phase workflow. |
 | `airo --dry-run --explain "task"` | Show the routing decision without running an agent. |
-| `airo --agent <claude\|codex> --tier <fast\|balanced\|deep> "task"` | Pin a provider and model tier. |
-| `airo --model <model> --effort <level> "task"` | Override the chosen model and reasoning effort. |
+| `airo --agent <claude\|codex\|gemini\|copilot> --tier <fast\|balanced\|deep> "task"` | Pin a provider and model tier. |
+| `airo --model <model> --effort <level> "task"` | Override the model and, for Claude or Codex, reasoning effort. |
 | `airo --log <compact\|live\|verbose> "task"` | Control terminal progress detail. |
 | `airo setup` | Configure automatic model tiers. |
 | `airo models` | Print the active provider/model mapping. |
-| `airo account` | Show provider login status and detected defaults. |
-| `airo doctor` | Check provider commands and storage locations. |
+| `airo account` | List every provider; verify Claude/Codex login status and mark other authentication states as unknown. |
+| `airo doctor` | Check the provider integration contract, local commands, model discovery, and storage locations. |
 | `airo config init` | Create a project-local `.airo.json`. |
 | `airo session` / `airo sessions` | Show the active session or list repository sessions. |
 | `airo session new ["task"]` | Start and activate a fresh session. |
@@ -420,6 +444,12 @@ pnpm run hooks:install
 ```
 
 The hook runs `pnpm run validate`, which checks formatting, linting, types, and tests.
+
+## Architecture roadmap
+
+Future work includes a complete provider-adapter contract, generic routing and fallback, portable local learning, optional post-run Jev feedback, and private multi-device sync. Research participation remains a separate, deferred opt-in.
+
+See the [routing platform roadmap](docs/routing-platform-roadmap.md) and [Jev decision record](docs/jev-and-airo.md) for the planned boundaries and acceptance gates. None of those roadmap capabilities should be inferred from the current npm release.
 
 ## Compatibility aliases
 

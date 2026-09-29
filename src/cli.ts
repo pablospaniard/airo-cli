@@ -43,7 +43,6 @@ import {
   commandExists,
   commandVersion,
   isPermissionApproval,
-  isProviderUnavailableError,
   runAgent,
 } from "./runner.js";
 import {
@@ -71,8 +70,10 @@ import { migrateLegacyPaths } from "./paths.js";
 import { shouldRunInitialSetup, shouldShowWelcome } from "./startup.js";
 import { singleRunPrompt } from "./prompts.js";
 import { inspectAccounts } from "./account.js";
+import { AGENTS } from "./providers.js";
 import { buildUsageReport, nonCachedTokens, processedTokens } from "./usage.js";
 import { firstRunWelcome } from "./welcome.js";
+import { auditProviderSupport } from "./provider-support.js";
 import pathModule from "node:path";
 import { evaluateRoute, extractTaskFeatures } from "./evaluation.js";
 
@@ -347,13 +348,9 @@ async function singleRun(
   if (path) console.log(`${statusIcon("info")} ${brand()} ${ui.gray("config")} ${ui.cyan(path)}`);
   if (args.explain || args.dryRun) {
     console.log(
-      `${statusIcon("info")} ${ui.bold("provider scores")} ${(
-        ["claude", "codex", "gemini", "copilot"] as Agent[]
-      )
-        .map((agent) =>
-          agentColor(agent, `${agent} ${(routed.agentScores?.[agent] ?? 0).toFixed(1)}`),
-        )
-        .join(ui.gray(" / "))}`,
+      `${statusIcon("info")} ${ui.bold("provider scores")} ${AGENTS.map((agent) =>
+        agentColor(agent, `${agent} ${(routed.agentScores?.[agent] ?? 0).toFixed(1)}`),
+      ).join(ui.gray(" / "))}`,
     );
     for (const r of routed.reasons)
       console.log(
@@ -386,29 +383,38 @@ async function singleRun(
     logger,
     logMeta,
   });
-  // A question means the provider wants input, not that it cannot serve the run.
-  if (!result.question && isProviderUnavailableError(result.output, result.exitCode)) {
-    const failure = providerFailureReason(result.output, result.exitCode);
-    const fallback = fallbackProvider(routed, config, failure);
-    if (fallback) {
-      const message = `${routed.agent} ${failure} failure detected → falling back to ${fallback.agent}/${fallback.model}`;
-      routed = fallback;
-      Object.assign(logMeta, { agent: routed.agent, model: routed.model, effort: routed.effort });
-      logger.providerSwitch(logMeta, message);
-      result = await runAgent(routed, effectivePrompt, config, {
-        headless: true,
-        capture: true,
-        logger,
-        logMeta,
-      });
-    } else
-      logger.status(
-        routed.agentPinned
-          ? `${routed.agent} ${failure} failure detected → keeping the explicitly selected provider (no fallback)`
-          : `${routed.agent} ${failure} failure detected → no other provider is available to take over`,
-      );
-  }
   let usage = result.usage;
+  const ruledOut = new Set<Agent>();
+  // A question means the provider wants input, not that it cannot serve the run.
+  while (!result.question) {
+    const failure = providerFailureReason(routed.agent, result.output, result.exitCode);
+    if (!failure) break;
+    if (routed.agentPinned) {
+      logger.status(
+        `${routed.agent} ${failure} failure detected → keeping the explicitly selected provider (no fallback)`,
+      );
+      break;
+    }
+    ruledOut.add(routed.agent);
+    const fallback = fallbackProvider(routed, config, failure, ruledOut);
+    if (!fallback) {
+      logger.status(
+        `${routed.agent} ${failure} failure detected → no other provider is available to take over`,
+      );
+      break;
+    }
+    const message = `${routed.agent} ${failure} failure detected → falling back to ${fallback.agent}/${fallback.model}`;
+    routed = fallback;
+    Object.assign(logMeta, { agent: routed.agent, model: routed.model, effort: routed.effort });
+    logger.providerSwitch(logMeta, message);
+    result = await runAgent(routed, effectivePrompt, config, {
+      headless: true,
+      capture: true,
+      logger,
+      logMeta,
+    });
+    usage = addTokenUsage(usage, result.usage);
+  }
   let clarificationCount = 0;
   while (result.question && clarificationCount < 4) {
     clarificationCount++;
@@ -459,6 +465,7 @@ async function singleRun(
     model: routed.model,
     effort: routed.effort,
     complexity: routed.complexity,
+    routingPolicyVersion: routed.routingPolicyVersion,
     exitCode: result.exitCode,
     durationMs,
     outputExcerpt: result.output.slice(-config.orchestration.outputTailChars),
@@ -657,10 +664,14 @@ async function chatLoop(config: any, path?: string) {
             "Provider accounts",
             inspectAccounts(config).map((account) => {
               const icon =
-                account.available && account.authenticated ? statusIcon("ok") : statusIcon("error");
+                account.available && account.authenticated === true
+                  ? statusIcon("ok")
+                  : account.available && account.authenticated === undefined
+                    ? statusIcon("info")
+                    : statusIcon("error");
               const identity =
                 account.identity ??
-                (account.authenticated ? "identity not exposed by CLI" : account.status);
+                (account.authenticated === true ? "identity not exposed by CLI" : account.status);
               return `${icon} ${agentColor(account.agent, account.agent.padEnd(6))} ${ui.bold(identity)} ${ui.gray(`· default ${account.defaultModel ?? "not detected"}`)}`;
             }),
           ),
@@ -850,10 +861,14 @@ async function main() {
     console.log(divider("Provider accounts"));
     for (const account of inspectAccounts(config)) {
       const icon =
-        account.available && account.authenticated ? statusIcon("ok") : statusIcon("error");
+        account.available && account.authenticated === true
+          ? statusIcon("ok")
+          : account.available && account.authenticated === undefined
+            ? statusIcon("info")
+            : statusIcon("error");
       const identity =
         account.identity ??
-        (account.authenticated ? "identity not exposed by CLI" : account.status);
+        (account.authenticated === true ? "identity not exposed by CLI" : account.status);
       console.log(
         `${icon} ${agentColor(account.agent, account.agent.padEnd(6))} ${ui.bold(identity)}`,
       );
@@ -871,14 +886,22 @@ async function main() {
   }
 
   if (raw[0] === "doctor") {
+    const support = auditProviderSupport(config);
     console.log(divider("Doctor"));
     console.log(`${ui.gray("Config ")} ${path ? ui.cyan(path) : ui.yellow("built-in defaults")}`);
     console.log(`${ui.gray("History")} ${ui.cyan(historyPath(config.history))}`);
-    for (const agent of ["claude", "codex", "gemini", "copilot"] as const) {
+    console.log(
+      `${support.ready ? statusIcon("ok") : statusIcon("error")} ${ui.gray(`Provider integration contract v${support.contractVersion}`)} ${support.ready ? ui.cyan("ready") : ui.red("incomplete")}`,
+    );
+    for (const agent of AGENTS) {
+      const integration = support.providers.find((provider) => provider.agent === agent)!;
       const command = config[agent].command;
       const exists = commandExists(command);
       console.log(
         `${exists ? statusIcon("ok") : statusIcon("error")} ${agentColor(agent, agent.padEnd(6))} ${ui.cyan(command)} ${exists ? ui.gray(`→ ${commandVersion(command)}`) : ui.red("→ not found in PATH")}`,
+      );
+      console.log(
+        `         ${ui.gray("integration")} ${integration.ready ? ui.cyan("ready") : ui.red("incomplete")}`,
       );
       if (!exists) continue;
       const catalog = await discoverCatalog(agent, config, { refresh: true, online: true });
@@ -922,7 +945,7 @@ async function main() {
     console.log(
       `${ui.bold("Output")}     ${ui.cyan(report.totals.outputTokens.toLocaleString())} ${ui.gray("tokens (included above)")}`,
     );
-    for (const agent of ["claude", "codex", "gemini", "copilot"] as const) {
+    for (const agent of AGENTS) {
       console.log(
         `${agentColor(agent, agent.padEnd(6))} ${ui.gray("default model")} ${report.defaults[agent] ? ui.cyan(report.defaults[agent]!) : ui.yellow("not detected")}`,
       );

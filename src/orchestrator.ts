@@ -1,12 +1,12 @@
 import { inspectAccount } from "./account.js";
+import { AGENTS, effectiveEffort, providerDefinition } from "./providers.js";
 import { appendHistory, newHistoryId, newRunId, updateHistoryRecord } from "./history.js";
 import { routeTask } from "./router.js";
 import {
   addTokenUsage,
+  classifyProviderFailure,
   commandExists,
   isPermissionApproval,
-  isProviderAuthError,
-  isProviderUnavailableError,
   runAgent,
 } from "./runner.js";
 import type {
@@ -16,6 +16,7 @@ import type {
   PhaseExecution,
   PhaseKind,
   PhasePlan,
+  ProviderFailure,
   RouteResult,
   RouterConfig,
   SessionState,
@@ -168,10 +169,12 @@ export function applyPhasePreference(
     route.modelTier = p.preferredTier;
   const profile = config[route.agent].models[route.modelTier];
   if (!route.userRequestedModel) route.model = profile.model;
-  route.effort =
+  route.effort = effectiveEffort(
+    route.agent,
     route.userRequestedTier || route.userRequestedModel
       ? (profile.effort ?? route.effort)
-      : (p.preferredEffort ?? profile.effort ?? route.effort);
+      : (p.preferredEffort ?? profile.effort ?? route.effort),
+  );
   route.modelReasons.push(`phase ${p.kind} → ${route.agent}/${route.modelTier}`);
   return route;
 }
@@ -209,8 +212,9 @@ export function applyRouteOverrides(
   const profile = config[route.agent].models[route.modelTier];
   if (overrides.agent || overrides.tier) route.model = profile.model;
   if (overrides.model) route.model = overrides.model;
-  if (overrides.agent || overrides.tier) route.effort = profile.effort ?? route.effort;
-  if (overrides.effort) route.effort = overrides.effort;
+  if (overrides.agent || overrides.tier)
+    route.effort = effectiveEffort(route.agent, profile.effort ?? route.effort);
+  if (overrides.effort) route.effort = effectiveEffort(route.agent, overrides.effort);
   if (overrides.agent || overrides.tier || overrides.model)
     route.modelReasons.push(`explicit flags → ${route.agent}/${route.model} (${route.modelTier})`);
   return route;
@@ -223,15 +227,43 @@ export function unavailableProviderError(route: RouteResult, config: RouterConfi
 }
 
 /** Reason a provider dropped out of a run, used for logs and route explanations. */
-export type ProviderFailure = "usage limit" | "authentication";
-
-export function providerFailureReason(text: string, exitCode?: number): ProviderFailure {
-  return isProviderAuthError(text, exitCode) ? "authentication" : "usage limit";
+export function providerFailureReason(
+  agent: Agent,
+  text: string,
+  exitCode?: number,
+): ProviderFailure | undefined {
+  return classifyProviderFailure(agent, text, exitCode);
 }
 
 /** Cheap per-phase check: installed, and not already ruled out earlier in this run. */
 function providerAvailable(agent: Agent, config: RouterConfig, ruledOut: Set<Agent>): boolean {
   return !ruledOut.has(agent) && commandExists(config[agent].command);
+}
+
+/** Rank alternatives by evidence for this task, then by the registry's stable preference. */
+function fallbackCandidates(route: RouteResult): Agent[] {
+  return AGENTS.filter((agent) => agent !== route.agent).sort((a, b) => {
+    const scoreDifference = (route.agentScores?.[b] ?? 0) - (route.agentScores?.[a] ?? 0);
+    if (scoreDifference !== 0) return scoreDifference;
+    return providerDefinition(a).fallbackPriority - providerDefinition(b).fallbackPriority;
+  });
+}
+
+function availableFallback(
+  route: RouteResult,
+  config: RouterConfig,
+  ruledOut: Set<Agent>,
+  verifyAccount: boolean,
+): Agent | undefined {
+  for (const candidate of fallbackCandidates(route)) {
+    if (!providerAvailable(candidate, config, ruledOut)) continue;
+    if (verifyAccount && inspectAccount(candidate, config)?.authenticated === false) {
+      ruledOut.add(candidate);
+      continue;
+    }
+    return candidate;
+  }
+  return undefined;
 }
 
 export function fallbackIfMissing(
@@ -241,15 +273,14 @@ export function fallbackIfMissing(
 ): RouteResult {
   if (providerAvailable(route.agent, config, ruledOut)) return route;
   if (route.agentPinned) throw unavailableProviderError(route, config);
-  const fallback: Agent = route.agent === "claude" ? "codex" : "claude";
-  if (!providerAvailable(fallback, config, ruledOut))
-    throw new Error("Neither Claude Code nor Codex CLI is available in PATH");
+  const fallback = availableFallback(route, config, ruledOut, false);
+  if (!fallback) throw new Error("No registered provider CLI is available in PATH");
   const p = config[fallback].models[route.modelTier];
   return {
     ...route,
     agent: fallback,
     model: p.model,
-    effort: p.effort ?? route.effort,
+    effort: effectiveEffort(fallback, p.effort ?? route.effort),
     modelReasons: [...route.modelReasons, `provider missing → fallback ${fallback}`],
   };
 }
@@ -267,18 +298,14 @@ export function fallbackProvider(
   ruledOut: Set<Agent> = new Set(),
 ): RouteResult | undefined {
   if (route.agentPinned) return undefined;
-  const fallback: Agent = route.agent === "claude" ? "codex" : "claude";
-  if (!providerAvailable(fallback, config, ruledOut)) return undefined;
-  if (inspectAccount(fallback, config)?.authenticated === false) {
-    ruledOut.add(fallback);
-    return undefined;
-  }
+  const fallback = availableFallback(route, config, ruledOut, true);
+  if (!fallback) return undefined;
   const profile = config[fallback].models[route.modelTier];
   return {
     ...route,
     agent: fallback,
     model: profile.model,
-    effort: profile.effort ?? route.effort,
+    effort: effectiveEffort(fallback, profile.effort ?? route.effort),
     modelReasons: [...route.modelReasons, `provider ${failure} → fallback ${fallback}`],
   };
 }
@@ -376,47 +403,42 @@ export async function orchestrate(
       logger,
       logMeta,
     });
+    let usage = result.usage;
     // A question means the provider is asking for input, not reporting that it
     // cannot serve the run, so it must not trigger a provider switch.
-    if (!result.question && isProviderUnavailableError(result.output, result.exitCode)) {
-      const failure = providerFailureReason(result.output, result.exitCode);
-      // Never spend another phase on a provider that cannot serve this run —
-      // unless the user pinned it, in which case later phases keep using it.
-      if (!route.agentPinned) ruledOut.add(route.agent);
-      const fallback = fallbackProvider(route, config, failure, ruledOut);
-      if (fallback) {
-        const message = `${route.agent} ${failure} failure detected → falling back to ${fallback.agent}/${fallback.model}`;
-        route = fallback;
-        Object.assign(logMeta, { agent: route.agent, model: route.model, effort: route.effort });
-        logger.providerSwitch(logMeta, message);
-        result = await runAgent(route, effectivePrompt, config, {
-          headless: true,
-          capture: true,
-          logger,
-          logMeta,
-        });
-        if (!result.question && isProviderUnavailableError(result.output, result.exitCode)) {
-          const fallbackFailure = providerFailureReason(result.output, result.exitCode);
-          ruledOut.add(route.agent);
-          providersExhausted = true;
-          result = { ...result, exitCode: result.exitCode || 1 };
-          logger.status(
-            `${route.agent} ${fallbackFailure} failure detected → no provider remains available`,
-          );
-        }
-      } else if (route.agentPinned) {
+    while (!result.question) {
+      const failure = providerFailureReason(route.agent, result.output, result.exitCode);
+      if (!failure) break;
+      if (route.agentPinned) {
         logger.status(
           `${route.agent} ${failure} failure detected → keeping the explicitly selected provider (no fallback)`,
         );
-      } else {
+        break;
+      }
+      // Continue through every eligible provider. A failed fallback is ruled
+      // out exactly like the initial provider instead of ending the run early.
+      ruledOut.add(route.agent);
+      const fallback = fallbackProvider(route, config, failure, ruledOut);
+      if (!fallback) {
         providersExhausted = true;
         result = { ...result, exitCode: result.exitCode || 1 };
         logger.status(
           `${route.agent} ${failure} failure detected → no other provider is available to take over`,
         );
+        break;
       }
+      const message = `${route.agent} ${failure} failure detected → falling back to ${fallback.agent}/${fallback.model}`;
+      route = fallback;
+      Object.assign(logMeta, { agent: route.agent, model: route.model, effort: route.effort });
+      logger.providerSwitch(logMeta, message);
+      result = await runAgent(route, effectivePrompt, config, {
+        headless: true,
+        capture: true,
+        logger,
+        logMeta,
+      });
+      usage = addTokenUsage(usage, result.usage);
     }
-    let usage = result.usage;
     let clarificationCount = 0;
     while (result.question && options.askUser && clarificationCount < 4) {
       clarificationCount++;
@@ -479,6 +501,7 @@ export async function orchestrate(
       model: route.model,
       effort: route.effort,
       complexity: route.complexity,
+      routingPolicyVersion: route.routingPolicyVersion,
       exitCode: result.exitCode,
       durationMs: execution.durationMs,
       outputExcerpt: tail(result.output, config.orchestration.outputTailChars),

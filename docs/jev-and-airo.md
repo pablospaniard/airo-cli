@@ -1,316 +1,191 @@
-# Jev and AIRO: concepts, differences, and integration options
+# Jev and AIRO
 
-This document compares AIRO with TypeSafe AI's Jev model and records the initial findings for a possible integration.
+## Decision status
 
-## Scope
+Jev is not planned as a required production routing dependency or as a replacement for AIRO's router. The planned direction has two bounded uses:
 
-This comparison is about **Jev itself**: TypeSafe AI's System One decision model and API. Third-party routing projects are outside its scope and are not evaluated.
+1. An unpublished development evaluator that supplies semantic labels and decision feedback for improving AIRO's shipped routing policy. This is implemented on the development branch for reviewed fixtures only.
+2. A future optional production feedback integration that uses the user's API key, runs after a task, stores feedback locally, and may improve later automatic decisions.
 
-The findings are based on TypeSafe's public documentation as reviewed on September 27, 2026. Jev is an external, evolving service, so API behavior and model characteristics must be verified again before implementation.
+The development evaluator is not part of the published runtime and does not run in CI against the external service. Optional production feedback remains unimplemented. The complete provider, learning, sync, and research roadmap is recorded in [Routing platform roadmap](routing-platform-roadmap.md).
+
+The findings and development CLI interface here are based on public documentation reviewed on September 27, 2026. Jev is an external, evolving service, so its API, model versions, data practices, and limitations must be verified again before future integration changes or production use.
 
 Primary references:
 
-- [TypeSafe AI documentation](https://docs.typesafe.ai/llms.txt)
+- [TypeSafe documentation index](https://docs.typesafe.ai/llms.txt)
 - [Introduction to Jev](https://docs.typesafe.ai/introduction)
-- [System One concepts](https://docs.typesafe.ai/concepts/system-one)
 - [Question primitives](https://docs.typesafe.ai/primitives)
-- [Choice questions](https://docs.typesafe.ai/primitives/choice)
 - [Confidence](https://docs.typesafe.ai/confidence)
 - [API reference](https://docs.typesafe.ai/api)
+- [Models](https://docs.typesafe.ai/models)
 - [Known Jev 1.13 limitations](https://docs.typesafe.ai/model-jaggedness/jev-1.13)
+- [`@y0usaf/typesafe-cli`](https://github.com/y0usaf/typesafe-cli), the separately installed development CLI
 
-## Executive summary
+## Complementary responsibilities
 
 Jev and AIRO operate at different layers:
 
-- **Jev is a decision model.** It evaluates structured state and answers constrained questions with typed results, probabilities, and confidence.
-- **AIRO is a local coding-agent router and orchestrator.** It selects a provider, model tier, and effort; launches the provider CLI; coordinates phases; validates outcomes; handles recovery; and learns from local history.
+- Jev evaluates structured state and answers bounded questions with typed results, probabilities, and confidence.
+- AIRO selects providers, models, tiers, and effort; launches provider CLIs; coordinates phases; handles permissions and fallback; evaluates outcomes; and learns from local evidence.
 
-They are therefore complementary rather than direct substitutes. A possible integration would use Jev as a semantic decision input inside AIRO's automatic routing path. AIRO would retain control of explicit overrides, policy, provider availability, execution, permissions, fallback, orchestration, logging, and local outcome learning.
-
-The recommended investigation is a feature-flagged advisory integration evaluated by offline replay before Jev is allowed to influence live routes.
-
-## What Jev is
-
-TypeSafe describes Jev as its first public System One model: software sends state and typed questions, and receives structured answers that code can consume directly. It is intended for bounded decisions rather than open-ended text generation. Choice and Score return probability distributions and a separate confidence value; Noul returns a yes/no probability.
-
-The public API exposes three main question types:
-
-| Primitive | Result | Potential routing use |
-| --- | --- | --- |
-| `Choice` | One selection from a declared set, plus probabilities and confidence | Select a provider/tier route from eligible candidates |
-| `Score` | One position on an ordered scale, plus probabilities and confidence | Estimate task complexity or risk |
-| `Noul` | Probability for a yes/no question | Decide whether escalation, review, or a deep model is warranted |
-
-Jev supplies a decision signal; application code remains responsible for determining what actions are allowed, what confidence is sufficient, and what happens on errors or uncertainty.
-
-## What AIRO is
-
-AIRO accepts a software-development task and controls its execution through supported provider CLIs. Its automatic routing currently combines:
-
-- Explicit provider, model, tier, and effort requests
-- User-authored regular-expression rules
-- Built-in provider keyword signals
-- A deterministic complexity score
-- Routing policy and default-provider tie-breaking
-- Locally stored evidence from similar previous work
-- Phase-specific preferences during adaptive orchestration
-- Provider availability and fallback rules
-
-After choosing a route, AIRO does substantially more than classification. It invokes the provider CLI, preserves session context, coordinates implementation phases, handles clarification and permission flows, records usage and outcomes, evaluates verification evidence, and can recover from provider failures.
-
-The current implementation is documented in [Routing rules and learning](routing-and-learning.md) and defined primarily in [`src/router.ts`](../src/router.ts), [`src/history.ts`](../src/history.ts), and [`src/orchestrator.ts`](../src/orchestrator.ts).
-
-## Conceptual differences
+Jev can provide a semantic opinion about a decision. AIRO remains responsible for policy, execution, safety, availability, user intent, and learning.
 
 | Dimension | Jev | AIRO |
 | --- | --- | --- |
-| Kind of system | Trained decision model exposed through an API | Local routing and execution application |
-| Primary responsibility | Answer bounded semantic questions | Route and complete coding work |
-| Input | Structured state and typed questions | Natural-language task, configuration, phase, availability, and local history |
-| Output | Typed decisions, probabilities, and confidence | Provider, model, tier, effort, reasons, and an executable workflow |
-| Current decision method | Learned model behavior | Regex signals, deterministic scoring, rules, and historical aggregation |
-| Execution capability | None by itself | Runs supported coding-agent CLIs |
-| Uncertainty | Per-answer probability and confidence | Heuristic scores and confidence in the amount of historical evidence |
-| Adaptation | Changes through TypeSafe model versions | Changes continuously from repository-local outcomes and feedback |
-| Workflow scope | Generic classification and decision tasks | Software analysis, implementation, testing, review, and recovery |
-| Data boundary | Selected state is sent to the configured Jev endpoint | Routing features and history stay local; the selected coding provider receives the execution prompt |
-| Failure policy | Must be designed by the caller | Explicit pinning, fallback, retry, recovery, and permission behavior are built into AIRO |
+| Primary role | Structured decision model | Local coding-agent router and orchestrator |
+| Input | Selected state and typed questions | Task, configuration, availability, phase, and local history |
+| Output | Choice, Score, or Noul values | Executable provider/model route and workflow |
+| Uncertainty | Probabilities and confidence | Heuristic evidence and local-learning confidence |
+| Execution | None | Provider CLI execution, fallback, recovery, and verification |
+| Adaptation | External model releases | Shipped policy plus repository-local outcomes and feedback |
+| Data boundary | Submitted state is sent to TypeSafe | Core routing and learning remain local |
 
-### Scores and confidence are not interchangeable
+AIRO's additive provider scores are not probabilities. Its `learningConfidence` measures the effective amount of similar evidence, not the probability that a route will succeed. Jev probabilities must not be numerically added to those values without a separately evaluated calibration model.
 
-AIRO's provider scores are additive heuristic points. A Claude score of `8` and a Codex score of `4` do not mean probabilities of 67% and 33%.
+## Development evaluator
 
-AIRO's `learningConfidence` measures the effective amount of similar historical evidence. It is not a calibrated probability that a route will succeed.
+The first Jev milestone should be an unpublished workspace or tool outside the production runtime. It may read synthetic tasks and explicitly approved, sanitized routing journeys.
 
-Jev's Choice and Score primitives return probabilities and a separate confidence value, while Noul's probability is itself the decision signal. Those values would need explicit thresholds and evaluation on AIRO's own task distribution before they could safely control routing.
+Useful questions include:
 
-### Learning is different
+- What kind of work does the task require?
+- How risky, ambiguous, or cross-cutting is it?
+- Is the selected provider/tier semantically appropriate?
+- Does the route appear excessive, adequate, or insufficient?
+- Is a later user override consistent with an initial routing mismatch?
+- Does a failure look more like route mismatch, execution failure, or insufficient evidence?
 
-Jev is a trained external model. AIRO does not train a model. AIRO writes phase outcomes and feedback to local JSONL files, computes similarity against previous tasks, and derives temporary route boosts at decision time.
+Each label must retain:
 
-An integration should preserve that distinction:
+- The versioned Jev model identifier
+- Question-set version
+- Structured answer
+- Full probability distribution when available
+- Confidence
+- Dataset and record identifier
+- Evaluation timestamp
 
-- Jev can provide a semantic prior about the current task.
-- AIRO history can provide repository-specific evidence about which configured route actually worked.
-- Deterministic AIRO policy must resolve conflicts and control execution.
+Jev feedback is supporting evidence. Actual verified completion, regressions, retries, explicit feedback, and user corrections are stronger signals. Jev cannot establish the counterfactual claim that an unexecuted provider would have succeeded.
 
-## Potential integration boundary
+The evaluator may help calibrate a generic routing-policy artifact, but it must never edit production weights automatically. Proposed policy changes require a held-out comparison, regression review, and normal source review.
 
-The safest architectural boundary is to treat Jev as an optional classifier behind a small interface, not as the owner of the router:
+Tests must use recorded fixtures or a fake transport. CI must not require a TypeSafe credential or spend external quota.
+
+The development command uses the separately installed `jev` CLI without adding it to AIRO's runtime dependencies:
+
+```bash
+pnpm evaluate:jev -- --model jev-EXACT-VERSION --output .airo-dev/jev-routing-report.json
+```
+
+The exact model is mandatory; aliases such as `jev-latest` are rejected. The CLI resolves `TYPESAFE_API_KEY` itself, so AIRO never accepts, prints, or stores the key. For every reviewed fixture, the evaluator sends only the fixture task and AIRO's provider, tier, complexity, and policy version. It asks versioned Choice and Noul questions for category, risk, provider, tier, and route appropriateness. Reports retain the full typed answers, distributions, confidence values, returned model, CLI version, usage, question-set version, and fixture identifier, but omit task text. Reports never update routing weights. CI exercises the same parser and failure boundary through a fake Jev executable.
+
+## Optional production feedback
+
+The future production integration is post-run feedback, not live route selection:
 
 ```text
-Task + phase + eligible routes
-              |
-              v
-     local feature extraction
-              |
-              +--------------------+
-              |                    |
-              v                    v
-      existing heuristics    optional Jev decision
-              |                    |
-              +---------+----------+
-                        v
-              deterministic policy
-              - explicit overrides
-              - custom rules
-              - confidence threshold
-              - availability
-              - local history
-              - fallback policy
-                        |
-                        v
-              AIRO execution engine
+AIRO selects locally
+        -> provider executes
+        -> AIRO records the outcome
+        -> optional Jev evaluation
+        -> feedback is stored locally
+        -> future automatic decisions may receive a bounded adjustment
 ```
 
-This keeps the effect boundary in AIRO: Jev may recommend a route, but it cannot launch a provider, bypass permissions, override a pinned choice, or silently change fallback behavior.
+This keeps the current run independent of network latency, Jev availability, authentication, rate limits, and model changes.
 
-## Candidate integration modes
+Live advisory routing was rejected for the initial production integration because it would put an external request, sensitive task text, added latency, variable cost, and a new failure mode directly in the execution path. Post-run evaluation can still improve later decisions while preserving deterministic local routing for the task already underway. Full replacement was rejected because Jev supplies a semantic signal, not provider eligibility, user-intent precedence, permissions, fallback, execution, or outcome verification.
 
-### 1. Advisory or shadow mode — recommended first step
+### Consent and API key
 
-AIRO calls Jev but does not change the selected route. It records:
+The feature must be disabled by default and enabled through a dedicated consent flow. Before the first request, AIRO must state that selected task information will leave the machine and be processed by TypeSafe.
 
-- Eligible candidates presented to Jev
-- Jev's selected candidate
-- Probabilities and confidence
-- The existing AIRO route
-- Actual completion, verification, duration, and token outcome
+The user supplies `TYPESAFE_API_KEY` or a future operating-system credential-store entry. AIRO must not write the key to project configuration, history, logs, synchronized settings, or research records.
 
-This supports offline comparison without introducing execution risk. It does introduce API cost and sends the selected classification state outside the machine, so it must still be explicitly enabled.
+Consent for local Jev feedback is distinct from cloud-sync consent and research consent. Enabling one never enables the others.
 
-### 2. Confidence-gated semantic input
+### Bounded payload
 
-Jev may influence automatic routing only when:
+The first production payload may contain:
 
-- No provider, model, or tier was explicitly selected
-- No custom rule forced the relevant route dimension
-- The Jev request succeeded and passed schema validation
-- Its confidence exceeds a configured threshold
-- The selected route is locally configured and currently eligible
-- The decision passes deterministic policy checks
+- Task text
+- Phase and semantic task features
+- Eligible and selected route identifiers
+- Completion, verification, retry, recovery, duration, and token buckets
+- Explicit user rating or route correction when the user chose to record one
 
-Below the threshold, AIRO should use its existing routing logic. There should be no retry loop that repeatedly asks Jev until a preferred answer appears.
+It excludes by default:
 
-### 3. Primary automatic classifier
+- Source files and diffs
+- Provider output excerpts
+- Repository names, remotes, and absolute paths
+- Feedback notes
+- Credentials and environment variables
+- Session transcripts
 
-Jev chooses among all eligible automatic routes, with the current heuristic router used only as fallback. This is the largest behavioral change and should not be attempted until shadow-mode results demonstrate better end-to-end outcomes on representative AIRO tasks.
+Task text can itself contain sensitive information. The consent prompt must show the categories sent, and AIRO should provide a per-run opt-out.
 
-### 4. Full replacement — not recommended
+### Local storage and influence
 
-Replacing AIRO's routing and orchestration logic with Jev would mix semantic classification with policy and execution. It would also discard useful deterministic guarantees, local learning, phase behavior, and provider failure handling. Jev is better treated as one input to those mechanisms.
+Jev feedback should be stored separately from execution history and user feedback. A record includes the source history ID, model and question-set versions, answers, probabilities, confidence, and whether it was accepted into learning.
 
-## Proposed decision contract
+Jev feedback may influence only future unpinned automatic routes. Apply a minimum confidence, minimum similar sample count, bounded adjustment, recency decay, and complete reset. Explicit current choices, custom rules, explicit historical feedback, and verified local outcomes take precedence.
 
-For the first experiment, use one `Choice` over complete eligible route candidates rather than independent provider and tier choices. A joint choice prevents invalid combinations and lets each candidate carry its own description.
+Suggested controls are:
 
-Conceptual request:
-
-```json
-{
-  "state": {
-    "task": "Investigate an intermittent authentication race condition",
-    "phase": "analyze",
-    "risk": "high",
-    "configured_policy": "balanced"
-  },
-  "questions": {
-    "route": {
-      "type": "choice",
-      "instructions": "Choose the least expensive eligible route likely to complete this phase correctly.",
-      "criteria": {
-        "claude/balanced": "Architecture and investigation with moderate reasoning",
-        "claude/deep": "High-risk or uncertain investigation requiring deep reasoning",
-        "codex/balanced": "Scoped coding or validation with moderate reasoning",
-        "codex/deep": "Complex implementation requiring deep reasoning"
-      }
-    }
-  }
-}
+```text
+airo feedback jev status
+airo feedback jev enable
+airo feedback jev disable
+airo feedback jev inspect
+airo feedback jev reset
+airo --no-jev "task"
 ```
 
-The production candidate identifiers should be stable internal route IDs rather than display names. Model names and provider availability should remain AIRO configuration concerns.
+Command names are illustrative until the milestone is designed and implemented.
 
-The state should be deliberately bounded. The first version should not send source files, diffs, output excerpts, feedback notes, session transcripts, credentials, or arbitrary environment data. Task text alone may still be sensitive, so the integration requires clear disclosure and opt-in configuration.
+## Cloud sync interaction
 
-## Proposed precedence
+If the user later enables encrypted multi-device sync, local Jev feedback may be synchronized as another client-encrypted event. The TypeSafe API key never syncs. A new machine decrypts the feedback locally and rebuilds learning from the merged evidence.
 
-If Jev is allowed to influence live routing, the precedence should remain:
+End-to-end encrypted sync data is not available for global AIRO research. Research submission requires a separate granular consent and a separately constructed server-readable payload. See the research milestone in [Routing platform roadmap](routing-platform-roadmap.md).
 
-1. Explicit CLI overrides
-2. Provider, model, or tier explicitly requested in the current task
-3. Matching custom configuration rule
-4. Hard eligibility and safety constraints
-5. Phase constraints and preferences
-6. Confidence-gated Jev recommendation combined with local historical evidence
-7. Existing heuristic route as fallback
-8. Configured default provider for unresolved ties
+## Risks and required controls
 
-Jev must never override a user-pinned provider or select an unavailable route.
-
-## Configuration sketch
-
-No configuration shape is final, but an experiment could use:
-
-```json
-{
-  "routingDecision": {
-    "provider": "local",
-    "jev": {
-      "enabled": false,
-      "mode": "shadow",
-      "model": "pinned-model-version",
-      "minimumConfidence": 0.8,
-      "timeoutMs": 1500,
-      "sendTaskText": true,
-      "storeDecisionState": false
-    }
-  }
-}
-```
-
-Required properties:
-
-- Disabled by default
-- Explicit `shadow` and `active` modes
-- A pinned model version during evaluation
-- A strict timeout with immediate local fallback
-- No secret in project configuration
-- Redacted logs by default
-- Clear reporting when Jev affected a route
-
-## Risks and controls
-
-| Risk | Required control |
+| Risk | Control |
 | --- | --- |
-| Sensitive task text leaves the machine | Explicit opt-in, bounded state, documentation, and a local-only default |
-| External outage or latency blocks work | Short timeout, no mandatory dependency, immediate local fallback |
-| Model-version behavior changes | Pin the evaluated model version and require an intentional upgrade |
-| Confidence is assumed to equal routing quality | Calibrate thresholds against AIRO outcomes rather than accepting generic confidence at face value |
-| Jev selects an unavailable or forbidden route | Construct candidates from eligible local configuration and validate the response |
-| Explicit user intent is lost | Preserve the existing override and pinning precedence |
-| Cost grows with every phase | Track classifier usage separately and support per-run or per-phase limits |
-| Logs expose external request state | Store minimal decision metadata; make full state logging an explicit diagnostic option |
-| Local learning and Jev disagree | Define deterministic combination rules and preserve both explanations |
-| New nondeterminism is hard to debug | Record model version, candidate set, response, threshold result, and final policy decision |
+| Sensitive task text leaves the machine | Explicit opt-in, bounded payload, preview, and per-run opt-out |
+| Jev is mistaken for ground truth | Preserve confidence and combine it only with actual outcomes and user feedback |
+| Model behavior changes | Pin development evaluations and record the exact production model response |
+| External failure disrupts work | Evaluate after execution and fail open without changing the run result |
+| Feedback oversteers local routing | Minimum samples, confidence gate, bounded boost, decay, and reset |
+| Logs expose submitted state | Never log request bodies or credentials |
+| Synced feedback exposes content | Client-side encryption before upload |
+| Local feedback is reused for research | Separate opt-in and separate payload; no consent inference |
 
-## Evaluation plan
+Jev 1.13 is documented as literal, less reliable with irrelevant state, vulnerable to adversarial content in state, and unsuitable for arithmetic. Keep state narrow, questions precise, numeric calculations in code, and responses schema-validated.
 
-### Phase 1: contract spike
+## Milestone acceptance criteria
 
-- Define a provider-neutral `RoutingDecisionEngine` interface.
-- Implement a fixture-backed Jev adapter with no live credentials required for tests.
-- Validate typed responses, timeouts, malformed answers, low confidence, and unavailable candidates.
-- Confirm that explicit choices and custom rules never invoke or yield to Jev.
+Development evaluation is ready only when:
 
-### Phase 2: offline replay
+- The evaluator is excluded from the published runtime
+- The model and question set are versioned
+- Datasets are synthetic or explicitly approved and reviewed
+- Results are measured on held-out cases
+- Policy changes require review and can be rolled back
 
-- Build a representative, privacy-reviewed dataset from synthetic tasks and optionally sanitized local history.
-- Compare the current router and Jev recommendations without executing providers.
-- Measure agreement, route stability, coverage above candidate confidence thresholds, latency, and classifier cost.
-- Review disagreements manually; agreement alone is not evidence of correctness.
+Optional production feedback is ready only when:
 
-### Phase 3: shadow execution
-
-- Run the normal AIRO route while recording what Jev would have selected.
-- Join shadow decisions with AIRO's deterministic completion and verification outcomes.
-- Do not treat a successful provider exit as proof that the alternative Jev route would also have succeeded.
-
-### Phase 4: controlled active experiment
-
-- Allow high-confidence Jev decisions for a narrow category of unpinned tasks.
-- Keep a stable baseline cohort on the existing router.
-- Compare task satisfaction, verified completion, retries, regressions, latency, tokens, classifier cost, and fallback rate.
-- Provide a kill switch and revert to local routing on any systemic regression.
-
-## Suggested success criteria
-
-Before making Jev an active routing input, the investigation should establish:
-
-- No violation of explicit model/provider/tier choices
-- No selection of unavailable or policy-ineligible routes
-- Measurably improved verified task outcomes, or equivalent outcomes at lower total cost or latency
-- Acceptable decision latency at the selected confidence threshold
-- Reliable local fallback during timeouts, authentication failures, malformed responses, and rate limits
-- Clear route explanations that distinguish Jev advice from AIRO policy and history
-- A reviewed privacy model for task text and decision logs
-- Offline tests that do not require a Jev credential or spend external quota
-
-## Open questions
-
-- Should Jev choose a complete provider/tier route or only classify task category, risk, and complexity?
-- Should local historical utility re-rank Jev probabilities or act as a separate policy gate?
-- Which task text, session context, or phase context is necessary for good decisions?
-- What confidence threshold produces useful coverage on AIRO's actual workload?
-- Should Jev be called once per job or independently for every adaptive phase?
-- How should classifier token usage and cost appear in `airo usage`?
-- How long should decision metadata be retained, and should it share AIRO's history path?
-- Is a hosted-only classifier acceptable for AIRO's local-first positioning?
-- What user-facing consent and redaction controls are required?
+- Core routing works identically when the feature is disabled or unavailable
+- Consent and data categories are explicit
+- No credential or excluded content reaches logs or storage
+- Feedback is local, inspectable, bounded, and resettable
+- Explicit routes cannot be changed
+- Timeout, authentication, rate-limit, and malformed-response paths are tested
+- Cloud sync and research remain separately consented
 
 ## Recommendation
 
-Proceed with a bounded investigation, not an immediate routing replacement. Start with an internal decision-engine interface, fixture-driven tests, and shadow mode. Preserve AIRO's deterministic policy and execution boundaries throughout the experiment.
-
-The integration should advance to active routing only if repository-specific evidence shows that Jev improves verified outcomes or efficiency enough to justify the added network dependency, privacy considerations, latency, and cost.
+Build the provider-neutral router, portable history, and development evaluation harness before adding production Jev feedback. Introduce the production option only when evaluation demonstrates useful routing improvements and the consent, privacy, failure, and reset behavior is complete.

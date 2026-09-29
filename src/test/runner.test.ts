@@ -8,6 +8,7 @@ import { RunLogger } from "../logging.js";
 import { routeTask } from "../router.js";
 import {
   addTokenUsage,
+  classifyProviderFailure,
   claudeProgress,
   codexProgress,
   commandExists,
@@ -42,6 +43,15 @@ test("detects provider sign-in failures that need another provider", () => {
   assert.equal(isProviderAuthError(`curl returned 401 Unauthorized for the staging API`, 0), false);
   assert.equal(isProviderAuthError("Review completed.", 1), false);
   assert.equal(isProviderUnavailableError("You've hit your session limit.", 1), true);
+});
+
+test("classifies fallback failures through every provider adapter", () => {
+  for (const agent of ["claude", "codex", "gemini", "copilot"] as const) {
+    assert.equal(classifyProviderFailure(agent, "rate_limit_error", 1), "usage limit");
+    assert.equal(classifyProviderFailure(agent, "Authentication failed", 1), "authentication");
+    assert.equal(classifyProviderFailure(agent, "Task failed for another reason", 1), undefined);
+    assert.equal(classifyProviderFailure(agent, "401 Unauthorized", 0), undefined);
+  }
 });
 
 test("extracts explicit and permission-blocked clarification questions", () => {

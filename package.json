@@ -1,12 +1,14 @@
 {
   "name": "airo-ai-router",
   "version": "0.7.1",
-  "description": "Adaptive Intelligence Routing & Orchestration for Claude Code and Codex CLI",
+  "description": "Adaptive Intelligence Routing & Orchestration for coding-agent CLIs",
   "keywords": [
     "ai",
     "claude-code",
     "cli",
     "codex",
+    "copilot",
+    "gemini",
     "orchestration",
     "router"
   ],
@@ -29,7 +31,8 @@
     "README.md",
     "dist/*.js",
     "docs/jev-and-airo.md",
-    "docs/routing-and-learning.md"
+    "docs/routing-and-learning.md",
+    "docs/routing-platform-roadmap.md"
   ],
   "type": "module",
   "publishConfig": {
@@ -38,11 +41,13 @@
   "scripts": {
     "build": "tsc && chmod +x dist/cli.js",
     "dev": "tsx src/cli.ts",
-    "format": "oxfmt src vscode-extension/src package.json vscode-extension/package.json tsconfig.json vscode-extension/tsconfig.json",
-    "format:check": "oxfmt --check src vscode-extension/src package.json vscode-extension/package.json tsconfig.json vscode-extension/tsconfig.json",
-    "lint": "oxlint --deny-warnings --tsconfig tsconfig.json src vscode-extension/src",
+    "format": "oxfmt src scripts vscode-extension/src package.json vscode-extension/package.json tsconfig.json vscode-extension/tsconfig.json",
+    "format:check": "oxfmt --check src scripts vscode-extension/src package.json vscode-extension/package.json tsconfig.json vscode-extension/tsconfig.json",
+    "lint": "oxlint --deny-warnings --tsconfig tsconfig.json src scripts vscode-extension/src",
     "typecheck": "tsc --noEmit && tsc -p vscode-extension/tsconfig.json --noEmit",
     "test": "pnpm run test:coverage",
+    "evaluate:routing-policy": "pnpm run build && node --test dist/test/routing-policy.evaluation.test.js",
+    "evaluate:jev": "pnpm run build && node scripts/evaluate-routing-with-jev.mjs",
     "test:coverage": "pnpm run build && node --test --experimental-test-coverage --test-coverage-exclude=dist/test/** --test-coverage-lines=95 --test-coverage-functions=95 dist/test/*.test.js",
     "start": "node dist/cli.js",
     "validate": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm test",
