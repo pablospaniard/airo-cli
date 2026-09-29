@@ -821,7 +821,7 @@ async function chatLoop(config: any, path?: string) {
         else if (action.action === "explain") printLearningExplanation(config, action.targetId!);
         else if (!action.confirmed)
           console.log(
-            `${statusIcon("info")} ${ui.yellow("Use /learning reset --yes to remove learned feedback.")}`,
+            `${statusIcon("info")} ${ui.yellow("Use /learning reset --yes to remove ordinary learned feedback; Jev evidence has its own reset command.")}`,
           );
         else
           console.log(
@@ -1314,7 +1314,7 @@ async function main() {
     else if (action === "reset") {
       if (!raw.includes("--yes"))
         throw new Error(
-          "Learning reset removes all feedback. Re-run with: airo learning reset --yes",
+          "Learning reset removes ordinary feedback-derived learning; Jev evidence has its own reset command. Re-run with: airo learning reset --yes",
         );
       console.log(
         `${statusIcon("ok")} ${ui.gray("removed")} ${ui.bold(String(resetLearning(config.history)))} ${ui.gray("feedback record(s); routing history was preserved")}`,

@@ -2,7 +2,15 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { extractTaskFeatures } from "./evaluation.js";
-import { historyPath, newHistoryId, readFeedback, readHistory } from "./history.js";
+import { withFileLock } from "./file-lock.js";
+import {
+  historyPath,
+  learningRepositoryId,
+  newHistoryId,
+  readFeedback,
+  readHistory,
+} from "./history.js";
+import { AGENTS } from "./providers.js";
 import { resolveRepositoryIdentity } from "./repository.js";
 import type { Agent, HistoryConfig, HistoryRecord, ModelTier, TaskFeatures } from "./types.js";
 
@@ -11,6 +19,7 @@ export const JEV_QUESTION_SET_VERSION = "1.0.0";
 export const JEV_CONSENT_VERSION = 1;
 export const JEV_FEEDBACK_SCHEMA_VERSION = 1;
 export const JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
+const MODEL_TIERS = ["fast", "balanced", "deep"] as const;
 
 export const JEV_DISCLOSURE = [
   "AIRO will send task text, phase/task features, selected route identifiers, and bucketed outcomes to TypeSafe Jev after a run.",
@@ -181,7 +190,6 @@ function isNoul(value: unknown): value is NoulAnswer {
 }
 
 export function readJevFeedback(config: HistoryConfig): JevFeedbackRecord[] {
-  if (!config.enabled) return [];
   try {
     return fs
       .readFileSync(jevFeedbackPath(config), "utf8")
@@ -203,8 +211,6 @@ export function readJevFeedback(config: HistoryConfig): JevFeedbackRecord[] {
 function isJevFeedbackRecord(value: unknown): value is JevFeedbackRecord {
   if (!value || typeof value !== "object") return false;
   const record = value as Partial<JevFeedbackRecord>;
-  const agents = ["claude", "codex", "gemini", "copilot"] as const;
-  const tiers = ["fast", "balanced", "deep"] as const;
   return Boolean(
     record.schemaVersion === JEV_FEEDBACK_SCHEMA_VERSION &&
     typeof record.id === "string" &&
@@ -214,15 +220,15 @@ function isJevFeedbackRecord(value: unknown): value is JevFeedbackRecord {
     record.taskFeatures &&
     Array.isArray(record.taskFeatures.embedding) &&
     record.selected &&
-    agents.includes(record.selected.agent) &&
-    tiers.includes(record.selected.tier) &&
+    AGENTS.includes(record.selected.agent) &&
+    MODEL_TIERS.includes(record.selected.tier) &&
     record.suggested &&
-    agents.includes(record.suggested.agent) &&
-    tiers.includes(record.suggested.tier) &&
+    AGENTS.includes(record.suggested.agent) &&
+    MODEL_TIERS.includes(record.suggested.tier) &&
     typeof record.model === "string" &&
     typeof record.questionSetVersion === "string" &&
-    isChoice(record.provider, agents) &&
-    isChoice(record.tier, tiers) &&
+    isChoice(record.provider, AGENTS) &&
+    isChoice(record.tier, MODEL_TIERS) &&
     isNoul(record.decisionAppropriate) &&
     typeof record.acceptedIntoLearning === "boolean" &&
     typeof record.acceptanceReason === "string",
@@ -233,20 +239,25 @@ function appendJevFeedback(config: HistoryConfig, records: JevFeedbackRecord[]):
   if (!records.length) return;
   const file = jevFeedbackPath(config);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.appendFileSync(file, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`, {
-    mode: 0o600,
+  withFileLock(`${file}.lock`, () => {
+    fs.appendFileSync(file, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`, {
+      mode: 0o600,
+    });
+    fs.chmodSync(file, 0o600);
   });
-  fs.chmodSync(file, 0o600);
 }
 
 export function resetJevFeedback(config: HistoryConfig): number {
-  const records = readJevFeedback(config);
-  try {
-    fs.unlinkSync(jevFeedbackPath(config));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-  return records.length;
+  const file = jevFeedbackPath(config);
+  return withFileLock(`${file}.lock`, () => {
+    const records = readJevFeedback(config);
+    try {
+      fs.unlinkSync(file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    return records.length;
+  });
 }
 
 function bucket(value: number | undefined, boundaries: number[]): string | undefined {
@@ -402,11 +413,7 @@ export async function evaluateRunWithJev(
       const provider = result.answers[`provider_${index}`];
       const tier = result.answers[`tier_${index}`];
       const appropriate = result.answers[`appropriate_${index}`];
-      if (
-        !isChoice(provider, ["claude", "codex", "gemini", "copilot"] as const) ||
-        !isChoice(tier, ["fast", "balanced", "deep"] as const) ||
-        !isNoul(appropriate)
-      )
+      if (!isChoice(provider, AGENTS) || !isChoice(tier, MODEL_TIERS) || !isNoul(appropriate))
         return { status: "error", reason: "Jev returned malformed typed answers" };
       const accepted = acceptance(record, provider, tier, appropriate);
       stored.push({
@@ -415,7 +422,9 @@ export async function evaluateRunWithJev(
         timestamp: new Date().toISOString(),
         sourceHistoryId: record.id,
         runId,
-        repositoryId: record.repositoryId,
+        repositoryId:
+          record.repositoryId ??
+          resolveRepositoryIdentity(record.cwd, path.dirname(historyPath(config))).id,
         taskFeatures:
           record.taskFeatures ??
           extractTaskFeatures(record.originalTask ?? record.task, record.complexity),
@@ -454,7 +463,11 @@ function featureSimilarity(a: TaskFeatures, b: TaskFeatures): number {
   return Math.min(1, score);
 }
 
-export function jevLearningHints(task: string, config: HistoryConfig): JevLearningHint {
+export function jevLearningHints(
+  task: string,
+  config: HistoryConfig,
+  resolvedRepositoryId?: string,
+): JevLearningHint {
   const empty: JevLearningHint = {
     agentBoosts: { claude: 0, codex: 0, gemini: 0, copilot: 0 },
     tierBoosts: { fast: 0, balanced: 0, deep: 0 },
@@ -465,13 +478,35 @@ export function jevLearningHints(task: string, config: HistoryConfig): JevLearni
   if (!config.learningEnabled || !isJevEnabled(config)) return empty;
   const target = extractTaskFeatures(task);
   const repositoryId = config.repositoryScoped
-    ? resolveRepositoryIdentity(process.cwd(), path.dirname(historyPath(config))).id
+    ? (resolvedRepositoryId ?? learningRepositoryId(config))
     : undefined;
   const now = Date.now();
   const halfLifeMs = Math.max(1, config.halfLifeDays ?? 90) * 86_400_000;
+  const historyRepositoryIds = new Map<string, string>();
+  if (repositoryId) {
+    const identitiesByCwd = new Map<string, string>();
+    for (const record of readHistory(config)) {
+      let recordRepositoryId = record.repositoryId;
+      if (!recordRepositoryId) {
+        recordRepositoryId = identitiesByCwd.get(record.cwd);
+        if (!recordRepositoryId) {
+          recordRepositoryId = resolveRepositoryIdentity(
+            record.cwd,
+            path.dirname(historyPath(config)),
+          ).id;
+          identitiesByCwd.set(record.cwd, recordRepositoryId);
+        }
+      }
+      historyRepositoryIds.set(record.id, recordRepositoryId);
+    }
+  }
   const matches = readJevFeedback(config).flatMap((record) => {
     if (!record.acceptedIntoLearning) return [];
-    if (repositoryId && record.repositoryId !== repositoryId) return [];
+    if (
+      repositoryId &&
+      (record.repositoryId ?? historyRepositoryIds.get(record.sourceHistoryId)) !== repositoryId
+    )
+      return [];
     const similarity = featureSimilarity(target, record.taskFeatures);
     if (similarity < config.similarityThreshold) return [];
     const age = Math.max(0, now - Date.parse(record.timestamp));
@@ -480,6 +515,8 @@ export function jevLearningHints(task: string, config: HistoryConfig): JevLearni
     return [{ record, weight: similarity * decay * confidence }];
   });
   const samples = matches.reduce((sum, match) => sum + match.weight, 0);
+  empty.observations = matches.length;
+  empty.confidence = Math.min(1, samples / Math.max(1, config.minimumSamples ?? 2));
   if (samples < (config.minimumSamples ?? 2)) return empty;
   for (const { record, weight } of matches) {
     empty.agentBoosts[record.suggested.agent] += weight;
@@ -488,9 +525,7 @@ export function jevLearningHints(task: string, config: HistoryConfig): JevLearni
   for (const agent of Object.keys(empty.agentBoosts) as Agent[])
     empty.agentBoosts[agent] = Math.min(1.25, (empty.agentBoosts[agent] / samples) * 1.25);
   for (const tier of Object.keys(empty.tierBoosts) as ModelTier[])
-    empty.tierBoosts[tier] = Math.min(0.75, empty.tierBoosts[tier] / samples);
-  empty.observations = matches.length;
-  empty.confidence = Math.min(1, samples / Math.max(1, config.minimumSamples ?? 2));
+    empty.tierBoosts[tier] = Math.min(0.75, (empty.tierBoosts[tier] / samples) * 0.75);
   empty.notes.push(`${matches.length} similar consented Jev judgment(s) supplied a bounded hint`);
   return empty;
 }

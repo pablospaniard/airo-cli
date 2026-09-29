@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { withFileLock } from "./file-lock.js";
 
 const REPOSITORY_INDEX_VERSION = 1;
 
@@ -65,9 +66,20 @@ function readIndex(storageDir: string): RepositoryIndex {
 function writeIndex(storageDir: string, index: RepositoryIndex): void {
   fs.mkdirSync(storageDir, { recursive: true });
   const target = repositoryIndexPath(storageDir);
-  const temporary = `${target}.${process.pid}.tmp`;
+  const temporary = `${target}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
   fs.writeFileSync(temporary, `${JSON.stringify(index, null, 2)}\n`, { mode: 0o600 });
   fs.renameSync(temporary, target);
+}
+
+function updateIndex(
+  storageDir: string,
+  mutate: (index: RepositoryIndex) => RepositoryIndex,
+): RepositoryIndex {
+  return withFileLock(path.join(storageDir, "repositories.json.lock"), () => {
+    const next = mutate(readIndex(storageDir));
+    writeIndex(storageDir, next);
+    return next;
+  });
 }
 
 function projectRoot(cwd: string): string {
@@ -82,13 +94,13 @@ export function resolveRepositoryIdentity(cwd: string, storageDir: string): Repo
     return { id: `git-v1:${sha256(canonical)}`, source: "git-remote", root };
   }
 
-  const index = readIndex(storageDir);
   const key = path.resolve(root);
-  let id = index.projects[key];
+  let id = readIndex(storageDir).projects[key];
   if (!id) {
-    id = `local-v1:${crypto.randomUUID()}`;
-    index.projects[key] = id;
-    writeIndex(storageDir, index);
+    id = updateIndex(storageDir, (index) => {
+      index.projects[key] ??= `local-v1:${crypto.randomUUID()}`;
+      return index;
+    }).projects[key];
   }
   return { id, source: "local-project", root };
 }
@@ -102,7 +114,9 @@ export function linkRepositoryIdentity(cwd: string, storageDir: string, id: stri
     throw new Error(
       "Repositories with an origin remote derive their ID automatically and cannot be linked manually.",
     );
-  const index = readIndex(storageDir);
-  index.projects[path.resolve(root)] = id;
-  writeIndex(storageDir, index);
+  const key = path.resolve(root);
+  updateIndex(storageDir, (index) => {
+    index.projects[key] = id;
+    return index;
+  });
 }

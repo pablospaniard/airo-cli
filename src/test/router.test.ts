@@ -4,7 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { DEFAULT_CONFIG } from "../config.js";
+import { extractTaskFeatures } from "../evaluation.js";
 import { appendHistory } from "../history.js";
+import { enableJev, JEV_MODEL, jevFeedbackPath } from "../jev-feedback.js";
 import { ROUTING_POLICY } from "../routing-policy.js";
 import {
   applyRoutePreferences,
@@ -417,6 +419,87 @@ test("routes with learned feedback for Gemini and Copilot", () => {
         ),
       );
     }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("combines aligned history and Jev evidence when selecting a tier", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-router-combined-learning-"));
+  const task = "fix parser bug";
+  const current = config();
+  current.history.path = path.join(dir, "history.jsonl");
+  current.history.minimumSamples = 0.3;
+  current.history.repositoryScoped = false;
+  try {
+    appendHistory(current.history, {
+      id: "history-phase",
+      runId: "history-run",
+      timestamp: new Date().toISOString(),
+      cwd: process.cwd(),
+      task,
+      agent: "codex",
+      modelTier: "deep",
+      model: current.codex.models.deep.model,
+      effort: "high",
+      complexity: 1,
+      exitCode: 0,
+      durationMs: 1,
+      evaluation: {
+        taskSatisfied: true,
+        verified: true,
+        quality: 1,
+        confidence: 1,
+        signals: [],
+      },
+      outcome: {
+        completion: 1,
+        verification: 1,
+        retries: 0,
+        recoveries: 0,
+        regressions: 0,
+        durationMs: 1,
+        tokens: 1,
+        confidence: 1,
+      },
+    });
+    enableJev(current.history);
+    const features = extractTaskFeatures(task, 1);
+    const choice = <T extends string>(selected: T, options: readonly T[]) => ({
+      type: "choice" as const,
+      choice: selected,
+      probabilities: Object.fromEntries(
+        options.map((option) => [option, option === selected ? 1 : 0]),
+      ) as Record<T, number>,
+      confidence: 1,
+    });
+    const agents = ["claude", "codex", "gemini", "copilot"] as const;
+    const tiers = ["fast", "balanced", "deep"] as const;
+    const records = (["deep", "fast"] as const).map((tier, index) => ({
+      schemaVersion: 1,
+      id: `jev-${index}`,
+      timestamp: new Date().toISOString(),
+      sourceHistoryId: "history-phase",
+      runId: "history-run",
+      taskFeatures: features,
+      selected: { agent: "codex", tier: "fast" },
+      suggested: { agent: "codex", tier },
+      model: JEV_MODEL,
+      questionSetVersion: "1.0.0",
+      provider: choice("codex", agents),
+      tier: choice(tier, tiers),
+      decisionAppropriate: { type: "noul", noul: 0.1 },
+      acceptedIntoLearning: true,
+      acceptanceReason: "test evidence",
+    }));
+    fs.writeFileSync(
+      jevFeedbackPath(current.history),
+      `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+    );
+
+    const route = routeTask(task, current);
+    assert.equal(route.modelTier, "deep");
+    assert.ok(route.modelReasons.some((reason) => /local learning favored deep/.test(reason)));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
