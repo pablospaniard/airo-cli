@@ -26,7 +26,7 @@ export async function runSetup(): Promise<string> {
 
   console.log("");
   console.log(divider("Detected model routing"));
-  const catalogs = await discoverCatalogs(config, { refresh: true });
+  const catalogs = await discoverCatalogs(config, { refresh: true, online: true });
   const resolved = resolveDynamicModels(config, catalogs);
   for (const agent of AGENTS) {
     const catalog = catalogs[agent];
