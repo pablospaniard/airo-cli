@@ -383,31 +383,38 @@ async function singleRun(
     logger,
     logMeta,
   });
-  // A question means the provider wants input, not that it cannot serve the run.
-  const failure = result.question
-    ? undefined
-    : providerFailureReason(routed.agent, result.output, result.exitCode);
-  if (failure) {
-    const fallback = fallbackProvider(routed, config, failure);
-    if (fallback) {
-      const message = `${routed.agent} ${failure} failure detected → falling back to ${fallback.agent}/${fallback.model}`;
-      routed = fallback;
-      Object.assign(logMeta, { agent: routed.agent, model: routed.model, effort: routed.effort });
-      logger.providerSwitch(logMeta, message);
-      result = await runAgent(routed, effectivePrompt, config, {
-        headless: true,
-        capture: true,
-        logger,
-        logMeta,
-      });
-    } else
-      logger.status(
-        routed.agentPinned
-          ? `${routed.agent} ${failure} failure detected → keeping the explicitly selected provider (no fallback)`
-          : `${routed.agent} ${failure} failure detected → no other provider is available to take over`,
-      );
-  }
   let usage = result.usage;
+  const ruledOut = new Set<Agent>();
+  // A question means the provider wants input, not that it cannot serve the run.
+  while (!result.question) {
+    const failure = providerFailureReason(routed.agent, result.output, result.exitCode);
+    if (!failure) break;
+    if (routed.agentPinned) {
+      logger.status(
+        `${routed.agent} ${failure} failure detected → keeping the explicitly selected provider (no fallback)`,
+      );
+      break;
+    }
+    ruledOut.add(routed.agent);
+    const fallback = fallbackProvider(routed, config, failure, ruledOut);
+    if (!fallback) {
+      logger.status(
+        `${routed.agent} ${failure} failure detected → no other provider is available to take over`,
+      );
+      break;
+    }
+    const message = `${routed.agent} ${failure} failure detected → falling back to ${fallback.agent}/${fallback.model}`;
+    routed = fallback;
+    Object.assign(logMeta, { agent: routed.agent, model: routed.model, effort: routed.effort });
+    logger.providerSwitch(logMeta, message);
+    result = await runAgent(routed, effectivePrompt, config, {
+      headless: true,
+      capture: true,
+      logger,
+      logMeta,
+    });
+    usage = addTokenUsage(usage, result.usage);
+  }
   let clarificationCount = 0;
   while (result.question && clarificationCount < 4) {
     clarificationCount++;

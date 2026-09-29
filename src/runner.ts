@@ -16,7 +16,7 @@ export function commandExists(command: string): boolean {
 
 /** Provider errors that usually mean this account/model cannot serve the request right now. */
 export function isUsageLimitError(text: string, exitCode?: number): boolean {
-  if (!text && exitCode === 0) return false;
+  if (!text || exitCode === 0) return false;
   return /(?:usage|quota|rate|session|request|message|token)[ -]?(?:limit|limited|exhausted|exceeded)|(?:hit|reached|exceeded|ran out of).{0,40}(?:limit|quota|credits?|balance)|(?:credit|credits|balance)[ -]?(?:limit|exhausted|insufficient)|too many requests|(?:429|resource_exhausted|rate_limit_error|quota_exceeded)|billing.{0,30}(?:limit|disabled|past due)|out of credits/i.test(
     text,
   );

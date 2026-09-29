@@ -257,10 +257,11 @@ console.log(JSON.stringify({type:"result", subtype:"success", result:"done"}));`
   }
 });
 
-test("rules out a fallback that also becomes unavailable", async () => {
+test("continues to another installed provider when the first fallback fails", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-orchestrate-fallback-failure-"));
   const codexRuns = path.join(dir, "codex-runs");
   const claudeRuns = path.join(dir, "claude-runs");
+  const geminiRuns = path.join(dir, "gemini-runs");
   const codex = executable(
     path.join(dir, "codex"),
     `const fs = require("node:fs");
@@ -273,18 +274,31 @@ process.exit(1);`,
     `const fs = require("node:fs");
 if (process.argv.includes("auth")) { console.log(JSON.stringify({loggedIn:true})); process.exit(0); }
 fs.appendFileSync(${JSON.stringify(claudeRuns)}, "run\\n");
-console.log(JSON.stringify({type:"result", subtype:"success", result:"Claude usage limit reached."}));`,
+console.log(JSON.stringify({type:"result", subtype:"error", result:"Claude usage limit reached."}));
+process.exit(1);`,
+  );
+  const gemini = executable(
+    path.join(dir, "gemini"),
+    `const fs = require("node:fs");
+fs.appendFileSync(${JSON.stringify(geminiRuns)}, "run\\n");
+console.log(JSON.stringify({type:"message",role:"assistant",content:"done"}));`,
   );
   try {
     const config = testConfig(claude, codex);
+    config.gemini.command = gemini;
+    config.copilot.command = "definitely-missing-copilot";
     config.orchestration.maxPhases = 4;
     const result = await orchestrate("Rename a type in one file", config);
 
-    assert.equal(result.exitCode, 1);
-    assert.equal(result.phases.length, 1, "no later phase should retry an unavailable provider");
-    assert.equal(result.phases[0].route.agent, "claude");
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.phases.length, 2);
+    assert.deepEqual(
+      result.phases.map((phase) => phase.route.agent),
+      ["gemini", "gemini"],
+    );
     assert.equal(fs.readFileSync(codexRuns, "utf8").trim().split("\n").length, 1);
     assert.equal(fs.readFileSync(claudeRuns, "utf8").trim().split("\n").length, 1);
+    assert.equal(fs.readFileSync(geminiRuns, "utf8").trim().split("\n").length, 2);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -330,6 +344,30 @@ console.log(JSON.stringify({type:"item.completed",item:{type:"agent_message",tex
     });
     assert.ok(result.phases.every((phase) => phase.route.agent === "claude"));
     assert.equal(fs.existsSync(codexLog), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("does not retry a successful run whose answer discusses rate limits", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-orchestrate-rate-limit-answer-"));
+  const runLog = path.join(dir, "provider-runs");
+  const claude = executable(
+    path.join(dir, "claude"),
+    `require("node:fs").appendFileSync(${JSON.stringify(runLog)}, "claude\\n");
+console.log(JSON.stringify({type:"result", subtype:"success", result:"Implemented 429 rate limit handling."}));`,
+  );
+  const codex = executable(
+    path.join(dir, "codex"),
+    `require("node:fs").appendFileSync(${JSON.stringify(runLog)}, "codex\\n");
+console.log(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"Implemented 429 rate limit handling."}}));`,
+  );
+  try {
+    const config = testConfig(claude, codex);
+    config.orchestration.maxPhases = 1;
+    const result = await orchestrate("Document rate limits", config);
+    assert.equal(result.exitCode, 0);
+    assert.equal(fs.readFileSync(runLog, "utf8").trim().split("\n").length, 1);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
