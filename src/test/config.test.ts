@@ -39,13 +39,32 @@ test("loads and deeply merges project configuration", () => {
     const loaded = loadConfig(dir);
     assert.equal(loaded.path, path.join(dir, ".airo.json"));
     assert.equal(loaded.config.policy, "claude-heavy");
-    assert.equal(loaded.config.modelRouting.mode, "dynamic");
+    assert.equal(loaded.config.modelRouting.mode, "manual");
     assert.equal(loaded.config.claude.models.fast.model, "custom-haiku");
     assert.equal(loaded.config.claude.models.deep.model, DEFAULT_CONFIG.claude.models.deep.model);
     assert.equal(loaded.config.history.enabled, false);
     assert.equal(loaded.config.permissions.mode, "prompt");
     assert.equal(loaded.config.permissions.networkAccess, false);
     assert.deepEqual(loaded.config.rules, []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("preserves explicit dynamic routing and accepts ultra effort rules", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-config-dynamic-routing-"));
+  try {
+    fs.writeFileSync(
+      path.join(dir, ".airo.json"),
+      JSON.stringify({
+        modelRouting: { mode: "dynamic" },
+        rules: [{ name: "deep review", pattern: "review", effort: "ultra" }],
+      }),
+    );
+
+    const loaded = loadConfig(dir).config;
+    assert.equal(loaded.modelRouting.mode, "dynamic");
+    assert.equal(loaded.rules[0]?.effort, "ultra");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

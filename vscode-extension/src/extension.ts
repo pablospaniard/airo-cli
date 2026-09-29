@@ -5,8 +5,6 @@ import path from "node:path";
 import os from "node:os";
 import { renderWebview } from "./webview";
 
-const DEFAULT_SYNC_SERVER = "https://airo-sync.pablospaniard.workers.dev";
-
 let loginShellEnvironmentPromise: Promise<NodeJS.ProcessEnv> | undefined;
 
 function loginShellEnvironment(): Promise<NodeJS.ProcessEnv> {
@@ -150,8 +148,13 @@ class SidebarProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   private activeChatId: string;
   private ready?: Promise<void>;
   private resolveReady?: () => void;
+  private viewAvailable: Promise<void>;
+  private resolveViewAvailable?: () => void;
 
   constructor(private session?: SessionSummary) {
+    this.viewAvailable = new Promise((resolve) => {
+      this.resolveViewAvailable = resolve;
+    });
     this.activeSession = Boolean(session);
     const chat = this.createChatState(session);
     this.activeChatId = chat.id;
@@ -168,10 +171,15 @@ class SidebarProvider implements vscode.WebviewViewProvider, vscode.Disposable {
       this.resolveReady = resolve;
     });
     this.initializeWebview(view.webview);
+    this.resolveViewAvailable?.();
+    this.resolveViewAvailable = undefined;
     view.onDidDispose(() => {
       this.view = undefined;
       this.ready = undefined;
       this.resolveReady = undefined;
+      this.viewAvailable = new Promise((resolve) => {
+        this.resolveViewAvailable = resolve;
+      });
     });
   }
 
@@ -203,7 +211,11 @@ class SidebarProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   }
 
   private async reveal(): Promise<void> {
-    if (!this.view) await vscode.commands.executeCommand("airo.sidebar.focus");
+    if (!this.view) {
+      const viewAvailable = this.viewAvailable;
+      await vscode.commands.executeCommand("airo.sidebar.focus");
+      if (!this.view) await viewAvailable;
+    }
     await this.ready;
     this.view?.show?.(true);
     this.post({ type: "focus" });
@@ -513,10 +525,13 @@ class SidebarProvider implements vscode.WebviewViewProvider, vscode.Disposable {
       return;
     }
     if (action === "login") {
-      const unsupported = parts.slice(1).filter((part) => part !== "--allow-credential-file");
-      if (unsupported.length > 0) return this.notice("Usage: /sync login", chatId);
+      const loginArguments = parts.slice(1).filter((part) => part !== "--allow-credential-file");
+      if (loginArguments.length > 1) return this.notice("Usage: /sync login [server]", chatId);
+      const server = loginArguments[0];
+      const serverError = server ? validateServerUrl(server) : undefined;
+      if (serverError) return this.notice(serverError, chatId);
       await this.run(
-        ["sync", "login", "--server", DEFAULT_SYNC_SERVER, ...credentialFlag],
+        ["sync", "login", ...(server ? ["--server", server] : []), ...credentialFlag],
         true,
         "Sync login",
         chatId,
@@ -1313,6 +1328,18 @@ function shortDescription(value: string): string {
 function chatTitle(value: string): string {
   const title = shortDescription(value);
   return /^(?:new session|airo sidebar session)$/i.test(title) ? "New chat" : title;
+}
+
+function validateServerUrl(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    if (url.protocol === "https:") return undefined;
+    if (url.protocol === "http:" && ["localhost", "127.0.0.1", "::1"].includes(url.hostname))
+      return undefined;
+  } catch {
+    // Return the same actionable validation message for malformed URLs.
+  }
+  return "Use an HTTPS URL (HTTP is allowed only for localhost development).";
 }
 
 function listSessionSummaries(): Promise<SessionSummary[]> {

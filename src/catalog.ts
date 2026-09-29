@@ -14,7 +14,13 @@ import {
   runProviderCommand,
 } from "./provider-shell.js";
 
-export type CatalogSource = "cli" | "provider-config" | "environment" | "gateway" | "builtin";
+export type CatalogSource =
+  | "cli"
+  | "catalog-file"
+  | "provider-config"
+  | "environment"
+  | "gateway"
+  | "builtin";
 
 export interface CatalogModel {
   id: string;
@@ -63,7 +69,7 @@ export interface ProviderCatalogAdapter {
   gateway?: () => { base: string; token?: string } | undefined;
 }
 
-const CACHE_VERSION = 3;
+const CACHE_VERSION = 4;
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 export { AGENTS } from "./providers.js";
 
@@ -211,7 +217,7 @@ function probeCodex(command: string): Partial<ProviderCatalog> {
   for (const file of [catalogFile, path.join(home, "models_cache.json")]) {
     if (!file) continue;
     const models = codexCatalogModels(readJson(file.replace(/^~(?=\/)/, os.homedir())));
-    if (models.length) return { models, source: "provider-config", via: file };
+    if (models.length) return { models, source: "catalog-file", via: file };
   }
   return { note: `${command} exposes no model catalog` };
 }

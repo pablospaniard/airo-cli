@@ -40,7 +40,7 @@ test("catalog reads tolerate invalid cache data and retain current configured mo
     assert.equal(fs.existsSync(dir), false, "a cache read should not create directories");
     fs.mkdirSync(dir, { recursive: true });
     for (const entries of [null, [], { codex: {} }, { codex: { models: [null] } }]) {
-      fs.writeFileSync(file, JSON.stringify({ version: 3, entries }));
+      fs.writeFileSync(file, JSON.stringify({ version: 4, entries }));
       assert.equal(cachedCatalog("codex"), undefined);
       assert.ok(candidateModels("codex", DEFAULT_CONFIG).length);
     }
@@ -49,7 +49,7 @@ test("catalog reads tolerate invalid cache data and retain current configured mo
     fs.writeFileSync(
       file,
       JSON.stringify({
-        version: 3,
+        version: 4,
         entries: {
           codex: {
             agent: "codex",
@@ -116,6 +116,25 @@ test("does not treat one configured provider model as a complete catalog", () =>
   assert.equal(resolved.claude.models.fast.model, "haiku");
   assert.equal(resolved.claude.models.balanced.model, "sonnet");
   assert.equal(resolved.claude.models.deep.model, "opus");
+});
+
+test("maps a complete file-based provider catalog positionally", () => {
+  const config = structuredClone(DEFAULT_CONFIG);
+  const catalogs = {
+    claude: catalog("claude", []),
+    codex: catalog(
+      "codex",
+      [{ id: "gpt-newest" }, { id: "gpt-middle" }, { id: "gpt-oldest" }],
+      "catalog-file",
+    ),
+    gemini: catalog("gemini", []),
+    copilot: catalog("copilot", []),
+  };
+
+  const resolved = resolveDynamicModels(config, catalogs);
+  assert.equal(resolved.codex.models.fast.model, "gpt-oldest");
+  assert.equal(resolved.codex.models.balanced.model, "gpt-middle");
+  assert.equal(resolved.codex.models.deep.model, "gpt-newest");
 });
 
 test("manual model routing preserves configured tier mappings", () => {

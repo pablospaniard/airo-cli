@@ -140,7 +140,8 @@ function geminiInvocation(
   const provider = config.gemini;
   const args = [...(provider.args ?? [])];
   const promptArgIndex = headless ? args.push("--prompt", prompt) - 1 : -1;
-  args.push("--model", route.model);
+  // `auto` means to use Gemini's own default; it is not a model identifier.
+  if (route.model.toLowerCase() !== "auto") args.push("--model", route.model);
   args.push(
     "--approval-mode",
     elevated || config.permissions.mode === "fullAccess" ? "yolo" : "default",
