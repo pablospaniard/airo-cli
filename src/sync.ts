@@ -417,7 +417,7 @@ export function applySafeSettings(
       String((value.modelRouting as { mode?: unknown } | undefined)?.mode),
     )
       ? (value.modelRouting as RouterConfig["modelRouting"])
-      : DEFAULT_CONFIG.modelRouting,
+      : { mode: "manual" },
     // safeSyncSettings always writes a *complete* snapshot of these
     // sections, never a partial diff. So a field missing from a pulled
     // `value` means another device removed it, not that this device should
