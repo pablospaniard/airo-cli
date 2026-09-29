@@ -607,7 +607,7 @@ class SidebarProvider implements vscode.WebviewViewProvider, vscode.Disposable {
       return;
     }
     this.notice(
-      "Usage: /sync status|login|enable|now|devices|devices revoke <id>|export|logout|delete-cloud-data",
+      "Usage: /sync status|login [server]|enable|now|devices|devices revoke <id>|export|logout|delete-cloud-data",
       chatId,
     );
   }

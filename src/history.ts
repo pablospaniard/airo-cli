@@ -244,7 +244,7 @@ export function updateHistoryRecord(
     const records = readHistory(config);
     const index = records.findIndex((record) => record.id === id);
     if (index < 0) return undefined;
-    records[index] = update(records[index]);
+    records[index] = { ...update(records[index]), updatedAt: new Date().toISOString() };
     writeHistory(file, records);
     return records[index];
   });
@@ -282,7 +282,12 @@ export function setFeedback(
     if (!targets.length) throw new Error(`History item or run ${id} not found.`);
 
     for (const index of targets)
-      records[index] = { ...records[index], feedback: rating, feedbackNote: note };
+      records[index] = {
+        ...records[index],
+        feedback: rating,
+        feedbackNote: note,
+        updatedAt: new Date().toISOString(),
+      };
     writeHistory(file, records);
     return targets.map((index) => records[index]);
   });
