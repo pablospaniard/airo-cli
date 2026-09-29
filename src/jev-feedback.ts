@@ -12,6 +12,7 @@ import {
 } from "./history.js";
 import { AGENTS } from "./providers.js";
 import { resolveRepositoryIdentity } from "./repository.js";
+import { recordSyncDeletions } from "./sync-deletions.js";
 import type { Agent, HistoryConfig, HistoryRecord, ModelTier, TaskFeatures } from "./types.js";
 
 export const JEV_MODEL = "jev-1.13.0";
@@ -251,6 +252,11 @@ export function resetJevFeedback(config: HistoryConfig): number {
   const file = jevFeedbackPath(config);
   return withFileLock(`${file}.lock`, () => {
     const records = readJevFeedback(config);
+    recordSyncDeletions(
+      historyPath(config),
+      "jev-feedback",
+      records.map((record) => record.id),
+    );
     try {
       fs.unlinkSync(file);
     } catch (error) {
