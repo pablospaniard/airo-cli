@@ -83,6 +83,8 @@ export type FeedbackScope = "run" | "phase";
 export type FeedbackSource = "explicit" | "implicit";
 
 export interface FeedbackRecord {
+  /** Portable feedback schema. Missing means legacy v0 and remains readable. */
+  schemaVersion?: number;
   id: string;
   timestamp: string;
   scope: FeedbackScope;
@@ -165,12 +167,16 @@ export interface RouteResult {
 }
 
 export interface HistoryRecord {
+  /** Portable history schema. Missing means legacy v0 and remains readable. */
+  schemaVersion?: number;
   id: string;
   runId?: string;
   sessionId?: string;
   parentRunId?: string;
   timestamp: string;
   cwd: string;
+  /** Stable learning scope; unlike cwd, this can survive moving to another machine. */
+  repositoryId?: string;
   task: string;
   originalTask?: string;
   phaseKind?: PhaseKind;

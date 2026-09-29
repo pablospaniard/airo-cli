@@ -11,7 +11,7 @@ export interface InteractivePreferences {
 
 export type InteractiveAction =
   | { kind: "empty" }
-  | { kind: "task"; task: string }
+  | { kind: "task"; task: string; noJev?: boolean }
   | { kind: "quit" }
   | { kind: "help" }
   | { kind: "new"; title?: string }
@@ -46,6 +46,7 @@ export const INTERACTIVE_COMMANDS = [
   "/usage",
   "/logs",
   "/attach",
+  "/no-jev",
   "/feedback",
   "/learning",
   "/mode",
@@ -75,6 +76,10 @@ export function isSupportedAttachmentPath(input: string): boolean {
 export function parseInteractiveInput(input: string): InteractiveAction {
   const value = input.trim();
   if (!value) return { kind: "empty" };
+  if (value === "--no-jev")
+    return { kind: "error", message: "Usage: --no-jev <task> or /no-jev <task>" };
+  if (value.startsWith("--no-jev "))
+    return { kind: "task", task: value.slice("--no-jev ".length).trim(), noJev: true };
   if (!value.startsWith("/")) return { kind: "task", task: value };
 
   const [rawCommand, ...args] = value.split(/\s+/);
@@ -94,6 +99,12 @@ export function parseInteractiveInput(input: string): InteractiveAction {
     return { kind: "usage", limit };
   }
   if (command === "/logs") return { kind: "logs" };
+  if (command === "/no-jev") {
+    const task = args.join(" ").trim();
+    return task
+      ? { kind: "task", task, noJev: true }
+      : { kind: "error", message: "Usage: /no-jev <task>" };
+  }
   if (command === "/attach") {
     const path = args.join(" ").trim();
     return path
@@ -164,8 +175,13 @@ export function parseInteractiveInput(input: string): InteractiveAction {
   return { kind: "error", message: `Unknown command: ${rawCommand}. Use /help to list commands.` };
 }
 
-export function taskArgs(task: string, preferences: InteractivePreferences): string[] {
+export function taskArgs(
+  task: string,
+  preferences: InteractivePreferences,
+  options: { noJev?: boolean } = {},
+): string[] {
   const args = ["--continue"];
+  if (options.noJev) args.push("--no-jev");
   if (preferences.mode === "adaptive") args.push("--adaptive");
   if (preferences.mode === "single") args.push("--single");
   if (preferences.agent !== "auto") args.push("--prefer-agent", preferences.agent);

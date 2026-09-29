@@ -4,9 +4,9 @@
 
 This document records the planned product and architecture direction for AIRO. It is a roadmap, not a description of functionality available in the current release.
 
-The current published package is [`airo-ai-router`](https://www.npmjs.com/package/airo-ai-router). Current behavior is documented in [Routing rules and learning](routing-and-learning.md). None of the provider-registry, Jev-feedback, cloud-sync, or research-consent milestones below should be presented as released until their implementation, tests, security review, and user documentation are complete.
+The current published package is [`airo-ai-router`](https://www.npmjs.com/package/airo-ai-router). Current behavior is documented in [Routing rules and learning](routing-and-learning.md). No development milestone below should be presented as part of the npm release until it completes the release process.
 
-Development status: Milestone 1 is complete on the development branch. The source-controlled provider registry, generic fallback and candidate generation, provider-neutral task features, versioned cold-start policy, development evaluation corpus, exhaustive provider adapters, support audit, diagnostics, and acceptance evidence are implemented. This status does not present the work as published until it passes the release process. The Jev development evaluator is implemented as an initial Milestone 3 tool; calibration work remains optional and open.
+Development status: Milestones 1, 2, 3, and 4 are complete on the development branch. Provider-neutral foundations, portable local learning, the unpublished Jev development evaluator, and consented local post-run Jev feedback are implemented. This status does not present the work as published until it passes the release process. Live pinned-model reports remain regenerable development evidence rather than committed runtime artifacts.
 
 ## Architecture principles
 
@@ -103,7 +103,7 @@ The development evaluator lives outside the published runtime, uses a fake Jev e
 
 ### Optional production feedback
 
-Production AIRO may later offer optional, post-run Jev feedback. This feature must:
+The development branch offers optional, post-run Jev feedback. It:
 
 - Be disabled by default
 - Require a dedicated consent flow
@@ -292,26 +292,52 @@ Cloud sync consent never implies research consent. Local Jev consent never impli
 
 ### Milestone 2: portable local learning
 
-- Versioned history and feedback schemas
-- Stable repository identity
-- Idempotent encrypted export and import
-- Deterministic learning rebuild after merge
+- [x] Versioned history and feedback schemas with backward-compatible legacy reads
+- [x] Stable Git-remote and explicitly linkable local repository identities
+- [x] Idempotent authenticated encrypted export and import
+- [x] Deterministic evidence ordering and learning rebuild after merge
+
+#### Milestone 2 acceptance record
+
+- **Versioning:** history schema, feedback schema, and encrypted archive format are independently versioned at version 1. Missing record versions are treated as legacy data and upgraded during export or import.
+- **Verification:** unit and CLI integration coverage includes encryption, wrong-passphrase failure, legacy upgrade, conflicting immutable IDs, repeated imports, repository normalization, local identity persistence, and manual linking. The full `pnpm validate` gate remains required.
+- **Diagnostics:** export and import report record counts and an evidence digest. Import reports new versus already-present evidence and lists any pre-import backups. `airo repository id` reports the active identity source.
+- **Security and privacy:** archives use scrypt and AES-256-GCM, enforce a size limit, write with restrictive permissions, and never accept passphrases in command arguments. Archives contain sensitive local history and must still be protected. No network access or telemetry is added.
+- **Compatibility and migration:** existing JSONL paths and records remain readable. Git-remote identities allow moved checkouts to retain scope; repositories without a remote use a random ID that can be linked explicitly on the new machine.
+- **Rollback and recovery:** portability is opt-in and does not alter routing until an import is requested. Import is atomic per evidence file, makes timestamped backups before replacing existing files, rejects divergent ID collisions, and never imports a derived learning cache.
 
 ### Milestone 3: Jev development evaluator
 
-- Unpublished evaluation workspace
-- Pinned model and versioned question set
-- Synthetic and privacy-reviewed datasets
-- Held-out comparison and policy-calibration reports
-- No runtime dependency in core routing
+- [x] Unpublished evaluation workspace excluded from package files
+- [x] Pinned model and versioned question set
+- [x] Versioned synthetic, privacy-reviewed calibration and held-out datasets
+- [x] Held-out comparison metrics and policy-calibration review reports
+- [x] No runtime dependency or automatic policy mutation
+
+#### Milestone 3 acceptance record
+
+- **Versioning:** report schema version 2 records exact requested and returned model IDs, Jev CLI version, question-set version, dataset version, routing-policy version, split, and evaluation time.
+- **Verification:** CI uses a fake Jev executable and tests valid typed responses, malformed responses, unpinned models, returned-model mismatch, task-text omission, restrictive report permissions, split isolation, dataset privacy patterns, and routing-policy accuracy.
+- **Diagnostics:** reports include overall, calibration, and held-out provider/tier/joint accuracy; agreement and confidence; improvement and regression IDs; and high-confidence calibration candidates.
+- **Security and privacy:** only synthetic reviewed fixture state is eligible. Requests use permission-restricted temporary files that are deleted, reports omit task text, the API key remains owned by the external CLI, and no external request runs in CI.
+- **Compatibility and migration:** report schema 1 was development-only and had no reader or runtime consumer. Regenerate old reports as schema 2; production configuration and history are unchanged.
+- **Rollback:** the evaluator cannot write the policy artifact and is excluded from the published runtime. Generated reports are ignored, and any separately reviewed policy change remains an ordinary versioned source change that can be reverted.
 
 ### Milestone 4: optional local Jev feedback
 
-- Explicit security and data-sharing consent
-- User-supplied API key
-- Post-run bounded evaluation
-- Local feedback storage and learning controls
-- Inspection, disable, reset, and per-run opt-out
+- [x] Explicit security and data-sharing consent
+- [x] User-supplied, environment-only API key
+- [x] Post-run bounded evaluation with typed response validation and fail-open errors
+- [x] Separate local feedback storage and confidence-gated learning controls
+- [x] Inspection, disable, reset, and per-run opt-out
+
+#### Milestone 4 acceptance record
+
+- **Versioning:** consent schema 1, feedback schema 1, question set 1.0.0, and pinned model `jev-1.13.0` are recorded locally.
+- **Verification:** tests cover default-off consent, restrictive permissions, the ID-keyed HTTP request contract, payload exclusions, response validation, model mismatch, API failure, deduplication, sample gates, bounded influence, and CLI controls.
+- **Security and privacy:** consent is invalidated if its disclosure changes. `TYPESAFE_API_KEY` is read only from the environment. Task text and a bounded journey state are sent only after provider execution; prohibited fields and secrets are excluded and no request occurs with `--no-jev`.
+- **Compatibility and migration:** the feature adds separate adjacent files and does not change existing history or feedback schemas. Missing consent and missing Jev records are valid legacy states.
+- **Rollback:** `disable` immediately removes Jev influence without deleting evidence; `reset --yes` removes Jev evidence while preserving consent and ordinary routing history.
 
 ### Milestone 5: encrypted cloud sync
 
@@ -347,13 +373,11 @@ A milestone is not complete until it has:
 ## Open implementation decisions
 
 - Calibration and future versioning of provider capability weights
-- Routing-policy training or calibration method
-- Portable archive format and key derivation parameters
-- Git remote fingerprinting and non-Git project linking UX
+- Future statistical policy training beyond the reviewed calibration-candidate workflow
 - Authentication provider beyond the initial GitHub flow
 - Credential-store implementation on each operating system
 - Sync quotas, retention, and encrypted archive limits
-- Jev question set, confidence thresholds, and local boost bounds
+- Production Jev question set, confidence thresholds, and local boost bounds
 - Research retention period and policy-rebuild response to deletion
 - Jurisdiction and governance requirements for hosted services
 
