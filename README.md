@@ -1,14 +1,14 @@
-<h1 align="center">AIRO</h1>
-
 <p align="center">
-  <img src="docs/airo-setup.png" alt="AIRO setup and provider discovery" width="960">
+  <img src="https://raw.githubusercontent.com/pablospaniard/airo-cli/main/vscode-extension/media/airo-icon-128.png" alt="AIRO logo" width="112">
 </p>
+
+<h1 align="center">AIRO</h1>
 
 <p align="center">Adaptive Intelligence Routing &amp; Orchestration for coding-agent CLIs.</p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/airo-ai-router"><img src="https://img.shields.io/npm/v/airo-ai-router?logo=npm&label=CLI" alt="AIRO CLI on npm"></a>
-  <a href="https://marketplace.visualstudio.com/items?itemName=pablospaniard.airo-vscode"><img src="https://img.shields.io/visual-studio-marketplace/v/pablospaniard.airo-vscode?logo=visualstudiocode&label=VS%20Code" alt="AIRO extension on the VS Code Marketplace"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=pablospaniard.airo-vscode"><img src="https://img.shields.io/badge/VS%20Code%20Extension-1.0.0-007ACC" alt="AIRO 1.0.0 extension on the VS Code Marketplace"></a>
   <a href="https://github.com/pablospaniard/airo-cli/actions/workflows/ci.yml"><img src="https://github.com/pablospaniard/airo-cli/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License"></a>
 </p>
