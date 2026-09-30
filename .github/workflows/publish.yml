@@ -108,7 +108,9 @@ jobs:
         run: pnpm run release:check
 
       - name: Publish npm package
-        run: pnpm publish --provenance --access public
+        # Release tags use a detached HEAD. Preflight validates the exact tag
+        # before this job, so pnpm's branch check is redundant here.
+        run: pnpm publish --provenance --access public --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
