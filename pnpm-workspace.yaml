@@ -1,6 +1,6 @@
 packages:
     - vscode-extension
     - sync-worker
-onlyBuiltDependencies:
-    - esbuild
-    - workerd
+allowBuilds:
+    esbuild: true
+    workerd: true
