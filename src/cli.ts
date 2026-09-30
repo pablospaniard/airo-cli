@@ -23,6 +23,7 @@ import {
   explainLearning,
   historyPath,
   learningStatus,
+  learningImpactReport,
   newHistoryId,
   readHistory,
   resetLearning,
@@ -188,6 +189,9 @@ function help() {
   );
   console.log(
     `  ${commandColor("airo learning status|explain|reset")}       ${ui.gray("inspect or reset adaptive routing")}`,
+  );
+  console.log(
+    `  ${commandColor("airo learning report")}                   ${ui.gray("measure routing impact over time")}`,
   );
   console.log(
     `  ${commandColor("airo sync login|enable|now|status")}        ${ui.gray("manage optional encrypted cloud sync")}`,
@@ -1344,7 +1348,35 @@ async function main() {
   if (raw[0] === "learning") {
     const action = raw[1] ?? "status";
     if (action === "status") printLearningStatus(config);
-    else if (action === "explain" && raw[2]) printLearningExplanation(config, raw[2]);
+    else if (action === "report") {
+      const report = learningImpactReport(config.history);
+      console.log(divider("Adaptive routing impact"));
+      if (!report.phases) {
+        console.log(`${statusIcon("info")} ${ui.gray("No routing history yet.")}`);
+      } else {
+        const pct = (value: number) => `${(value * 100).toFixed(1)}%`;
+        const delta = (value: number) => `${value >= 0 ? "+" : ""}${pct(value)}`;
+        console.log(
+          `${ui.gray("Phases")} ${report.phases} · ${ui.gray("evaluated")} ${report.evaluatedPhases}${report.splitAt ? ` · ${ui.gray("comparison split")} ${report.splitAt}` : ""}`,
+        );
+        for (const [label, key] of [
+          ["Quality", "quality"],
+          ["Completion", "completion"],
+          ["Verification", "verification"],
+        ] as const)
+          console.log(
+            `${ui.bold(label.padEnd(14))} ${pct(report.baseline[key])} → ${pct(report.recent[key])} ${ui.cyan(`(${delta(report.deltas[key])})`)}`,
+          );
+        console.log(
+          `${ui.bold("Good feedback".padEnd(14))} ${report.baseline.feedbackGood} → ${report.recent.feedbackGood} ${ui.cyan(`(${report.deltas.feedbackGood >= 0 ? "+" : ""}${report.deltas.feedbackGood})`)}`,
+        );
+        console.log(
+          ui.gray(
+            "Comparison is first half vs most recent half of local history; it is directional, not a controlled A/B test.",
+          ),
+        );
+      }
+    } else if (action === "explain" && raw[2]) printLearningExplanation(config, raw[2]);
     else if (action === "reset") {
       if (!raw.includes("--yes"))
         throw new Error(

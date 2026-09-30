@@ -142,6 +142,7 @@ AIRO stores routing history and user feedback locally. Similar, time-decayed evi
 
 ```bash
 airo history 20
+airo learning report       # compare routing quality over time
 airo feedback good
 airo feedback bad "used more reasoning than necessary"
 airo learning status

@@ -489,6 +489,74 @@ export interface LearningStatus {
   routes: Array<{ route: string; samples: number; averageQuality: number }>;
 }
 
+export interface LearningImpactReport {
+  phases: number;
+  evaluatedPhases: number;
+  baseline: {
+    phases: number;
+    quality: number;
+    completion: number;
+    verification: number;
+    feedbackGood: number;
+  };
+  recent: {
+    phases: number;
+    quality: number;
+    completion: number;
+    verification: number;
+    feedbackGood: number;
+  };
+  deltas: { quality: number; completion: number; verification: number; feedbackGood: number };
+  splitAt?: string;
+}
+
+/** Compare the first and most recent half of local history to show learning impact over time. */
+export function learningImpactReport(config: HistoryConfig): LearningImpactReport {
+  const records = readHistory(config)
+    .filter((record) => record.evaluation || record.exitCode !== undefined)
+    .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  const midpoint = Math.floor(records.length / 2);
+  const baseline = records.slice(0, midpoint);
+  const recent = records.slice(midpoint);
+  const feedback = readFeedback(config);
+  const stats = (items: HistoryRecord[]) => {
+    const quality = items.map((r) => r.evaluation?.quality ?? (r.exitCode === 0 ? 0.6 : 0));
+    const completion = items.map((r) => r.outcome?.completion ?? (r.exitCode === 0 ? 1 : 0));
+    const verification = items.map(
+      (r) => r.outcome?.verification ?? (r.evaluation?.verified ? 1 : 0),
+    );
+    const ids = new Set(items.map((r) => r.id));
+    const runs = new Set(items.map((r) => r.runId ?? r.id));
+    const good = feedback.filter(
+      (f) => f.rating === "good" && (ids.has(f.targetId) || runs.has(f.targetId)),
+    ).length;
+    const average = (values: number[]) =>
+      values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0;
+    return {
+      phases: items.length,
+      quality: average(quality),
+      completion: average(completion),
+      verification: average(verification),
+      feedbackGood: good,
+    };
+  };
+  const before = stats(baseline);
+  const after = stats(recent);
+  return {
+    phases: records.length,
+    evaluatedPhases: records.filter((r) => r.evaluation).length,
+    baseline: before,
+    recent: after,
+    deltas: {
+      quality: after.quality - before.quality,
+      completion: after.completion - before.completion,
+      verification: after.verification - before.verification,
+      feedbackGood: after.feedbackGood - before.feedbackGood,
+    },
+    splitAt: recent[0]?.timestamp,
+  };
+}
+
 export function learningStatus(config: HistoryConfig): LearningStatus {
   const records = readHistory(config);
   const feedback = readFeedback(config);

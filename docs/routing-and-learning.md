@@ -196,6 +196,8 @@ Phase feedback takes precedence over run feedback. Explicit feedback normally ha
 
 ## How history influences a new route
 
+Run `airo learning report` to measure whether routing is improving over time. It compares the first half of local phase history with the most recent half for quality, completion, verification, and positive feedback. The report is local and directional: it is not a controlled A/B test, and it requires enough history to be meaningful.
+
 For each new task, AIRO calculates learning hints from existing records at routing time:
 
 1. Restrict records to the current repository when `repositoryScoped` is enabled.
