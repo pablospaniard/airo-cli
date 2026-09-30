@@ -1,8 +1,10 @@
 .vscode/**
+.DS_Store
+**/.DS_Store
 src/**
 node_modules/**
 *.ts
-*.map
+**/*.map
 tsconfig.json
 package-lock.json
 pnpm-lock.yaml

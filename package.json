@@ -1,6 +1,6 @@
 {
   "name": "airo-ai-router",
-  "version": "0.7.1",
+  "version": "1.0.0",
   "description": "Adaptive Intelligence Routing & Orchestration for coding-agent CLIs",
   "keywords": [
     "ai",
@@ -28,8 +28,12 @@
   },
   "files": [
     "airo.config.example.json",
+    "CHANGELOG.md",
+    "PRIVACY.md",
     "README.md",
+    "SECURITY.md",
     "dist/*.js",
+    "docs/airo-setup.png",
     "docs/jev-and-airo.md",
     "docs/routing-and-learning.md",
     "docs/routing-platform-roadmap.md"
@@ -51,10 +55,12 @@
     "test:coverage": "pnpm run build && node --test --experimental-test-coverage --test-coverage-exclude=dist/test/** --test-coverage-exclude=dist/sync.js --test-coverage-lines=95 --test-coverage-functions=95 dist/test/*.test.js",
     "start": "node dist/cli.js",
     "test:sync-worker": "vitest run --config sync-worker/vitest.config.ts",
-    "validate": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm test && pnpm run test:sync-worker",
+    "build:sync-worker": "wrangler deploy --dry-run --config sync-worker/wrangler.jsonc",
+    "validate": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm test && pnpm run test:sync-worker && pnpm run build:sync-worker",
     "hooks:install": "git config core.hooksPath .githooks",
     "prepare": "pnpm run build",
-    "package:extension": "pnpm --dir vscode-extension run package"
+    "package:extension": "pnpm --dir vscode-extension run package",
+    "release:check": "node scripts/check-release.mjs"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.3.0",

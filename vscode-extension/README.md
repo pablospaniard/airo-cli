@@ -1,51 +1,69 @@
 # AIRO for VS Code
 
-AIRO brings the AIRO CLI into a stateful chat in the VS Code secondary sidebar.
-It can continue the active repository chat, stream progress, attach local files,
-and expose AIRO's routing, diagnostics, usage, logs, and feedback commands.
+AIRO brings the local AIRO router into a stateful VS Code sidebar. It supports streamed multi-phase work, parallel chats, attachments, session history, model controls, logs, diagnostics, feedback, and encrypted sync.
 
 ## Requirements
 
 - VS Code 1.106 or newer
 - Node.js 22 or newer
-- The [`airo-ai-router`](https://www.npmjs.com/package/airo-ai-router) npm package installed globally, with its `airo` CLI available on `PATH`, or an absolute path configured
-  in **AIRO: Command**
-- At least one configured and signed-in provider CLI (Claude Code, Codex CLI, Gemini CLI, or GitHub Copilot CLI); AIRO verifies Claude and Codex sign-in and reports the other authentication states as `not inspected`
+- The `airo-ai-router` npm package installed globally
+- At least one installed and signed-in provider CLI: Claude Code, Codex CLI, Gemini CLI, or GitHub Copilot CLI
 
-Open the AIRO view from the secondary sidebar. Use the extension settings to
-choose routing mode, provider, tier, output detail, and the CLI executable.
+```bash
+npm install --global airo-ai-router
+airo doctor
+```
 
-Attach files with the paperclip or drag them from the VS Code Explorer onto the
-native **Attach Files** drop target. VS Code requires holding Shift when
-dropping Explorer files directly onto any webview, so Shift-dragging onto the
-chat composer also works. Paste a screenshot from the clipboard to attach it
-directly; sent messages show every attachment name and a thumbnail for pasted
-images.
+If VS Code cannot find `airo`, open extension settings and set **AIRO: Command** to the executable's absolute path.
 
-Use the `+` tab in the sidebar to keep multiple AIRO chats open. Each tab keeps
-its own rendered conversation, draft, attachments, and AIRO chat context.
-Stop an active run before switching tabs so progress and permission requests
-remain attached to the chat that started them.
+## Get started
 
-The extension runs the CLI in the currently opened workspace; it does not upload
-attached files or store provider credentials.
+1. Open the AIRO view in the secondary sidebar.
+2. Enter a task in the composer.
+3. Review any permission or clarification request in the same chat.
+4. Use **New chat** to start another conversation without losing previous sessions.
 
-The extension uses the same local routing, history, and learning behavior as the
-CLI. Use the sync button in the sidebar header, the **AIRO: Sync Now** and
-**AIRO: Show Sync Status** commands, or `/sync` commands to manage encrypted
-sync. Passphrases are collected with VS Code password prompts and passed only to
-the local AIRO process through its environment. `/sync login` reuses the saved
-server or `AIRO_SYNC_URL`; use `/sync login https://sync.example.com` to choose
-a server explicitly.
+Choose `auto`, `adaptive`, or `single` routing and optionally select a provider or model tier from the sidebar controls.
 
-Use `/jev` to inspect, enable, disable, or reset optional Jev feedback. Enabling
-it displays the data-sharing disclosure and requires explicit confirmation.
-`/no-jev <task>` disables Jev for one run, while **AIRO: Jev Feedback** can
-disable it for every task started by the extension. Portable encrypted history
-archives are available through `/history export|import`, repository identities
-through `/repository`, and the interactive first-run flow through `/setup`.
+## Attachments
 
-These features require a matching development build of the AIRO CLI until a
-newer npm package is published. Research consent remains unimplemented and is
-documented separately in
-[`docs/routing-platform-roadmap.md`](../docs/routing-platform-roadmap.md).
+Use the paperclip, paste a screenshot, or drag files onto the **Attach Files** view. VS Code requires holding Shift when dragging Explorer files directly onto a webview.
+
+Attachments remain local. The extension passes their paths to the AIRO CLI and does not store provider credentials.
+
+## Commands and settings
+
+The Command Palette includes:
+
+- **AIRO: Run Task**
+- **AIRO: Open Previous Chats**
+- **AIRO: Open Terminal**
+- **AIRO: Open Settings**
+- **AIRO: Show Sync Status**
+- **AIRO: Sync Now**
+- **AIRO: Show Jev Status**
+
+Settings control the AIRO executable, workflow mode, provider, model tier, output detail, and whether sidebar tasks may use an already-consented Jev integration.
+
+Use `/help` in the sidebar for session, history, learning, repository, Jev, and sync commands.
+
+## Optional features
+
+Jev feedback remains disabled until enabled through its explicit consent flow. Use `/no-jev <task>` to disable it for one run.
+
+Encrypted sync requires a deployed AIRO sync Worker. `/sync login <url>` selects the service; later commands reuse the saved URL or `AIRO_SYNC_URL`. Passphrases are collected with VS Code password prompts and passed only to the local CLI process.
+
+## Build and package
+
+From the repository root:
+
+```bash
+pnpm install
+pnpm run package:extension
+```
+
+The resulting `.vsix` can be installed with **Extensions: Install from VSIX**.
+
+## Privacy and security
+
+The extension runs AIRO in the open workspace. Provider data handling follows the selected provider CLI. Optional Jev and sync behavior follows the repository's [Privacy](https://github.com/pablospaniard/airo-cli/blob/main/PRIVACY.md) and [Security](https://github.com/pablospaniard/airo-cli/blob/main/SECURITY.md) policies.

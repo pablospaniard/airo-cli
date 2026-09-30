@@ -2,11 +2,11 @@
 
 ## Status
 
-This document records implemented development milestones and the remaining product direction for AIRO. It is not a claim that development-branch functionality is already available in the current npm release.
+This document records the foundations released in AIRO 1.0 and the remaining product direction.
 
-The current published package is [`airo-ai-router@0.7.1`](https://www.npmjs.com/package/airo-ai-router). Source-tree behavior is documented in [Routing rules and learning](routing-and-learning.md). No development milestone below should be presented as part of the npm release until it completes the release process.
+AIRO 1.0 includes Milestones 1 through 5. Source-tree and released behavior are documented in [Routing rules and learning](routing-and-learning.md). Milestone 6 remains future work and must not be presented as released functionality.
 
-Development status: Milestones 1 through 5 are complete on the development branch. Provider-neutral foundations, portable local learning, the unpublished Jev development evaluator, consented local post-run Jev feedback, and optional end-to-end encrypted Cloudflare sync are implemented. This status does not present the work as published until it passes the release process. Live pinned-model reports remain regenerable development evidence rather than committed runtime artifacts.
+Release status: provider-neutral foundations, portable local learning, consented local post-run Jev feedback, and optional self-hosted end-to-end encrypted Cloudflare sync are included in AIRO 1.0. The unpublished Jev development evaluator remains a source-only tool. Live pinned-model reports remain regenerable development evidence rather than committed runtime artifacts.
 
 ## Architecture principles
 
@@ -104,7 +104,7 @@ The development evaluator lives outside the published runtime, uses a fake Jev e
 
 ### Optional production feedback
 
-The development branch offers optional, post-run Jev feedback. It is designed to:
+AIRO 1.0 offers optional, post-run Jev feedback. It is designed to:
 
 - Remain disabled by default
 - Require a dedicated consent flow
@@ -151,7 +151,7 @@ Repositories without a remote receive a random project ID. Linking another check
 
 ## Optional Cloudflare sync
 
-Cloud sync is an opt-in development-branch convenience for migration and multi-device continuity. The client uses an explicitly configured sync service URL and remains unreleased on npm. Local data remains authoritative, routing continues offline, and sync is invoked explicitly rather than as part of a provider run, so failure never changes a task's exit status.
+Cloud sync is an opt-in, self-hosted feature for migration and multi-device continuity. The client uses an explicitly configured sync service URL. Local data remains authoritative, routing continues offline, and sync is invoked explicitly rather than as part of a provider run, so failure never changes a task's exit status.
 
 The implemented platform is:
 
@@ -287,7 +287,7 @@ Cloud sync consent never implies research consent. Local Jev consent never impli
 - **Versioning:** provider support contract version 1 and routing policy version are source controlled; routes and new history records retain policy provenance. No configuration schema change is required.
 - **Verification:** unit, integration, negative/failure-path, routing-policy evaluation, legacy path migration, and backward-compatibility tests run through `pnpm validate`; the support audit also fails closed when a required provider configuration is incomplete.
 - **Diagnostics:** `airo doctor` distinguishes source integration readiness from command availability and model discovery on the current machine. Runtime provider switches identify authentication or usage-limit failures.
-- **Documentation:** this roadmap records development status, while the README and routing documentation describe observable CLI behavior. Publication remains a separate release step.
+- **Documentation:** this roadmap records implementation and release status, while the README and routing documentation describe observable CLI behavior.
 - **Security and privacy:** Milestone 1 adds no network service or telemetry. Provider commands remain explicitly registered, arbitrary filesystem scanning is prohibited, provider credentials are not read, and task prompt arguments are redacted from invocation diagnostics.
 - **Compatibility and migration:** existing configuration remains valid, deprecated model allowlists remain readable, historical records without a policy version remain readable, and legacy AI Router paths continue through the tested migration path.
 - **Rollback:** the policy artifact and support contract are versioned and code-reviewed. A released regression can be rolled back by pinning the prior npm package version or reverting the policy/code change; explicit routes and custom rules remain higher precedence than automatic routing.
