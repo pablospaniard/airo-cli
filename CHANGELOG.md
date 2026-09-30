@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Fall back to the `airo` executable when the VS Code command setting is empty or whitespace.
+
 ## 1.0.0 - 2026-09-30
 
 ### Added

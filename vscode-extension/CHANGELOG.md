@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.1 - 2026-09-30
+
+- Fall back to the `airo` executable when the command setting is empty or whitespace.
+
 ## 1.0.0 - 2026-09-30
 
 - Add a stateful AIRO chat in the VS Code secondary sidebar.

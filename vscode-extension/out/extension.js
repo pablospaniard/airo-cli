@@ -44,6 +44,9 @@ const node_path_1 = __importDefault(require("node:path"));
 const node_os_1 = __importDefault(require("node:os"));
 const webview_1 = require("./webview");
 let loginShellEnvironmentPromise;
+function airoCommand() {
+    return vscode.workspace.getConfiguration("airo").get("command", "airo").trim() || "airo";
+}
 function loginShellEnvironment() {
     if (loginShellEnvironmentPromise)
         return loginShellEnvironmentPromise;
@@ -94,7 +97,7 @@ function activate(context) {
     }), vscode.commands.registerCommand("airo.runTask", () => provider.focus()), vscode.commands.registerCommand("airo.openHistory", () => provider.openHistory()), vscode.commands.registerCommand("airo.syncStatus", () => provider.syncStatus()), vscode.commands.registerCommand("airo.syncNow", () => provider.syncNow()), vscode.commands.registerCommand("airo.jevStatus", () => provider.jevStatus()), vscode.commands.registerCommand("airo.openSettings", () => vscode.commands.executeCommand("workbench.action.openSettings", "@ext:pablospaniard.airo-vscode")), vscode.commands.registerCommand("airo.openTerminal", () => {
         const terminal = vscode.window.createTerminal("AIRO");
         terminal.show();
-        terminal.sendText(vscode.workspace.getConfiguration("airo").get("command", "airo"));
+        terminal.sendText(airoCommand());
     }));
 }
 class SidebarProvider {
@@ -636,8 +639,11 @@ class SidebarProvider {
         return (await vscode.window.showWarningMessage(detail, { modal: true }, action)) === action;
     }
     openAiroTerminal(args, name) {
-        const command = vscode.workspace.getConfiguration("airo").get("command", "airo");
-        const terminal = vscode.window.createTerminal({ name, shellPath: command, shellArgs: args });
+        const terminal = vscode.window.createTerminal({
+            name,
+            shellPath: airoCommand(),
+            shellArgs: args,
+        });
         terminal.show();
     }
     stop(chatId = this.activeChatId) {
@@ -798,7 +804,7 @@ class SidebarProvider {
             let started = false;
             let child;
             try {
-                child = (0, node_child_process_1.spawn)(vscode.workspace.getConfiguration("airo").get("command", "airo"), args, {
+                child = (0, node_child_process_1.spawn)(airoCommand(), args, {
                     cwd: folder.uri.fsPath,
                     shell: false,
                     windowsHide: true,
@@ -1207,7 +1213,7 @@ async function runCommand(args) {
         return { code: null, output: "[]" };
     const environment = await loginShellEnvironment();
     return new Promise((resolve) => {
-        const child = (0, node_child_process_1.spawn)(vscode.workspace.getConfiguration("airo").get("command", "airo"), args, {
+        const child = (0, node_child_process_1.spawn)(airoCommand(), args, {
             cwd: folder.uri.fsPath,
             shell: false,
             windowsHide: true,

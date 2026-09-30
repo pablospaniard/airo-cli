@@ -1,7 +1,7 @@
 {
   "name": "airo-vscode",
   "displayName": "AIRO",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A full AIRO chat workspace in the VS Code sidebar.",
   "categories": [
     "Other"
@@ -93,6 +93,7 @@
       "properties": {
         "airo.command": {
           "type": "string",
+          "minLength": 1,
           "default": "airo",
           "description": "AIRO executable to invoke. Use an executable path, without shell arguments."
         },
