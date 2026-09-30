@@ -128,11 +128,8 @@ See [AIRO for VS Code](https://github.com/pablospaniard/airo-cli/tree/main/vscod
 ## Models and setup
 
 AIRO discovers every model exposed by each provider and applies the same catalogue policy to all of them. Provider ordering, rather than hardcoded vendor model-family names, supplies the dynamic fast/balanced/deep mapping. Tiers remain routing intent; if discovery is unavailable, AIRO uses reviewed fallback profiles. Existing configurations created before dynamic routing retain their pinned mappings.
-<<<<<<< HEAD
 
 `airo usage cost` refreshes its API list-price catalog at the start of every AIRO run. If the catalog cannot be reached, AIRO uses the last successful local refresh, then its bundled snapshot. The report identifies which source was used and is an estimate only, not subscription usage or an invoice.
-=======
->>>>>>> origin/main
 
 ```bash
 airo setup       # review permissions and provider setup
