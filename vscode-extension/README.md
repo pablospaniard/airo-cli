@@ -6,7 +6,7 @@ AIRO brings the local AIRO router into a stateful VS Code sidebar. It supports s
 
 - VS Code 1.106 or newer
 - Node.js 22 or newer
-- The `airo-ai-router` npm package installed globally
+- The `airo-ai-router` npm package (version 1.0.3 or newer) installed globally
 - At least one installed and signed-in provider CLI: Claude Code, Codex CLI, Gemini CLI, or GitHub Copilot CLI
 
 ```bash
@@ -46,6 +46,8 @@ The Command Palette includes:
 Settings control the AIRO executable, workflow mode, provider, model tier, output detail, and whether sidebar tasks may use an already-consented Jev integration.
 
 Use `/help` in the sidebar for session, history, learning, repository, Jev, and sync commands.
+
+The extension uses the installed CLI's current model catalog and API-price data. Each CLI invocation attempts to refresh list prices; a local cache and bundled snapshot keep estimates available when offline.
 
 ## Optional features
 

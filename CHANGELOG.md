@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.3 - 2026-09-30
+
+### Added
+
+- Refresh API list-price data from the Models.dev catalog at the start of each AIRO run, with a local cache and bundled snapshot as offline fallbacks.
+
+### Changed
+
+- Show descriptions and full usage in interactive command suggestions, highlighting optional arguments in the picker and command help.
+
 ## 1.0.2 - 2026-09-30
 
 ### Changed

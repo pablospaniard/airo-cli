@@ -7,7 +7,7 @@ test("keeps package and documented versions aligned", () => {
   const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8"));
   const readme = fs.readFileSync("README.md", "utf8");
 
-  assert.equal(VERSION, "1.0.2");
+  assert.equal(VERSION, "1.0.3");
   assert.equal(packageJson.version, VERSION);
   assert.equal(packageJson.name, "airo-ai-router");
   assert.equal(packageJson.bin.airo, "dist/cli.js");

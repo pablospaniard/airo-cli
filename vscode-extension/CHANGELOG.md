@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.2 - 2026-09-30
+
+- Update the extension release for compatibility with AIRO CLI 1.0.3.
+
 ## 1.0.1 - 2026-09-30
 
 - Fall back to the `airo` executable when the command setting is empty or whitespace.

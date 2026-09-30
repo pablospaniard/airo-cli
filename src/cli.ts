@@ -10,6 +10,7 @@ import {
   panel,
   promptLabel,
   statusIcon,
+  table,
   tierColor,
   ui,
 } from "./ui.js";
@@ -23,6 +24,7 @@ import {
   explainLearning,
   historyPath,
   learningStatus,
+  learningImpactReport,
   newHistoryId,
   readHistory,
   resetLearning,
@@ -62,10 +64,13 @@ import { VERSION } from "./version.js";
 import {
   cleanDroppedPath,
   INTERACTIVE_COMMANDS,
+  interactiveCommandMatches,
+  interactiveCommandSuggestions,
   INTERACTIVE_SHELL_HELP,
   isSupportedAttachmentPath,
   parseInteractiveInput,
   taskArgs,
+  type InteractiveCommandInfo,
   type InteractivePreferences,
 } from "./interactive.js";
 import { migrateLegacyPaths } from "./paths.js";
@@ -73,7 +78,14 @@ import { shouldRunInitialSetup, shouldShowWelcome } from "./startup.js";
 import { singleRunPrompt } from "./prompts.js";
 import { inspectAccounts } from "./account.js";
 import { AGENTS } from "./providers.js";
-import { buildUsageReport, nonCachedTokens, processedTokens } from "./usage.js";
+import {
+  buildCostUsageReport,
+  buildUsageReport,
+  nonCachedTokens,
+  processedTokens,
+  type UsagePeriod,
+} from "./usage.js";
+import { API_PRICES_LAST_UPDATED, API_PRICES_SOURCE, refreshApiPrices } from "./pricing.js";
 import { firstRunWelcome } from "./welcome.js";
 import { auditProviderSupport } from "./provider-support.js";
 import { exportLearningArchive, importLearningArchive } from "./history-archive.js";
@@ -157,13 +169,13 @@ function help() {
   console.log("");
   console.log(ui.bold("Observability"));
   console.log(
-    `  ${commandColor("airo logs [runId]")}                       ${ui.gray("show persisted logs")}`,
+    `  ${formatCommandUsage("airo logs [runId]")}                       ${ui.gray("show persisted logs")}`,
   );
   console.log(
-    `  ${commandColor("airo logs --follow [runId]")}              ${ui.gray("follow a run live")}`,
+    `  ${formatCommandUsage("airo logs --follow [runId]")}              ${ui.gray("follow a run live")}`,
   );
   console.log(
-    `  ${commandColor("airo history [limit]")}                    ${ui.gray("show routing history")}`,
+    `  ${formatCommandUsage("airo history [limit]")}                    ${ui.gray("show routing history")}`,
   );
   console.log(
     `  ${commandColor("airo history export --encrypted <file>")}  ${ui.gray("export portable learning evidence")}`,
@@ -175,7 +187,10 @@ function help() {
     `  ${commandColor("airo repository id|link <id>")}            ${ui.gray("inspect or link the learning scope")}`,
   );
   console.log(
-    `  ${commandColor("airo usage [limit]")}                      ${ui.gray("show token use and measured savings")}`,
+    `  ${formatCommandUsage("airo usage [limit]")}                      ${ui.gray("show token use and measured savings")}`,
+  );
+  console.log(
+    `  ${formatCommandUsage("airo usage cost [period]")}                ${ui.gray("estimate API list-price usage by model")}`,
   );
   console.log(
     `  ${commandColor("airo feedback good|bad ...")}              ${ui.gray("rate the latest run")}`,
@@ -188,6 +203,9 @@ function help() {
   );
   console.log(
     `  ${commandColor("airo learning status|explain|reset")}       ${ui.gray("inspect or reset adaptive routing")}`,
+  );
+  console.log(
+    `  ${commandColor("airo learning report")}                   ${ui.gray("measure routing impact over time")}`,
   );
   console.log(
     `  ${commandColor("airo sync login|enable|now|status")}        ${ui.gray("manage optional encrypted cloud sync")}`,
@@ -207,7 +225,7 @@ function help() {
     `  ${commandColor("airo sessions")}                           ${ui.gray("list repo sessions")}`,
   );
   console.log(
-    `  ${commandColor('airo session new ["task"]')}              ${ui.gray("start fresh")}`,
+    `  ${formatCommandUsage('airo session new ["task"]')}              ${ui.gray("start fresh")}`,
   );
   console.log(
     `  ${commandColor("airo session clear")}                      ${ui.gray("clear active session")}`,
@@ -676,33 +694,28 @@ function interactiveStatus(
   ]);
 }
 
+/** Render command usage consistently, with optional arguments called out in yellow. */
+function formatCommandUsage(usage: string): string {
+  return usage
+    .split(/(\[[^\]]+\])/)
+    .map((part) => (/^\[[^\]]+\]$/.test(part) ? ui.bold(ui.yellow(part)) : commandColor(part)))
+    .join("");
+}
+
 function interactiveHelp(): string {
   const shellCommands = INTERACTIVE_SHELL_HELP.map(
-    ([usage, description]) => `${commandColor(usage)}  ${ui.gray(description)}`,
+    ([usage, description]) => `${formatCommandUsage(usage)}  ${ui.gray(description)}`,
+  );
+  const commandWidth = Math.max(...INTERACTIVE_COMMANDS.map((entry) => entry.usage.length));
+  const interactiveCommands = INTERACTIVE_COMMANDS.map(
+    (entry) =>
+      `${formatCommandUsage(entry.usage.padEnd(commandWidth))}  ${ui.gray(entry.description)}`,
   );
   return panel(
     "Command reference",
     [
       ui.bold("Interactive commands"),
-      `${commandColor("/help, /?")}          ${ui.gray("show this reference")}`,
-      `${commandColor("/new [title]")}        ${ui.gray("start a fresh session")}`,
-      `${commandColor("/status")}             ${ui.gray("show session and run preferences")}`,
-      `${commandColor("/mode auto|adaptive|single")} ${ui.gray("set workflow mode")}`,
-      `${commandColor("/agent auto|claude|codex|gemini|copilot")} ${ui.gray("select provider")}`,
-      `${commandColor("/tier auto|fast|balanced|deep")} ${ui.gray("set model tier")}`,
-      `${commandColor("/log compact|live|verbose")}  ${ui.gray("set output detail")}`,
-      `${commandColor("/models")}             ${ui.gray("show active model mapping")}`,
-      `${commandColor("/account")}            ${ui.gray("show provider accounts")}`,
-      `${commandColor("/usage [limit]")}      ${ui.gray("show token usage")}`,
-      `${commandColor("/logs")}               ${ui.gray("show recent run logs")}`,
-      `${commandColor("/attach <file-path>")} ${ui.gray("attach a local image, PDF, Markdown, or JSON file to the next task")}`,
-      `${commandColor("/no-jev <task>")}       ${ui.gray("run one task without sending it to Jev")}`,
-      `${commandColor("/feedback good|bad [note]")} ${ui.gray("rate the latest run")}`,
-      `${commandColor("/feedback phase <id> good|bad [note]")} ${ui.gray("rate one phase")}`,
-      `${commandColor("/learning status|explain <id>|reset --yes")} ${ui.gray("inspect or reset learning")}`,
-      `${commandColor("/sessions")}           ${ui.gray("list repository sessions")}`,
-      `${commandColor("/clear")}              ${ui.gray("clear the screen")}`,
-      `${commandColor("/exit, /quit")}        ${ui.gray("exit interactive mode")}`,
+      ...interactiveCommands,
       "",
       ui.bold("Shell commands (exit the workspace first)"),
       ...shellCommands,
@@ -710,6 +723,56 @@ function interactiveHelp(): string {
     ],
     outputWidth(),
   );
+}
+
+function formatApiCost(value: number): string {
+  return value < 0.01 ? `$${value.toFixed(4)}` : `$${value.toFixed(2)}`;
+}
+
+function printApiUsageReport(config: ReturnType<typeof loadConfig>["config"], period: UsagePeriod) {
+  const report = buildCostUsageReport(config, period);
+  const label =
+    period === "daily"
+      ? "today"
+      : period === "weekly"
+        ? "this week"
+        : period === "monthly"
+          ? "this month"
+          : "lifetime";
+  console.log(divider(`API-equivalent usage · ${label}`));
+  console.log(
+    `${statusIcon("info")} ${ui.gray("API list-price estimate only — this is not your subscription usage, limits, invoice, or non-token API fees.")}`,
+  );
+  console.log(
+    `${statusIcon("info")} ${ui.gray(`Prices: ${API_PRICES_SOURCE === "live" ? "refreshed from the live catalog on this run" : API_PRICES_SOURCE === "cache" ? "using the last successful catalog refresh" : "using the built-in fallback snapshot"}; catalog data last updated ${API_PRICES_LAST_UPDATED}.`)}`,
+  );
+  if (!report.records.length) {
+    console.log(
+      `${statusIcon("info")} ${ui.gray("No provider token telemetry is available for this period.")}`,
+    );
+    return;
+  }
+  console.log(
+    table(
+      ["Model", "Input", "Cache read", "Cache write", "Output", "API cost"],
+      report.models.map((entry) => [
+        entry.model,
+        entry.usage.uncachedInputTokens.toLocaleString(),
+        entry.usage.cachedInputTokens.toLocaleString(),
+        entry.usage.cacheWriteInputTokens.toLocaleString(),
+        entry.usage.outputTokens.toLocaleString(),
+        entry.apiCost === undefined ? "unpriced" : formatApiCost(entry.apiCost),
+      ]),
+    ),
+  );
+  console.log(
+    `${ui.bold("Priced subtotal")} ${ui.cyan(formatApiCost(report.apiCost))} ${ui.gray("across models with a known API list price.")}`,
+  );
+  if (report.unpricedModels.length) {
+    console.log(
+      `${statusIcon("info")} ${ui.gray(`No API price is recorded for: ${report.unpricedModels.join(", ")}. Those models remain in the token table but are excluded from the subtotal.`)}`,
+    );
+  }
 }
 
 async function chatLoop(config: any, path?: string) {
@@ -726,11 +789,7 @@ async function chatLoop(config: any, path?: string) {
     `${ui.gray("Type a task to begin, or")} ${commandColor("/help")} ${ui.gray("for interactive commands.")}`,
   );
   console.log("");
-  const completer = (line: string) => {
-    if (!line.startsWith("/")) return [[], line];
-    const hits = INTERACTIVE_COMMANDS.filter((command) => command.startsWith(line));
-    return [hits.length ? hits : INTERACTIVE_COMMANDS, line];
-  };
+  const completer = (line: string) => [interactiveCommandMatches(line), line];
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -738,6 +797,94 @@ async function chatLoop(config: any, path?: string) {
     historySize: 200,
     removeHistoryDuplicates: true,
   });
+  if (process.stdin.isTTY && process.stdout.isTTY) {
+    let lastCommandLine = "";
+    let renderedSuggestions = 0;
+    let selectedSuggestion = 0;
+    let suggestionMatches: readonly InteractiveCommandInfo[] = [];
+
+    // The dropdown is drawn below the input line using save/restore cursor
+    // sequences (\x1b[s / \x1b[u) so the physical cursor always ends up back
+    // where it started. Readline owns the input line and its own row/cursor
+    // bookkeeping exclusively; we never redraw or duplicate that line
+    // ourselves, since doing so previously desynced readline's internal
+    // model from the real terminal cursor position and corrupted the
+    // display after the first arrow press.
+    const clearRenderedSuggestions = () => {
+      if (!renderedSuggestions) return;
+      process.stdout.write("\x1b[s");
+      for (let row = 0; row < renderedSuggestions; row += 1) {
+        readline.moveCursor(process.stdout, 0, 1);
+        readline.cursorTo(process.stdout, 0);
+        readline.clearLine(process.stdout, 0);
+      }
+      process.stdout.write("\x1b[u");
+      renderedSuggestions = 0;
+    };
+
+    const renderCommandSuggestions = (
+      line: string,
+      matches = interactiveCommandSuggestions(line),
+    ) => {
+      clearRenderedSuggestions();
+      suggestionMatches = matches;
+      if (!suggestionMatches.length) return;
+      selectedSuggestion = Math.min(selectedSuggestion, suggestionMatches.length - 1);
+      const usageWidth = Math.max(...suggestionMatches.map((entry) => entry.usage.length));
+      const suggestionLines = suggestionMatches.map((entry, index) => {
+        const usage = formatCommandUsage(entry.usage.padEnd(usageWidth));
+        const row = `  ${usage}  ${ui.gray(entry.description)}`;
+        return index === selectedSuggestion ? `\x1b[7m${row}\x1b[27m` : row;
+      });
+      process.stdout.write(`\x1b[s${suggestionLines.map((entry) => `\n${entry}`).join("")}\x1b[u`);
+      renderedSuggestions = suggestionLines.length;
+    };
+
+    const moveSuggestionSelection = (direction: "up" | "down") => {
+      selectedSuggestion =
+        direction === "down"
+          ? (selectedSuggestion + 1) % suggestionMatches.length
+          : (selectedSuggestion - 1 + suggestionMatches.length) % suggestionMatches.length;
+      const selectedCommand = suggestionMatches[selectedSuggestion].command;
+
+      // Use readline's public write API so its cursor and line state stay in
+      // sync with the terminal rather than mutating rl.line directly.
+      rl.write(null, { ctrl: true, name: "u" });
+      rl.write(selectedCommand);
+      lastCommandLine = selectedCommand;
+      renderCommandSuggestions(selectedCommand, suggestionMatches);
+    };
+
+    // readline normally consumes Up/Down for shell history before emitting
+    // the keypress event. Intercept them at the terminal writer so the picker
+    // receives each navigation key exactly once.
+    const ttyWrite = (rl as any)._ttyWrite as (
+      input: string,
+      key: { name?: string } | undefined,
+    ) => void;
+    (rl as any)._ttyWrite = (input: string, key: { name?: string } | undefined) => {
+      if ((key?.name === "up" || key?.name === "down") && suggestionMatches.length) {
+        moveSuggestionSelection(key.name);
+        return;
+      }
+      ttyWrite.call(rl, input, key);
+    };
+
+    process.stdin.on("keypress", (_input: string, key: { name?: string } | undefined) => {
+      const line = rl.line;
+      if (key?.name === "up" || key?.name === "down") return;
+      if (!line.startsWith("/")) {
+        clearRenderedSuggestions();
+        suggestionMatches = [];
+        return;
+      }
+
+      if (line === lastCommandLine) return;
+      lastCommandLine = line;
+      selectedSuggestion = 0;
+      renderCommandSuggestions(line);
+    });
+  }
   const ask = () =>
     new Promise<string>((resolve) => rl.question(interactivePrompt(session, preferences), resolve));
   const askAnswer = (_question: string) =>
@@ -786,6 +933,10 @@ async function chatLoop(config: any, path?: string) {
         continue;
       }
       if (action.kind === "usage") {
+        if (action.costPeriod) {
+          printApiUsageReport(config, action.costPeriod);
+          continue;
+        }
         const report = buildUsageReport(config, action.limit ?? 20);
         console.log(
           panel(`Token usage · last ${report.records.length} measured phase(s)`, [
@@ -942,6 +1093,8 @@ async function chatLoop(config: any, path?: string) {
 async function main() {
   const raw = process.argv.slice(2);
 
+  await refreshApiPrices();
+
   if (raw[0] === "--version" || raw[0] === "-v") {
     console.log(VERSION);
     return;
@@ -961,6 +1114,10 @@ async function main() {
     ({ config, path } = loadConfig());
   }
 
+  if (raw[0] === "help") {
+    help();
+    return;
+  }
   if (raw[0] === "setup") {
     await runSetup();
     return;
@@ -1201,6 +1358,13 @@ async function main() {
     return;
   }
   if (raw[0] === "usage") {
+    if (raw[1] === "cost") {
+      const period = raw[2] ?? "lifetime";
+      if (!["daily", "weekly", "monthly", "lifetime"].includes(period) || raw[3] !== undefined)
+        throw new Error("Use: airo usage cost [daily|weekly|monthly|lifetime]");
+      printApiUsageReport(config, period as UsagePeriod);
+      return;
+    }
     const limit = Math.max(1, Number(raw[1] ?? 20));
     const report = buildUsageReport(config, limit);
     console.log(divider(`Token usage · last ${report.records.length} measured phase(s)`));
@@ -1344,7 +1508,35 @@ async function main() {
   if (raw[0] === "learning") {
     const action = raw[1] ?? "status";
     if (action === "status") printLearningStatus(config);
-    else if (action === "explain" && raw[2]) printLearningExplanation(config, raw[2]);
+    else if (action === "report") {
+      const report = learningImpactReport(config.history);
+      console.log(divider("Adaptive routing impact"));
+      if (!report.phases) {
+        console.log(`${statusIcon("info")} ${ui.gray("No routing history yet.")}`);
+      } else {
+        const pct = (value: number) => `${(value * 100).toFixed(1)}%`;
+        const delta = (value: number) => `${value >= 0 ? "+" : ""}${pct(value)}`;
+        console.log(
+          `${ui.gray("Phases")} ${report.phases} · ${ui.gray("evaluated")} ${report.evaluatedPhases}${report.splitAt ? ` · ${ui.gray("comparison split")} ${report.splitAt}` : ""}`,
+        );
+        for (const [label, key] of [
+          ["Quality", "quality"],
+          ["Completion", "completion"],
+          ["Verification", "verification"],
+        ] as const)
+          console.log(
+            `${ui.bold(label.padEnd(14))} ${pct(report.baseline[key])} → ${pct(report.recent[key])} ${ui.cyan(`(${delta(report.deltas[key])})`)}`,
+          );
+        console.log(
+          `${ui.bold("Good feedback".padEnd(14))} ${report.baseline.feedbackGood} → ${report.recent.feedbackGood} ${ui.cyan(`(${report.deltas.feedbackGood >= 0 ? "+" : ""}${report.deltas.feedbackGood})`)}`,
+        );
+        console.log(
+          ui.gray(
+            "Comparison is first half vs most recent half of local history; it is directional, not a controlled A/B test.",
+          ),
+        );
+      }
+    } else if (action === "explain" && raw[2]) printLearningExplanation(config, raw[2]);
     else if (action === "reset") {
       if (!raw.includes("--yes"))
         throw new Error(
