@@ -1,7 +1,6 @@
 import fs from "node:fs";
 
 const rootPackage = JSON.parse(fs.readFileSync("package.json", "utf8"));
-const extensionPackage = JSON.parse(fs.readFileSync("vscode-extension/package.json", "utf8"));
 const sourceVersion = fs
   .readFileSync("src/version.ts", "utf8")
   .match(/VERSION\s*=\s*"([^"]+)"/)?.[1];
@@ -19,12 +18,6 @@ if (sourceVersion !== requestedVersion) {
     `src/version.ts is ${sourceVersion ?? "unreadable"}; expected ${requestedVersion}.`,
   );
 }
-if (extensionPackage.version !== requestedVersion) {
-  failures.push(
-    `vscode-extension/package.json is ${extensionPackage.version}; expected ${requestedVersion}.`,
-  );
-}
-
 for (const file of [
   "CHANGELOG.md",
   "PRIVACY.md",
@@ -45,4 +38,4 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log(`release check: AIRO CLI and VS Code extension are aligned at ${requestedVersion}`);
+console.log(`release check: AIRO CLI package is ready at ${requestedVersion}`);

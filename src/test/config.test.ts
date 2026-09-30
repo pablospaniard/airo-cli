@@ -76,6 +76,31 @@ test("preserves explicit dynamic routing and accepts ultra effort rules", () => 
   }
 });
 
+test("upgrades legacy tier configuration without changing its model selections", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-config-legacy-tiers-"));
+  const previousHome = process.env.HOME;
+  process.env.HOME = dir;
+  try {
+    const legacyModels = {
+      fast: { model: "legacy-fast", effort: "minimal" },
+      balanced: { model: "legacy-balanced", effort: "medium" },
+      deep: { model: "legacy-deep", effort: "max" },
+    } as const;
+    fs.writeFileSync(
+      path.join(dir, ".airo.json"),
+      JSON.stringify({ codex: { models: legacyModels } }),
+    );
+
+    const loaded = loadConfig(dir).config;
+    assert.equal(loaded.modelRouting.mode, "manual");
+    assert.deepEqual(loaded.codex.models, legacyModels);
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("normalizes invalid routing policy, agent, and custom rule fields", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-config-invalid-routing-"));
   try {

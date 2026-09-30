@@ -125,7 +125,7 @@ See [AIRO for VS Code](https://github.com/pablospaniard/airo-cli/tree/main/vscod
 
 ## Models and setup
 
-AIRO discovers models exposed by each provider and maps them to the three tiers. If discovery is unavailable, it uses reviewed fallback profiles. Existing configurations created before dynamic routing retain their pinned mappings.
+AIRO discovers every model exposed by each provider and applies the same catalogue policy to all of them. Provider ordering, rather than hardcoded vendor model-family names, supplies the dynamic fast/balanced/deep mapping. Tiers remain routing intent; if discovery is unavailable, AIRO uses reviewed fallback profiles. Existing configurations created before dynamic routing retain their pinned mappings.
 
 ```bash
 airo setup       # review permissions and provider setup

@@ -190,7 +190,7 @@ test("a failing `debug models` does not hide the file catalogue", async () => {
   });
 });
 
-test("claude models come from the tier environment, then settings", async () => {
+test("claude models come from configured defaults, then settings", async () => {
   await withSandbox(async (home) => {
     const config = structuredClone(DEFAULT_CONFIG);
     config.claude.command = fakeCli(home, "claude", "1.0.0", "");
@@ -218,7 +218,7 @@ test("claude models come from the tier environment, then settings", async () => 
     const environment = await discoverCatalog("claude", config, { cwd, refresh: true });
     assert.equal(environment.source, "environment");
     assert.equal(environment.models[0].id, "gateway-opus");
-    assert.equal(environment.models[0].label, "opus");
+    assert.equal(environment.models[0].label, "configured default");
   });
 });
 
@@ -271,7 +271,7 @@ test("gemini and copilot are only probed through an advertised `models` subcomma
   });
 });
 
-test("a gateway fills in only for an empty local probe, and only when online", async () => {
+test("an online gateway augments every local catalogue, and only when online", async () => {
   await withSandbox(async (home) => {
     const seen: string[] = [];
     const server = http.createServer((request, response) => {
@@ -305,7 +305,8 @@ test("a gateway fills in only for an empty local probe, and only when online", a
       assert.ok(online.models.some((model) => model.id === "gw-model"));
       assert.deepEqual(seen, ["/v1/models Bearer secret"]);
 
-      // A versioned base URL is used as given, and a local probe wins over it.
+      // A versioned base URL is used as given, and its models are merged with
+      // local configuration instead of being discarded.
       process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${port}/v1`;
       process.env.ANTHROPIC_DEFAULT_SONNET_MODEL = "local-sonnet";
       const local = await discoverCatalog("claude", config, {
@@ -314,7 +315,9 @@ test("a gateway fills in only for an empty local probe, and only when online", a
         online: true,
       });
       assert.equal(local.source, "environment");
-      assert.equal(seen.length, 1);
+      assert.ok(local.models.some((model) => model.id === "local-sonnet"));
+      assert.ok(local.models.some((model) => model.id === "gw-model"));
+      assert.equal(seen.length, 2);
 
       delete process.env.ANTHROPIC_DEFAULT_SONNET_MODEL;
       const versioned = await discoverCatalog("claude", config, {
