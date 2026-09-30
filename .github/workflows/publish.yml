@@ -1,7 +1,12 @@
-name: Publish to npm
+name: Publish production release
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: Stable version to publish, without the v prefix
+        required: true
+        type: string
   release:
     types: [published]
 
@@ -9,14 +14,23 @@ permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
 jobs:
   publish:
     if: github.repository == 'pablospaniard/airo-cli'
     runs-on: ubuntu-latest
+    environment: production
+    env:
+      RELEASE_VERSION: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.version }}
 
     steps:
-      - name: Check out repository
+      - name: Check out release tag
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || format('v{0}', inputs.version) }}
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -26,17 +40,41 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version: 22
           registry-url: https://registry.npmjs.org
           cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Validate
+      - name: Verify release versions and metadata
+        run: pnpm run release:check
+
+      - name: Validate production build
         run: pnpm run validate
 
-      - name: Publish package
+      - name: Build and smoke-test npm package
+        shell: bash
+        run: |
+          package_dir="${RUNNER_TEMP}/airo-package"
+          install_dir="${RUNNER_TEMP}/airo-install"
+          mkdir -p "${package_dir}" "${install_dir}"
+          pnpm pack --pack-destination "${package_dir}"
+          npm install --global --prefix "${install_dir}" "${package_dir}/airo-ai-router-${RELEASE_VERSION#v}.tgz"
+          test "$("${install_dir}/bin/airo" --version)" = "${RELEASE_VERSION#v}"
+          test "$("${install_dir}/bin/ai-router" --version)" = "${RELEASE_VERSION#v}"
+          test "$("${install_dir}/bin/airoute" --version)" = "${RELEASE_VERSION#v}"
+          test "$("${install_dir}/bin/ai-route" --version)" = "${RELEASE_VERSION#v}"
+
+      - name: Package VS Code extension
+        run: pnpm run package:extension
+
+      - name: Publish npm package
         run: pnpm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish VS Code extension
+        run: pnpm --dir vscode-extension dlx @vscode/vsce@4.0.0 publish --no-dependencies
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}

@@ -2,12 +2,12 @@
 
 ## Decision status
 
-Jev is not a required routing dependency or a replacement for AIRO's router. The current source tree implements two bounded uses:
+Jev is not a required routing dependency or a replacement for AIRO's router. AIRO 1.0 implements two bounded uses:
 
-1. An unpublished development evaluator that supplies semantic labels and decision feedback for improving AIRO's shipped routing policy. The Milestone 3 evaluator, split dataset, comparison report, and review gate are implemented on the development branch for synthetic privacy-reviewed fixtures only.
-2. An optional production feedback integration on the development branch that uses the user's API key, runs after a task, stores feedback locally, and may improve later automatic decisions.
+1. An unpublished development evaluator that supplies semantic labels and decision feedback for improving AIRO's shipped routing policy. The Milestone 3 evaluator, split dataset, comparison report, and review gate use synthetic privacy-reviewed fixtures only.
+2. An optional production feedback integration in AIRO 1.0 that uses the user's API key, runs after a task, stores feedback locally, and may improve later automatic decisions.
 
-The development evaluator is not part of the published runtime and does not run in CI against the external service. Optional production feedback is implemented on the development branch but is not yet part of the published npm package. The complete provider, learning, sync, and research roadmap is recorded in [Routing platform roadmap](routing-platform-roadmap.md).
+The development evaluator is not part of the published runtime and does not run in CI against the external service. Optional production feedback is part of AIRO 1.0 and remains disabled until the user explicitly consents. The complete provider, learning, sync, and research roadmap is recorded in [Routing platform roadmap](routing-platform-roadmap.md).
 
 The findings and development CLI interface here are based on public documentation reviewed on September 27, 2026. Jev is an external, evolving service, so its API, model versions, data practices, and limitations must be verified again before future integration changes or production use.
 
@@ -103,7 +103,7 @@ Generated reports stay under the ignored `.airo-dev/` directory because they con
 
 ## Optional production feedback
 
-The development-branch production integration is post-run feedback, not live route selection:
+The production integration is post-run feedback, not live route selection:
 
 ```text
 AIRO selects locally
@@ -171,7 +171,7 @@ one-run opt-out without leaving the session.
 
 ## Cloud sync interaction
 
-When a development-branch user separately enables encrypted multi-device sync and runs `airo sync now`, local Jev feedback is synchronized as another client-encrypted event. The TypeSafe API key and Jev consent record never sync. A new machine decrypts the feedback locally and rebuilds learning from the merged evidence.
+When a user separately enables encrypted multi-device sync and runs `airo sync now`, local Jev feedback is synchronized as another client-encrypted event. The TypeSafe API key and Jev consent record never sync. A new machine decrypts the feedback locally and rebuilds learning from the merged evidence.
 
 End-to-end encrypted sync data is not available for global AIRO research. Research submission requires a separate granular consent and a separately constructed server-readable payload. See the research milestone in [Routing platform roadmap](routing-platform-roadmap.md).
 

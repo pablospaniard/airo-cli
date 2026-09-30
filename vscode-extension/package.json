@@ -1,10 +1,18 @@
 {
   "name": "airo-vscode",
   "displayName": "AIRO",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "A full AIRO chat workspace in the VS Code sidebar.",
   "categories": [
     "Other"
+  ],
+  "keywords": [
+    "ai",
+    "claude",
+    "codex",
+    "copilot",
+    "gemini",
+    "orchestration"
   ],
   "homepage": "https://github.com/pablospaniard/airo-cli#readme",
   "bugs": {
@@ -19,7 +27,8 @@
   "main": "./out/extension.js",
   "scripts": {
     "compile": "tsc -p ./",
-    "package": "pnpm dlx @vscode/vsce package --no-dependencies"
+    "vscode:prepublish": "pnpm run compile",
+    "package": "pnpm dlx @vscode/vsce@4.0.0 package --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

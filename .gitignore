@@ -1,6 +1,7 @@
 node_modules/
 dist/
 *.vsix
+.DS_Store
 .ai-router-history.jsonl
 .airo-dev/
 .wrangler/

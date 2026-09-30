@@ -1,10 +1,10 @@
 # AIRO encrypted sync Worker
 
-This directory contains the optional Cloudflare Worker used by AIRO's development-branch sync milestone. The npm package does not need this service for routing, orchestration, portable archives, or local learning.
+This directory contains the optional self-hosted Cloudflare Worker used by AIRO's encrypted sync feature. The npm package does not need this service for routing, orchestration, portable archives, or local learning.
 
 The CLI completes GitHub's device flow directly. It sends the resulting short-lived GitHub token once to the Worker, which validates the account with GitHub and discards the token. The Worker stores only hashes of AIRO session tokens and persists opaque encrypted event and setting envelopes in D1. Encryption and recovery-key handling happen in the CLI. Provider credentials, API keys, executable paths, permission settings, and Jev consent are outside the sync schema.
 
-Deploy the Worker under an application-owned HTTPS URL and configure that URL explicitly in the client. This does not make sync part of the currently published npm package.
+Deploy the Worker under an application-owned HTTPS URL and configure that URL explicitly in the client.
 
 ## Provisioning
 

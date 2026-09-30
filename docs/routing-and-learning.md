@@ -1,6 +1,6 @@
 # Routing rules and learning
 
-This document describes routing behavior in the current source tree. Published `airo-ai-router@0.7.1` predates the completed development-branch Milestones 1–5 additions; the roadmap tracks that release boundary. For provider registration, portable learning, optional Jev feedback, encrypted sync, and research consent, see [Routing platform roadmap](routing-platform-roadmap.md). [Jev and AIRO](jev-and-airo.md) records Jev's narrower role.
+This document describes routing behavior in AIRO 1.0. For provider registration, portable learning, optional Jev feedback, encrypted sync, and future research work, see [Routing platform roadmap](routing-platform-roadmap.md). [Jev and AIRO](jev-and-airo.md) records Jev's narrower role.
 
 AIRO makes a routing decision in two parts:
 
@@ -153,7 +153,7 @@ These preferences do not replace a provider, model, or tier explicitly selected 
 
 Learning is local, file-based, and repository-scoped by default. AIRO does not train a provider model or maintain a separate learned-weights file.
 
-Published `airo-ai-router@0.7.1` does not sync history between machines. The development branch implements portable encrypted export/import and optional end-to-end encrypted Cloudflare sync; these must not be presented as released npm behavior until the release process completes. Without explicitly enabling and invoking sync, the files below remain local.
+AIRO 1.0 supports portable encrypted export/import and optional self-hosted end-to-end encrypted Cloudflare sync. Without explicitly enabling and invoking sync, the files below remain local.
 
 Unless `history.path` is configured, records are stored at:
 
@@ -277,7 +277,7 @@ airo learning reset --yes
 
 ## Optional local Jev feedback
 
-On the development branch, Jev can evaluate a completed journey and provide a lower-priority signal for future automatic routes. It never selects the current route, is disabled by default, and is not required for core operation.
+When explicitly enabled, Jev can evaluate a completed journey and provide a lower-priority signal for future automatic routes. It never selects the current route, is disabled by default, and is not required for core operation.
 
 ```bash
 airo feedback jev enable
