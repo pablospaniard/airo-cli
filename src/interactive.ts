@@ -37,25 +37,61 @@ export type InteractiveAction =
   | { kind: "set-log"; value: LogLevel }
   | { kind: "error"; message: string };
 
-export const INTERACTIVE_COMMANDS = [
-  "/help",
-  "/status",
-  "/new",
-  "/sessions",
-  "/models",
-  "/account",
-  "/usage",
-  "/logs",
-  "/attach",
-  "/no-jev",
-  "/feedback",
-  "/learning",
-  "/mode",
-  "/agent",
-  "/tier",
-  "/log",
-  "/clear",
-  "/exit",
+export interface InteractiveCommandInfo {
+  /** The bare word readline should insert when this command is selected. */
+  command: string;
+  /** Usage shown in the picker; `<required>` and `[optional]` args are highlighted. */
+  usage: string;
+  description: string;
+}
+
+export const INTERACTIVE_COMMANDS: readonly InteractiveCommandInfo[] = [
+  { command: "/help", usage: "/help, /?", description: "show this reference" },
+  { command: "/status", usage: "/status", description: "show session and run preferences" },
+  { command: "/new", usage: "/new [title]", description: "start a fresh session" },
+  { command: "/sessions", usage: "/sessions", description: "list repository sessions" },
+  { command: "/models", usage: "/models", description: "show active model mapping" },
+  { command: "/account", usage: "/account", description: "show provider accounts" },
+  {
+    command: "/usage",
+    usage: "/usage [limit] | /usage cost [period]",
+    description: "show token usage, or an API-price cost estimate",
+  },
+  { command: "/logs", usage: "/logs", description: "show recent run logs" },
+  {
+    command: "/attach",
+    usage: "/attach <file-path>",
+    description: "attach a local image, PDF, Markdown, or JSON file to the next task",
+  },
+  {
+    command: "/no-jev",
+    usage: "/no-jev <task>",
+    description: "run one task without sending it to Jev",
+  },
+  {
+    command: "/feedback",
+    usage: "/feedback good|bad [note] | /feedback phase <id> good|bad [note]",
+    description: "rate the latest run or one phase",
+  },
+  {
+    command: "/learning",
+    usage: "/learning status|explain <id>|reset --yes",
+    description: "inspect or reset learning",
+  },
+  { command: "/mode", usage: "/mode auto|adaptive|single", description: "set workflow mode" },
+  {
+    command: "/agent",
+    usage: "/agent auto|claude|codex|gemini|copilot",
+    description: "select provider",
+  },
+  {
+    command: "/tier",
+    usage: "/tier auto|fast|balanced|deep",
+    description: "set model tier",
+  },
+  { command: "/log", usage: "/log compact|live|verbose", description: "set output detail" },
+  { command: "/clear", usage: "/clear", description: "clear the screen" },
+  { command: "/exit", usage: "/exit, /quit", description: "exit interactive mode" },
 ];
 
 /** Commands intentionally kept outside the live readline session. */
@@ -71,10 +107,18 @@ export const INTERACTIVE_SHELL_HELP = [
   ["airo sync delete-cloud-data --yes", "delete cloud data"],
 ] as const;
 
-export function interactiveCommandMatches(input: string): readonly string[] {
+/** Full command info for each match, in picker order, for rendering usage + description. */
+export function interactiveCommandSuggestions(input: string): readonly InteractiveCommandInfo[] {
   if (!input.startsWith("/")) return [];
-  const matches = INTERACTIVE_COMMANDS.filter((command) => command.startsWith(input.toLowerCase()));
+  const matches = INTERACTIVE_COMMANDS.filter((entry) =>
+    entry.command.startsWith(input.toLowerCase()),
+  );
   return matches.length ? matches : INTERACTIVE_COMMANDS;
+}
+
+/** Bare command words for readline's tab completer. */
+export function interactiveCommandMatches(input: string): readonly string[] {
+  return interactiveCommandSuggestions(input).map((entry) => entry.command);
 }
 
 /** Normalize the path most terminals insert when a file is dragged into readline. */

@@ -63,11 +63,14 @@ import type { Agent, Effort, FeedbackRating, LogLevel, ModelTier, SessionState }
 import { VERSION } from "./version.js";
 import {
   cleanDroppedPath,
+  INTERACTIVE_COMMANDS,
   interactiveCommandMatches,
+  interactiveCommandSuggestions,
   INTERACTIVE_SHELL_HELP,
   isSupportedAttachmentPath,
   parseInteractiveInput,
   taskArgs,
+  type InteractiveCommandInfo,
   type InteractivePreferences,
 } from "./interactive.js";
 import { migrateLegacyPaths } from "./paths.js";
@@ -82,6 +85,7 @@ import {
   processedTokens,
   type UsagePeriod,
 } from "./usage.js";
+import { API_PRICES_LAST_UPDATED, API_PRICES_SOURCE, refreshApiPrices } from "./pricing.js";
 import { firstRunWelcome } from "./welcome.js";
 import { auditProviderSupport } from "./provider-support.js";
 import { exportLearningArchive, importLearningArchive } from "./history-archive.js";
@@ -165,13 +169,13 @@ function help() {
   console.log("");
   console.log(ui.bold("Observability"));
   console.log(
-    `  ${commandColor("airo logs [runId]")}                       ${ui.gray("show persisted logs")}`,
+    `  ${formatCommandUsage("airo logs [runId]")}                       ${ui.gray("show persisted logs")}`,
   );
   console.log(
-    `  ${commandColor("airo logs --follow [runId]")}              ${ui.gray("follow a run live")}`,
+    `  ${formatCommandUsage("airo logs --follow [runId]")}              ${ui.gray("follow a run live")}`,
   );
   console.log(
-    `  ${commandColor("airo history [limit]")}                    ${ui.gray("show routing history")}`,
+    `  ${formatCommandUsage("airo history [limit]")}                    ${ui.gray("show routing history")}`,
   );
   console.log(
     `  ${commandColor("airo history export --encrypted <file>")}  ${ui.gray("export portable learning evidence")}`,
@@ -183,10 +187,10 @@ function help() {
     `  ${commandColor("airo repository id|link <id>")}            ${ui.gray("inspect or link the learning scope")}`,
   );
   console.log(
-    `  ${commandColor("airo usage [limit]")}                      ${ui.gray("show token use and measured savings")}`,
+    `  ${formatCommandUsage("airo usage [limit]")}                      ${ui.gray("show token use and measured savings")}`,
   );
   console.log(
-    `  ${commandColor("airo usage cost [period]")}                ${ui.gray("estimate API list-price usage by model")}`,
+    `  ${formatCommandUsage("airo usage cost [period]")}                ${ui.gray("estimate API list-price usage by model")}`,
   );
   console.log(
     `  ${commandColor("airo feedback good|bad ...")}              ${ui.gray("rate the latest run")}`,
@@ -221,7 +225,7 @@ function help() {
     `  ${commandColor("airo sessions")}                           ${ui.gray("list repo sessions")}`,
   );
   console.log(
-    `  ${commandColor('airo session new ["task"]')}              ${ui.gray("start fresh")}`,
+    `  ${formatCommandUsage('airo session new ["task"]')}              ${ui.gray("start fresh")}`,
   );
   console.log(
     `  ${commandColor("airo session clear")}                      ${ui.gray("clear active session")}`,
@@ -690,34 +694,28 @@ function interactiveStatus(
   ]);
 }
 
+/** Render command usage consistently, with optional arguments called out in yellow. */
+function formatCommandUsage(usage: string): string {
+  return usage
+    .split(/(\[[^\]]+\])/)
+    .map((part) => (/^\[[^\]]+\]$/.test(part) ? ui.bold(ui.yellow(part)) : commandColor(part)))
+    .join("");
+}
+
 function interactiveHelp(): string {
   const shellCommands = INTERACTIVE_SHELL_HELP.map(
-    ([usage, description]) => `${commandColor(usage)}  ${ui.gray(description)}`,
+    ([usage, description]) => `${formatCommandUsage(usage)}  ${ui.gray(description)}`,
+  );
+  const commandWidth = Math.max(...INTERACTIVE_COMMANDS.map((entry) => entry.usage.length));
+  const interactiveCommands = INTERACTIVE_COMMANDS.map(
+    (entry) =>
+      `${formatCommandUsage(entry.usage.padEnd(commandWidth))}  ${ui.gray(entry.description)}`,
   );
   return panel(
     "Command reference",
     [
       ui.bold("Interactive commands"),
-      `${commandColor("/help, /?")}          ${ui.gray("show this reference")}`,
-      `${commandColor("/new [title]")}        ${ui.gray("start a fresh session")}`,
-      `${commandColor("/status")}             ${ui.gray("show session and run preferences")}`,
-      `${commandColor("/mode auto|adaptive|single")} ${ui.gray("set workflow mode")}`,
-      `${commandColor("/agent auto|claude|codex|gemini|copilot")} ${ui.gray("select provider")}`,
-      `${commandColor("/tier auto|fast|balanced|deep")} ${ui.gray("set model tier")}`,
-      `${commandColor("/log compact|live|verbose")}  ${ui.gray("set output detail")}`,
-      `${commandColor("/models")}             ${ui.gray("show active model mapping")}`,
-      `${commandColor("/account")}            ${ui.gray("show provider accounts")}`,
-      `${commandColor("/usage [limit]")}      ${ui.gray("show token usage")}`,
-      `${commandColor("/usage cost [period]")} ${ui.gray("API-price estimate: daily, weekly, monthly, or lifetime")}`,
-      `${commandColor("/logs")}               ${ui.gray("show recent run logs")}`,
-      `${commandColor("/attach <file-path>")} ${ui.gray("attach a local image, PDF, Markdown, or JSON file to the next task")}`,
-      `${commandColor("/no-jev <task>")}       ${ui.gray("run one task without sending it to Jev")}`,
-      `${commandColor("/feedback good|bad [note]")} ${ui.gray("rate the latest run")}`,
-      `${commandColor("/feedback phase <id> good|bad [note]")} ${ui.gray("rate one phase")}`,
-      `${commandColor("/learning status|explain <id>|reset --yes")} ${ui.gray("inspect or reset learning")}`,
-      `${commandColor("/sessions")}           ${ui.gray("list repository sessions")}`,
-      `${commandColor("/clear")}              ${ui.gray("clear the screen")}`,
-      `${commandColor("/exit, /quit")}        ${ui.gray("exit interactive mode")}`,
+      ...interactiveCommands,
       "",
       ui.bold("Shell commands (exit the workspace first)"),
       ...shellCommands,
@@ -744,6 +742,9 @@ function printApiUsageReport(config: ReturnType<typeof loadConfig>["config"], pe
   console.log(divider(`API-equivalent usage · ${label}`));
   console.log(
     `${statusIcon("info")} ${ui.gray("API list-price estimate only — this is not your subscription usage, limits, invoice, or non-token API fees.")}`,
+  );
+  console.log(
+    `${statusIcon("info")} ${ui.gray(`Prices: ${API_PRICES_SOURCE === "live" ? "refreshed from the live catalog on this run" : API_PRICES_SOURCE === "cache" ? "using the last successful catalog refresh" : "using the built-in fallback snapshot"}; catalog data last updated ${API_PRICES_LAST_UPDATED}.`)}`,
   );
   if (!report.records.length) {
     console.log(
@@ -799,22 +800,89 @@ async function chatLoop(config: any, path?: string) {
   if (process.stdin.isTTY && process.stdout.isTTY) {
     let lastCommandLine = "";
     let renderedSuggestions = 0;
-    process.stdin.on("keypress", () => {
-      const line = rl.line;
-      if (!line.startsWith("/")) {
-        renderedSuggestions = 0;
+    let selectedSuggestion = 0;
+    let suggestionMatches: readonly InteractiveCommandInfo[] = [];
+
+    // The dropdown is drawn below the input line using save/restore cursor
+    // sequences (\x1b[s / \x1b[u) so the physical cursor always ends up back
+    // where it started. Readline owns the input line and its own row/cursor
+    // bookkeeping exclusively; we never redraw or duplicate that line
+    // ourselves, since doing so previously desynced readline's internal
+    // model from the real terminal cursor position and corrupted the
+    // display after the first arrow press.
+    const clearRenderedSuggestions = () => {
+      if (!renderedSuggestions) return;
+      process.stdout.write("\x1b[s");
+      for (let row = 0; row < renderedSuggestions; row += 1) {
+        readline.moveCursor(process.stdout, 0, 1);
+        readline.cursorTo(process.stdout, 0);
+        readline.clearLine(process.stdout, 0);
+      }
+      process.stdout.write("\x1b[u");
+      renderedSuggestions = 0;
+    };
+
+    const renderCommandSuggestions = (
+      line: string,
+      matches = interactiveCommandSuggestions(line),
+    ) => {
+      clearRenderedSuggestions();
+      suggestionMatches = matches;
+      if (!suggestionMatches.length) return;
+      selectedSuggestion = Math.min(selectedSuggestion, suggestionMatches.length - 1);
+      const usageWidth = Math.max(...suggestionMatches.map((entry) => entry.usage.length));
+      const suggestionLines = suggestionMatches.map((entry, index) => {
+        const usage = formatCommandUsage(entry.usage.padEnd(usageWidth));
+        const row = `  ${usage}  ${ui.gray(entry.description)}`;
+        return index === selectedSuggestion ? `\x1b[7m${row}\x1b[27m` : row;
+      });
+      process.stdout.write(`\x1b[s${suggestionLines.map((entry) => `\n${entry}`).join("")}\x1b[u`);
+      renderedSuggestions = suggestionLines.length;
+    };
+
+    const moveSuggestionSelection = (direction: "up" | "down") => {
+      selectedSuggestion =
+        direction === "down"
+          ? (selectedSuggestion + 1) % suggestionMatches.length
+          : (selectedSuggestion - 1 + suggestionMatches.length) % suggestionMatches.length;
+      const selectedCommand = suggestionMatches[selectedSuggestion].command;
+
+      // Use readline's public write API so its cursor and line state stay in
+      // sync with the terminal rather than mutating rl.line directly.
+      rl.write(null, { ctrl: true, name: "u" });
+      rl.write(selectedCommand);
+      lastCommandLine = selectedCommand;
+      renderCommandSuggestions(selectedCommand, suggestionMatches);
+    };
+
+    // readline normally consumes Up/Down for shell history before emitting
+    // the keypress event. Intercept them at the terminal writer so the picker
+    // receives each navigation key exactly once.
+    const ttyWrite = (rl as any)._ttyWrite as (
+      input: string,
+      key: { name?: string } | undefined,
+    ) => void;
+    (rl as any)._ttyWrite = (input: string, key: { name?: string } | undefined) => {
+      if ((key?.name === "up" || key?.name === "down") && suggestionMatches.length) {
+        moveSuggestionSelection(key.name);
         return;
       }
+      ttyWrite.call(rl, input, key);
+    };
+
+    process.stdin.on("keypress", (_input: string, key: { name?: string } | undefined) => {
+      const line = rl.line;
+      if (key?.name === "up" || key?.name === "down") return;
+      if (!line.startsWith("/")) {
+        clearRenderedSuggestions();
+        suggestionMatches = [];
+        return;
+      }
+
       if (line === lastCommandLine) return;
       lastCommandLine = line;
-      const matches = interactiveCommandMatches(line);
-      readline.cursorTo(process.stdout, 0);
-      readline.clearLine(process.stdout, 0);
-      if (renderedSuggestions) readline.moveCursor(process.stdout, 0, -renderedSuggestions);
-      process.stdout.write(
-        `${interactivePrompt(session, preferences)}${line}\n${matches.map((command) => `  ${command}`).join("\n")}\n${interactivePrompt(session, preferences)}${line}`,
-      );
-      renderedSuggestions = matches.length + 1;
+      selectedSuggestion = 0;
+      renderCommandSuggestions(line);
     });
   }
   const ask = () =>
@@ -1025,6 +1093,8 @@ async function chatLoop(config: any, path?: string) {
 async function main() {
   const raw = process.argv.slice(2);
 
+  await refreshApiPrices();
+
   if (raw[0] === "--version" || raw[0] === "-v") {
     console.log(VERSION);
     return;
@@ -1044,6 +1114,10 @@ async function main() {
     ({ config, path } = loadConfig());
   }
 
+  if (raw[0] === "help") {
+    help();
+    return;
+  }
   if (raw[0] === "setup") {
     await runSetup();
     return;

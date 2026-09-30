@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   cleanDroppedPath,
+  interactiveCommandSuggestions,
   INTERACTIVE_SHELL_HELP,
   isSupportedAttachmentPath,
   parseFeedbackAnswer,
@@ -120,6 +121,17 @@ test("advertises shell-only Jev and sync command families from interactive help"
   assert.match(commands, /airo sync login\|enable\|now\|status/);
   assert.match(commands, /airo sync devices\|export\|logout/);
   assert.match(commands, /airo sync delete-cloud-data --yes/);
+});
+
+test("provides picker descriptions and complete usage, including optional arguments", () => {
+  const newCommand = interactiveCommandSuggestions("/new");
+  assert.deepEqual(newCommand, [
+    { command: "/new", usage: "/new [title]", description: "start a fresh session" },
+  ]);
+
+  const feedback = interactiveCommandSuggestions("/feedback")[0];
+  assert.equal(feedback.usage, "/feedback good|bad [note] | /feedback phase <id> good|bad [note]");
+  assert.equal(feedback.description, "rate the latest run or one phase");
 });
 
 test("builds minimal CLI arguments for automatic preferences", () => {

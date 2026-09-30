@@ -222,7 +222,7 @@ AIRO 1.0 preserves existing configuration and history:
 ## Development
 
 ```bash
-corepack enable
+npm install --global pnpm@9.6.0
 pnpm install
 pnpm run validate
 pnpm run build:sync-worker

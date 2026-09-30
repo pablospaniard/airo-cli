@@ -1,3 +1,6 @@
 packages:
-  - vscode-extension
-  - sync-worker
+    - vscode-extension
+    - sync-worker
+onlyBuiltDependencies:
+    - esbuild
+    - workerd
