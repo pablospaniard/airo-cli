@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.2 - 2026-09-30
+
+### Changed
+
+- Use one provider-neutral catalog pipeline for dynamic model discovery across all supported providers.
+- Discover all eligible models exposed by installed providers instead of filtering through hardcoded tiers.
+- Preserve existing manual model configurations while allowing dynamic mode to use newly discovered models.
+
 ## 1.0.1 - 2026-09-30
 
 ### Fixed

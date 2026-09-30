@@ -40,7 +40,7 @@ test("catalog reads tolerate invalid cache data and retain current configured mo
     assert.equal(fs.existsSync(dir), false, "a cache read should not create directories");
     fs.mkdirSync(dir, { recursive: true });
     for (const entries of [null, [], { codex: {} }, { codex: { models: [null] } }]) {
-      fs.writeFileSync(file, JSON.stringify({ version: 4, entries }));
+      fs.writeFileSync(file, JSON.stringify({ version: 5, entries }));
       assert.equal(cachedCatalog("codex"), undefined);
       assert.ok(candidateModels("codex", DEFAULT_CONFIG).length);
     }
@@ -49,7 +49,7 @@ test("catalog reads tolerate invalid cache data and retain current configured mo
     fs.writeFileSync(
       file,
       JSON.stringify({
-        version: 4,
+        version: 5,
         entries: {
           codex: {
             agent: "codex",
@@ -79,6 +79,42 @@ test("catalog reads tolerate invalid cache data and retain current configured mo
   }
 });
 
+test("an older catalog cache is ignored after the selection logic changes", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "airo-catalog-legacy-cache-"));
+  const previous = process.env.HOME;
+  process.env.HOME = home;
+  const dir = path.join(home, ".local", "share", "airo");
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "model-catalog.json"),
+      JSON.stringify({
+        version: 4,
+        entries: {
+          codex: {
+            agent: "codex",
+            models: [{ id: "stale-model" }],
+            detectedModels: [{ id: "stale-model" }],
+            source: "cli",
+            fingerprint: "old@1",
+            contextFingerprint: "old-context",
+            probedAt: new Date().toISOString(),
+          },
+        },
+      }),
+    );
+
+    assert.equal(cachedCatalog("codex"), undefined);
+    assert.ok(
+      !candidateModels("codex", DEFAULT_CONFIG).some((model) => model.id === "stale-model"),
+    );
+  } finally {
+    if (previous === undefined) delete process.env.HOME;
+    else process.env.HOME = previous;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("maps detected provider models onto tiers without changing the saved config", () => {
   const config = structuredClone(DEFAULT_CONFIG);
   const catalogs = {
@@ -88,7 +124,7 @@ test("maps detected provider models onto tiers without changing the saved config
       { id: "gpt-5.6-terra", efforts: ["low", "medium", "high"] },
       { id: "gpt-5.6-luna", efforts: ["low", "medium"] },
     ]),
-    gemini: catalog("gemini", [{ id: "gemini-3-flash" }, { id: "gemini-3-pro" }]),
+    gemini: catalog("gemini", [{ id: "gemini-3-pro" }, { id: "gemini-3-flash" }]),
     copilot: catalog("copilot", []),
   };
 

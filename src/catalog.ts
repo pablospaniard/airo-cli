@@ -69,7 +69,7 @@ export interface ProviderCatalogAdapter {
   gateway?: () => { base: string; token?: string } | undefined;
 }
 
-const CACHE_VERSION = 4;
+const CACHE_VERSION = 5;
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 export { AGENTS } from "./providers.js";
 
@@ -160,7 +160,6 @@ function configuredModels(agent: Agent, config: RouterConfig): CatalogModel[] {
   return unique([
     ...Object.values(config[agent].models).map((profile) => ({ id: profile.model })),
     ...(config[agent].allowedModels ?? []).map((id) => ({ id })),
-    ...Object.values(DEFAULT_CONFIG[agent].models).map((profile) => ({ id: profile.model })),
   ]);
 }
 
@@ -231,16 +230,15 @@ function readJsonText(text: string): unknown {
 }
 
 /**
- * Claude Code has no model-listing command. It does honour
- * ANTHROPIC_DEFAULT_{HAIKU,SONNET,OPUS}_MODEL, which map exactly onto AIRO's
- * three tiers, so a gateway deployment states its own ids there.
+ * Claude Code has no model-listing command. Its configured defaults are still
+ * catalogue inputs, but this layer never assigns their names to AIRO tiers.
  */
 function probeClaude(cwd: string): Partial<ProviderCatalog> {
   const environment = loginShellEnvironment();
   const fromEnvironment = ["HAIKU", "SONNET", "OPUS"]
     .map((alias) => ({
       id: environment[`ANTHROPIC_DEFAULT_${alias}_MODEL`]?.trim() ?? "",
-      label: alias.toLowerCase(),
+      label: "configured default",
     }))
     .filter((model) => model.id);
   const settings = [
@@ -368,8 +366,8 @@ export const PROVIDER_CATALOG_ADAPTERS: Record<Agent, ProviderCatalogAdapter> = 
     contextInputs: codexContextInputs,
     gateway: codexGateway,
   },
-  gemini: { probeLocal: probeGenericCli, contextInputs: noContextInputs },
-  copilot: { probeLocal: probeGenericCli, contextInputs: noContextInputs },
+  gemini: { probeLocal: () => ({}), contextInputs: noContextInputs },
+  copilot: { probeLocal: () => ({}), contextInputs: noContextInputs },
 };
 
 export function providerCatalogAdapter(agent: Agent): ProviderCatalogAdapter {
@@ -378,8 +376,8 @@ export function providerCatalogAdapter(agent: Agent): ProviderCatalogAdapter {
 
 /**
  * Ask an OpenAI-compatible gateway what the key may route to. The answer is a
- * superset of what a given CLI accepts (it spans wire protocols), so it only
- * ever fills in for an empty local probe — it must not replace a CLI catalogue.
+ * superset of what a given CLI accepts (it spans wire protocols), so it augments
+ * native results only when the user explicitly requests an online refresh.
  */
 async function probeGateway(agent: Agent): Promise<Partial<ProviderCatalog>> {
   const gateway = providerCatalogAdapter(agent).gateway?.();
@@ -412,7 +410,34 @@ async function probeGateway(agent: Agent): Promise<Partial<ProviderCatalog>> {
 }
 
 function probeLocal(agent: Agent, config: RouterConfig, cwd: string): Partial<ProviderCatalog> {
-  return providerCatalogAdapter(agent).probeLocal(config[agent].command, cwd);
+  const native = providerCatalogAdapter(agent).probeLocal(config[agent].command, cwd);
+  // Every provider gets the same safe CLI catalogue pass. Native probes only
+  // cover formats that cannot be expressed as `models [list]`.
+  const generic = probeGenericCli(config[agent].command);
+  const models = unique([...(native.models ?? []), ...(generic.models ?? [])]);
+  const sources = [native, generic].filter((probe) => probe.models?.length);
+  if (!models.length) return { note: native.note ?? generic.note };
+  return {
+    models,
+    source: native.source ?? generic.source ?? "cli",
+    via: sources
+      .map((probe) => probe.via)
+      .filter(Boolean)
+      .join("; "),
+  };
+}
+
+function mergeProbes(
+  local: Partial<ProviderCatalog>,
+  gateway: Partial<ProviderCatalog>,
+): Partial<ProviderCatalog> {
+  const models = unique([...(local.models ?? []), ...(gateway.models ?? [])]);
+  if (!models.length) return local;
+  return {
+    models,
+    source: local.source ?? gateway.source ?? "cli",
+    via: [local.via, gateway.via].filter(Boolean).join("; "),
+  };
 }
 
 function finish(
@@ -489,8 +514,9 @@ export async function discoverCatalog(
     return cached;
 
   const probe = probeLocal(agent, config, cwd);
-  const enriched =
-    options.online && !probe.models?.length ? { ...probe, ...(await probeGateway(agent)) } : probe;
+  // An online catalogue augments, rather than replaces, native results. This
+  // exposes the complete model set a configured gateway can serve.
+  const enriched = options.online ? mergeProbes(probe, await probeGateway(agent)) : probe;
   const entry = finish(agent, config, enriched, fingerprint, contextFingerprint);
   writeCache(entry);
   return entry;
@@ -514,12 +540,6 @@ export function candidateModels(agent: Agent, config: RouterConfig): CatalogMode
   const cached = cachedCatalog(agent);
   return unique([...(cached?.models ?? []), ...configuredModels(agent, config)]);
 }
-
-const TIER_SIGNALS: Record<ModelTier, RegExp> = {
-  fast: /(?:^|[-_.\s])(fast|flash|haiku|luna|lite|mini|nano|small)(?:$|[-_.\s])/i,
-  balanced: /(?:^|[-_.\s])(auto|balanced|standard|sonnet|terra|medium)(?:$|[-_.\s])/i,
-  deep: /(?:^|[-_.\s])(astra|deep|large|max|opus|pro|reasoning|sol|ultra)(?:$|[-_.\s])/i,
-};
 
 const EFFORTS: readonly Effort[] = [
   "auto",
@@ -552,10 +572,6 @@ function tierEffort(tier: ModelTier, current: Effort | undefined, model: Catalog
   return preferred.find((effort) => supported.includes(effort as Effort)) as Effort;
 }
 
-function modelText(model: CatalogModel): string {
-  return `${model.id} ${model.label ?? ""}`;
-}
-
 function selectDetectedModel(
   catalog: ProviderCatalog,
   tier: ModelTier,
@@ -563,13 +579,14 @@ function selectDetectedModel(
 ): CatalogModel | undefined {
   const detected = catalog.detectedModels;
   if (!detected.length) return undefined;
-  const signaled = detected.find((model) => TIER_SIGNALS[tier].test(modelText(model)));
-  if (signaled) return signaled;
   const currentDetected = detected.find((model) => model.id === current.model);
   if (currentDetected) return currentDetected;
-  // Settings and environment probes reveal configured choices, not the full
-  // entitlement catalogue. Do not stretch one configured model across tiers.
+  // A configured default is evidence of a selected model, not a complete
+  // provider catalogue. Keep the other routing fallbacks intact.
   if (catalog.source === "environment" || catalog.source === "provider-config") return undefined;
+  // Provider catalogues conventionally return their preferred model first.
+  // Apply that order consistently instead of encoding vendor model-family
+  // names (haiku/opus, flash/pro, etc.) in AIRO.
   const index =
     tier === "deep"
       ? 0

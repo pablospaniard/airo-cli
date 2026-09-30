@@ -47,7 +47,7 @@ Support is announced only when execution, permissions, account-state behavior, m
 For a registered provider, AIRO dynamically:
 
 - Discover available models from the provider CLI or API when supported
-- Map discovered catalogs onto the generic fast, balanced, and deep tiers at runtime
+- Merge each provider's native, generic CLI, and optional gateway catalog inputs through the same provider-neutral pipeline, then map the complete catalog onto the generic fast, balanced, and deep tiers at runtime
 - Retain reviewed configured tier defaults when discovery is unavailable or manual mode is selected
 - Resolve an explicit command path, the inherited `PATH`, and only reliable provider-specific locations
 - Generate eligible provider/tier candidates from the registry

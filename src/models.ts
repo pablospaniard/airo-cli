@@ -23,6 +23,10 @@ export async function printModels() {
             ui.gray(` · ${catalogAge(catalog)}`)
       }`,
     );
+    if (catalog.detectedModels.length)
+      console.log(
+        `  ${ui.gray("models  ")} ${catalog.detectedModels.map((model) => ui.cyan(model.id)).join(ui.gray(" · "))}`,
+      );
     for (const tier of ["fast", "balanced", "deep"] as const) {
       const p = resolved[agent].models[tier];
       const label =
