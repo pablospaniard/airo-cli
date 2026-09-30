@@ -1,6 +1,6 @@
 {
   "name": "airo-ai-router",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Adaptive Intelligence Routing & Orchestration for coding-agent CLIs",
   "keywords": [
     "ai",
