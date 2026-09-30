@@ -1,7 +1,6 @@
 import fs from "node:fs";
 
 const rootPackage = JSON.parse(fs.readFileSync("package.json", "utf8"));
-const extensionPackage = JSON.parse(fs.readFileSync("vscode-extension/package.json", "utf8"));
 const sourceVersion = fs
   .readFileSync("src/version.ts", "utf8")
   .match(/VERSION\s*=\s*"([^"]+)"/)?.[1];
@@ -19,6 +18,8 @@ if (sourceVersion !== requestedVersion) {
     `src/version.ts is ${sourceVersion ?? "unreadable"}; expected ${requestedVersion}.`,
   );
 }
+const extensionPackageJson = fs.readFileSync("vscode-extension/package.json", "utf8");
+const extensionPackage = JSON.parse(extensionPackageJson);
 if (!/^\d+\.\d+\.\d+$/.test(extensionPackage.version)) {
   failures.push(
     `VS Code extension version must be a stable semantic version, received ${extensionPackage.version}.`,

@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/airo-ai-router"><img src="https://img.shields.io/npm/v/airo-ai-router?logo=npm&label=CLI" alt="AIRO CLI on npm"></a>
-  <a href="https://marketplace.visualstudio.com/items?itemName=pablospaniard.airo-vscode"><img src="https://img.shields.io/badge/VS%20Code%20Extension-1.0.2-007ACC" alt="AIRO 1.0.2 extension on the VS Code Marketplace"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=pablospaniard.airo-vscode"><img src="https://img.shields.io/badge/VS%20Code%20Extension-1.0.3-007ACC" alt="AIRO 1.0.3 extension on the VS Code Marketplace"></a>
   <a href="https://github.com/pablospaniard/airo-cli/actions/workflows/ci.yml"><img src="https://github.com/pablospaniard/airo-cli/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License"></a>
 </p>
@@ -128,8 +128,11 @@ See [AIRO for VS Code](https://github.com/pablospaniard/airo-cli/tree/main/vscod
 ## Models and setup
 
 AIRO discovers every model exposed by each provider and applies the same catalogue policy to all of them. Provider ordering, rather than hardcoded vendor model-family names, supplies the dynamic fast/balanced/deep mapping. Tiers remain routing intent; if discovery is unavailable, AIRO uses reviewed fallback profiles. Existing configurations created before dynamic routing retain their pinned mappings.
+<<<<<<< HEAD
 
 `airo usage cost` refreshes its API list-price catalog at the start of every AIRO run. If the catalog cannot be reached, AIRO uses the last successful local refresh, then its bundled snapshot. The report identifies which source was used and is an estimate only, not subscription usage or an invoice.
+=======
+>>>>>>> origin/main
 
 ```bash
 airo setup       # review permissions and provider setup
