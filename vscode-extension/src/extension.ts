@@ -7,6 +7,10 @@ import { renderWebview } from "./webview";
 
 let loginShellEnvironmentPromise: Promise<NodeJS.ProcessEnv> | undefined;
 
+function airoCommand(): string {
+  return vscode.workspace.getConfiguration("airo").get<string>("command", "airo").trim() || "airo";
+}
+
 function loginShellEnvironment(): Promise<NodeJS.ProcessEnv> {
   if (loginShellEnvironmentPromise) return loginShellEnvironmentPromise;
   loginShellEnvironmentPromise = new Promise((resolve) => {
@@ -134,7 +138,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("airo.openTerminal", () => {
       const terminal = vscode.window.createTerminal("AIRO");
       terminal.show();
-      terminal.sendText(vscode.workspace.getConfiguration("airo").get<string>("command", "airo"));
+      terminal.sendText(airoCommand());
     }),
   );
 }
@@ -759,8 +763,11 @@ class SidebarProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   }
 
   private openAiroTerminal(args: string[], name: string): void {
-    const command = vscode.workspace.getConfiguration("airo").get<string>("command", "airo");
-    const terminal = vscode.window.createTerminal({ name, shellPath: command, shellArgs: args });
+    const terminal = vscode.window.createTerminal({
+      name,
+      shellPath: airoCommand(),
+      shellArgs: args,
+    });
     terminal.show();
   }
 
@@ -934,22 +941,18 @@ class SidebarProvider implements vscode.WebviewViewProvider, vscode.Disposable {
           let started = false;
           let child: ChildProcessWithoutNullStreams;
           try {
-            child = spawn(
-              vscode.workspace.getConfiguration("airo").get<string>("command", "airo"),
-              args,
-              {
-                cwd: folder.uri.fsPath,
-                shell: false,
-                windowsHide: true,
-                stdio: ["pipe", "pipe", "pipe"],
-                env: {
-                  ...environment,
-                  ...options.environment,
-                  NO_COLOR: "1",
-                  AIRO_STREAM_PROTOCOL: "1",
-                },
+            child = spawn(airoCommand(), args, {
+              cwd: folder.uri.fsPath,
+              shell: false,
+              windowsHide: true,
+              stdio: ["pipe", "pipe", "pipe"],
+              env: {
+                ...environment,
+                ...options.environment,
+                NO_COLOR: "1",
+                AIRO_STREAM_PROTOCOL: "1",
               },
-            );
+            });
             chat.child = child;
             started = true;
           } catch (error) {
@@ -1358,16 +1361,12 @@ async function runCommand(args: string[]): Promise<{ code: number | null; output
   if (!folder) return { code: null, output: "[]" };
   const environment = await loginShellEnvironment();
   return new Promise((resolve) => {
-    const child = spawn(
-      vscode.workspace.getConfiguration("airo").get<string>("command", "airo"),
-      args,
-      {
-        cwd: folder.uri.fsPath,
-        shell: false,
-        windowsHide: true,
-        env: { ...environment, NO_COLOR: "1" },
-      },
-    );
+    const child = spawn(airoCommand(), args, {
+      cwd: folder.uri.fsPath,
+      shell: false,
+      windowsHide: true,
+      env: { ...environment, NO_COLOR: "1" },
+    });
     let output = "";
     child.stdout.on("data", (data: Buffer) => (output += data.toString()));
     child.on("error", () => resolve({ code: null, output: "[]" }));
