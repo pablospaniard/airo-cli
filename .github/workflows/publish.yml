@@ -19,10 +19,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
+  preflight:
     if: github.repository == 'pablospaniard/airo-cli'
     runs-on: ubuntu-latest
-    environment: production
     env:
       RELEASE_VERSION: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.version }}
 
@@ -69,10 +68,73 @@ jobs:
       - name: Package VS Code extension
         run: pnpm run package:extension
 
+  publish-npm:
+    name: Publish npm package
+    needs: preflight
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      RELEASE_VERSION: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.version }}
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || format('v{0}', inputs.version) }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.6.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify release version
+        run: pnpm run release:check
+
       - name: Publish npm package
         run: pnpm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-vscode:
+    name: Publish VS Code extension
+    needs: preflight
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      RELEASE_VERSION: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.version }}
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || format('v{0}', inputs.version) }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.6.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify release version
+        run: pnpm run release:check
 
       - name: Publish VS Code extension
         run: pnpm --dir vscode-extension dlx @vscode/vsce@4.0.0 publish --no-dependencies
