@@ -62,7 +62,7 @@ import type { Agent, Effort, FeedbackRating, LogLevel, ModelTier, SessionState }
 import { VERSION } from "./version.js";
 import {
   cleanDroppedPath,
-  INTERACTIVE_COMMANDS,
+  interactiveCommandMatches,
   INTERACTIVE_SHELL_HELP,
   isSupportedAttachmentPath,
   parseInteractiveInput,
@@ -730,11 +730,7 @@ async function chatLoop(config: any, path?: string) {
     `${ui.gray("Type a task to begin, or")} ${commandColor("/help")} ${ui.gray("for interactive commands.")}`,
   );
   console.log("");
-  const completer = (line: string) => {
-    if (!line.startsWith("/")) return [[], line];
-    const hits = INTERACTIVE_COMMANDS.filter((command) => command.startsWith(line));
-    return [hits.length ? hits : INTERACTIVE_COMMANDS, line];
-  };
+  const completer = (line: string) => [interactiveCommandMatches(line), line];
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -742,6 +738,27 @@ async function chatLoop(config: any, path?: string) {
     historySize: 200,
     removeHistoryDuplicates: true,
   });
+  if (process.stdin.isTTY && process.stdout.isTTY) {
+    let lastCommandLine = "";
+    let renderedSuggestions = 0;
+    process.stdin.on("keypress", () => {
+      const line = rl.line;
+      if (!line.startsWith("/")) {
+        renderedSuggestions = 0;
+        return;
+      }
+      if (line === lastCommandLine) return;
+      lastCommandLine = line;
+      const matches = interactiveCommandMatches(line);
+      readline.cursorTo(process.stdout, 0);
+      readline.clearLine(process.stdout, 0);
+      if (renderedSuggestions) readline.moveCursor(process.stdout, 0, -renderedSuggestions);
+      process.stdout.write(
+        `${interactivePrompt(session, preferences)}${line}\n${matches.map((command) => `  ${command}`).join("\n")}\n${interactivePrompt(session, preferences)}${line}`,
+      );
+      renderedSuggestions = matches.length + 1;
+    });
+  }
   const ask = () =>
     new Promise<string>((resolve) => rl.question(interactivePrompt(session, preferences), resolve));
   const askAnswer = (_question: string) =>

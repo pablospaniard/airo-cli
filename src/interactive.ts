@@ -70,6 +70,12 @@ export const INTERACTIVE_SHELL_HELP = [
   ["airo sync delete-cloud-data --yes", "delete cloud data"],
 ] as const;
 
+export function interactiveCommandMatches(input: string): readonly string[] {
+  if (!input.startsWith("/")) return [];
+  const matches = INTERACTIVE_COMMANDS.filter((command) => command.startsWith(input.toLowerCase()));
+  return matches.length ? matches : INTERACTIVE_COMMANDS;
+}
+
 /** Normalize the path most terminals insert when a file is dragged into readline. */
 export function cleanDroppedPath(input: string): string {
   const value = input.trim();
