@@ -1,6 +1,7 @@
 import fs from "node:fs";
 
 const rootPackage = JSON.parse(fs.readFileSync("package.json", "utf8"));
+const extensionPackage = JSON.parse(fs.readFileSync("vscode-extension/package.json", "utf8"));
 const sourceVersion = fs
   .readFileSync("src/version.ts", "utf8")
   .match(/VERSION\s*=\s*"([^"]+)"/)?.[1];
@@ -17,6 +18,24 @@ if (sourceVersion !== requestedVersion) {
   failures.push(
     `src/version.ts is ${sourceVersion ?? "unreadable"}; expected ${requestedVersion}.`,
   );
+}
+if (!/^\d+\.\d+\.\d+$/.test(extensionPackage.version)) {
+  failures.push(
+    `VS Code extension version must be a stable semantic version, received ${extensionPackage.version}.`,
+  );
+}
+for (const [file, version] of [
+  ["CHANGELOG.md", requestedVersion],
+  ["vscode-extension/CHANGELOG.md", extensionPackage.version],
+]) {
+  const changelog = fs.readFileSync(file, "utf8");
+  if (
+    !new RegExp(`^## ${version.replaceAll(".", "\\.")} - \\d{4}-\\d{2}-\\d{2}$`, "m").test(
+      changelog,
+    )
+  ) {
+    failures.push(`${file} is missing a dated ${version} release entry.`);
+  }
 }
 for (const file of [
   "CHANGELOG.md",
