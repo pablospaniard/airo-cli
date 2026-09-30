@@ -380,7 +380,7 @@ class SidebarProvider {
             "/sessions": ["sessions"],
             "/models": ["models"],
             "/account": ["account"],
-            "/usage": ["usage", ...(argument ? [argument] : [])],
+            "/usage": ["usage", ...parts],
             "/logs": ["logs"],
             "/doctor": ["doctor"],
         };

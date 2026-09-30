@@ -427,7 +427,7 @@ class SidebarProvider implements vscode.WebviewViewProvider, vscode.Disposable {
       "/sessions": ["sessions"],
       "/models": ["models"],
       "/account": ["account"],
-      "/usage": ["usage", ...(argument ? [argument] : [])],
+      "/usage": ["usage", ...parts],
       "/logs": ["logs"],
       "/doctor": ["doctor"],
     };

@@ -4,6 +4,7 @@ import { detectDefaultModels } from "./account.js";
 import { readHistory } from "./history.js";
 import { findRunLogs } from "./logging.js";
 import { addTokenUsage, progressFor } from "./runner.js";
+import { apiCostForUsage } from "./pricing.js";
 import type { Agent, HistoryRecord, RouterConfig, TokenUsage } from "./types.js";
 
 export function nonCachedTokens(usage: TokenUsage): number {
@@ -122,6 +123,85 @@ export interface UsageReport {
   savings?: SavingsEstimate;
 }
 
+export type UsagePeriod = "daily" | "weekly" | "monthly" | "lifetime";
+
+export interface ModelCostUsage {
+  model: string;
+  usage: TokenUsage;
+  /** Undefined means the model has no known API list price. */
+  apiCost?: number;
+}
+
+export interface CostUsageReport {
+  period: UsagePeriod;
+  records: HistoryRecord[];
+  models: ModelCostUsage[];
+  totals: TokenUsage;
+  /** Sum of only models with known API list prices. */
+  apiCost: number;
+  unpricedModels: string[];
+}
+
+function emptyUsage(): TokenUsage {
+  return {
+    uncachedInputTokens: 0,
+    cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    outputTokens: 0,
+    reasoningOutputTokens: 0,
+  };
+}
+
+function periodStart(period: UsagePeriod, now: Date): Date | undefined {
+  if (period === "lifetime") return undefined;
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  if (period === "weekly") start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+  if (period === "monthly") start.setDate(1);
+  return start;
+}
+
+/**
+ * Builds a local-calendar usage report from every recorded phase in the
+ * requested period. Invalid legacy timestamps are excluded from finite periods.
+ */
+export function buildCostUsageReport(
+  config: RouterConfig,
+  period: UsagePeriod = "lifetime",
+  now = new Date(),
+): CostUsageReport {
+  const start = periodStart(period, now);
+  const records = readHistory(config.history)
+    .map(withRecordedUsage)
+    .filter(
+      (record) =>
+        record.usage &&
+        (!start ||
+          (Number.isFinite(Date.parse(record.timestamp)) &&
+            Date.parse(record.timestamp) >= start.getTime())),
+    );
+  const byModel = new Map<string, TokenUsage>();
+  for (const record of records) {
+    byModel.set(record.model, addTokenUsage(byModel.get(record.model), record.usage)!);
+  }
+  const models = [...byModel.entries()]
+    .map(([model, usage]) => ({ model, usage, apiCost: apiCostForUsage(model, usage) }))
+    .sort((a, b) => a.model.localeCompare(b.model));
+  return {
+    period,
+    records,
+    models,
+    totals: records.reduce<TokenUsage>(
+      (sum, record) => addTokenUsage(sum, record.usage)!,
+      emptyUsage(),
+    ),
+    apiCost: models.reduce((sum, model) => sum + (model.apiCost ?? 0), 0),
+    unpricedModels: models
+      .filter((model) => model.apiCost === undefined)
+      .map((model) => model.model),
+  };
+}
+
 export function buildUsageReport(
   config: RouterConfig,
   limit = 20,
@@ -130,13 +210,10 @@ export function buildUsageReport(
   // Bound legacy event-log backfills; new records already contain telemetry inline.
   const all = readHistory(config.history).slice(-500).map(withRecordedUsage);
   const records = all.filter((record) => record.usage).slice(-Math.max(1, limit));
-  const totals = records.reduce<TokenUsage>((sum, record) => addTokenUsage(sum, record.usage)!, {
-    uncachedInputTokens: 0,
-    cachedInputTokens: 0,
-    cacheWriteInputTokens: 0,
-    outputTokens: 0,
-    reasoningOutputTokens: 0,
-  });
+  const totals = records.reduce<TokenUsage>(
+    (sum, record) => addTokenUsage(sum, record.usage)!,
+    emptyUsage(),
+  );
   const defaults = detectDefaultModels(config, cwd);
   return {
     records,

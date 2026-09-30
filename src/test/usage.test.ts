@@ -6,6 +6,7 @@ import test from "node:test";
 import { DEFAULT_CONFIG } from "../config.js";
 import {
   buildUsageReport,
+  buildCostUsageReport,
   estimateDefaultModelSavings,
   nonCachedTokens,
   processedTokens,
@@ -45,6 +46,45 @@ test("counts cache reads separately from non-cached tokens", () => {
   const value = usage(100, 400);
   assert.equal(nonCachedTokens(value), 100);
   assert.equal(processedTokens(value), 500);
+});
+
+test("groups API-equivalent usage by model and period without pricing unknown models", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "airo-cost-usage-"));
+  const historyFile = path.join(home, "history.jsonl");
+  const entries = [
+    {
+      ...record("today", "gpt-5.6-luna", 100),
+      timestamp: "2026-01-15T10:00:00Z",
+      usage: {
+        uncachedInputTokens: 90,
+        cachedInputTokens: 20,
+        cacheWriteInputTokens: 5,
+        outputTokens: 10,
+        reasoningOutputTokens: 0,
+      },
+    },
+    { ...record("unknown", "private-model", 20), timestamp: "2026-01-15T11:00:00Z" },
+    { ...record("older", "gemini-2.5-flash", 50), timestamp: "2025-12-31T10:00:00Z" },
+  ];
+  fs.writeFileSync(historyFile, entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+  try {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.history.path = historyFile;
+    const daily = buildCostUsageReport(config, "daily", new Date("2026-01-15T12:00:00Z"));
+    assert.deepEqual(
+      daily.models.map((entry) => entry.model),
+      ["gpt-5.6-luna", "private-model"],
+    );
+    assert.equal(daily.unpricedModels[0], "private-model");
+    assert.equal(daily.models[0].apiCost, 0.0000314);
+    assert.equal(daily.apiCost, 0.0000314);
+
+    const monthly = buildCostUsageReport(config, "monthly", new Date("2026-01-15T12:00:00Z"));
+    assert.equal(monthly.records.length, 2);
+    assert.equal(buildCostUsageReport(config, "lifetime").records.length, 3);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test("handles direct default-model records and fallback baselines", () => {

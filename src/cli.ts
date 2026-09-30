@@ -10,6 +10,7 @@ import {
   panel,
   promptLabel,
   statusIcon,
+  table,
   tierColor,
   ui,
 } from "./ui.js";
@@ -74,7 +75,13 @@ import { shouldRunInitialSetup, shouldShowWelcome } from "./startup.js";
 import { singleRunPrompt } from "./prompts.js";
 import { inspectAccounts } from "./account.js";
 import { AGENTS } from "./providers.js";
-import { buildUsageReport, nonCachedTokens, processedTokens } from "./usage.js";
+import {
+  buildCostUsageReport,
+  buildUsageReport,
+  nonCachedTokens,
+  processedTokens,
+  type UsagePeriod,
+} from "./usage.js";
 import { firstRunWelcome } from "./welcome.js";
 import { auditProviderSupport } from "./provider-support.js";
 import { exportLearningArchive, importLearningArchive } from "./history-archive.js";
@@ -177,6 +184,9 @@ function help() {
   );
   console.log(
     `  ${commandColor("airo usage [limit]")}                      ${ui.gray("show token use and measured savings")}`,
+  );
+  console.log(
+    `  ${commandColor("airo usage cost [period]")}                ${ui.gray("estimate API list-price usage by model")}`,
   );
   console.log(
     `  ${commandColor("airo feedback good|bad ...")}              ${ui.gray("rate the latest run")}`,
@@ -698,6 +708,7 @@ function interactiveHelp(): string {
       `${commandColor("/models")}             ${ui.gray("show active model mapping")}`,
       `${commandColor("/account")}            ${ui.gray("show provider accounts")}`,
       `${commandColor("/usage [limit]")}      ${ui.gray("show token usage")}`,
+      `${commandColor("/usage cost [period]")} ${ui.gray("API-price estimate: daily, weekly, monthly, or lifetime")}`,
       `${commandColor("/logs")}               ${ui.gray("show recent run logs")}`,
       `${commandColor("/attach <file-path>")} ${ui.gray("attach a local image, PDF, Markdown, or JSON file to the next task")}`,
       `${commandColor("/no-jev <task>")}       ${ui.gray("run one task without sending it to Jev")}`,
@@ -714,6 +725,53 @@ function interactiveHelp(): string {
     ],
     outputWidth(),
   );
+}
+
+function formatApiCost(value: number): string {
+  return value < 0.01 ? `$${value.toFixed(4)}` : `$${value.toFixed(2)}`;
+}
+
+function printApiUsageReport(config: ReturnType<typeof loadConfig>["config"], period: UsagePeriod) {
+  const report = buildCostUsageReport(config, period);
+  const label =
+    period === "daily"
+      ? "today"
+      : period === "weekly"
+        ? "this week"
+        : period === "monthly"
+          ? "this month"
+          : "lifetime";
+  console.log(divider(`API-equivalent usage · ${label}`));
+  console.log(
+    `${statusIcon("info")} ${ui.gray("API list-price estimate only — this is not your subscription usage, limits, invoice, or non-token API fees.")}`,
+  );
+  if (!report.records.length) {
+    console.log(
+      `${statusIcon("info")} ${ui.gray("No provider token telemetry is available for this period.")}`,
+    );
+    return;
+  }
+  console.log(
+    table(
+      ["Model", "Input", "Cache read", "Cache write", "Output", "API cost"],
+      report.models.map((entry) => [
+        entry.model,
+        entry.usage.uncachedInputTokens.toLocaleString(),
+        entry.usage.cachedInputTokens.toLocaleString(),
+        entry.usage.cacheWriteInputTokens.toLocaleString(),
+        entry.usage.outputTokens.toLocaleString(),
+        entry.apiCost === undefined ? "unpriced" : formatApiCost(entry.apiCost),
+      ]),
+    ),
+  );
+  console.log(
+    `${ui.bold("Priced subtotal")} ${ui.cyan(formatApiCost(report.apiCost))} ${ui.gray("across models with a known API list price.")}`,
+  );
+  if (report.unpricedModels.length) {
+    console.log(
+      `${statusIcon("info")} ${ui.gray(`No API price is recorded for: ${report.unpricedModels.join(", ")}. Those models remain in the token table but are excluded from the subtotal.`)}`,
+    );
+  }
 }
 
 async function chatLoop(config: any, path?: string) {
@@ -807,6 +865,10 @@ async function chatLoop(config: any, path?: string) {
         continue;
       }
       if (action.kind === "usage") {
+        if (action.costPeriod) {
+          printApiUsageReport(config, action.costPeriod);
+          continue;
+        }
         const report = buildUsageReport(config, action.limit ?? 20);
         console.log(
           panel(`Token usage · last ${report.records.length} measured phase(s)`, [
@@ -1222,6 +1284,13 @@ async function main() {
     return;
   }
   if (raw[0] === "usage") {
+    if (raw[1] === "cost") {
+      const period = raw[2] ?? "lifetime";
+      if (!["daily", "weekly", "monthly", "lifetime"].includes(period) || raw[3] !== undefined)
+        throw new Error("Use: airo usage cost [daily|weekly|monthly|lifetime]");
+      printApiUsageReport(config, period as UsagePeriod);
+      return;
+    }
     const limit = Math.max(1, Number(raw[1] ?? 20));
     const report = buildUsageReport(config, limit);
     console.log(divider(`Token usage · last ${report.records.length} measured phase(s)`));

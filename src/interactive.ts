@@ -1,4 +1,5 @@
 import type { Agent, FeedbackRating, LogLevel, ModelTier } from "./types.js";
+import type { UsagePeriod } from "./usage.js";
 
 export type InteractiveMode = "auto" | "adaptive" | "single";
 
@@ -19,7 +20,7 @@ export type InteractiveAction =
   | { kind: "sessions" }
   | { kind: "models" }
   | { kind: "account" }
-  | { kind: "usage"; limit?: number }
+  | { kind: "usage"; limit?: number; costPeriod?: UsagePeriod }
   | { kind: "logs" }
   | { kind: "attach"; path: string }
   | { kind: "feedback"; rating: FeedbackRating; note?: string; phaseId?: string }
@@ -112,9 +113,18 @@ export function parseInteractiveInput(input: string): InteractiveAction {
   if (command === "/models") return { kind: "models" };
   if (command === "/account") return { kind: "account" };
   if (command === "/usage") {
+    if (first === "cost") {
+      const period = args[1] ?? "lifetime";
+      if (!["daily", "weekly", "monthly", "lifetime"].includes(period) || args[2])
+        return { kind: "error", message: "Usage: /usage cost [daily|weekly|monthly|lifetime]" };
+      return { kind: "usage", costPeriod: period as UsagePeriod };
+    }
     const limit = args[0] === undefined ? undefined : Number(args[0]);
     if (limit !== undefined && (!Number.isInteger(limit) || limit < 1))
-      return { kind: "error", message: "Usage: /usage [limit]" };
+      return {
+        kind: "error",
+        message: "Usage: /usage [limit] | /usage cost [daily|weekly|monthly|lifetime]",
+      };
     return { kind: "usage", limit };
   }
   if (command === "/logs") return { kind: "logs" };

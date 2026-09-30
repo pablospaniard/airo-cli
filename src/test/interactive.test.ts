@@ -50,6 +50,10 @@ test("parses interactive preference commands", () => {
   assert.deepEqual(parseInteractiveInput("/models"), { kind: "models" });
   assert.deepEqual(parseInteractiveInput("/account"), { kind: "account" });
   assert.deepEqual(parseInteractiveInput("/usage 5"), { kind: "usage", limit: 5 });
+  assert.deepEqual(parseInteractiveInput("/usage cost weekly"), {
+    kind: "usage",
+    costPeriod: "weekly",
+  });
   assert.deepEqual(parseInteractiveInput("/logs"), { kind: "logs" });
   assert.deepEqual(parseInteractiveInput("/attach /tmp/screenshot.png"), {
     kind: "attach",

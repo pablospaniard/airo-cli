@@ -12,6 +12,7 @@ import {
   renderTerminalMarkdown,
   sectionRule,
   statusIcon,
+  table,
   tierColor,
   ui,
   visibleLength,
@@ -89,6 +90,22 @@ test("renders terminal primitives, widths, and clipped panels", () => {
   assert.ok(outputWidth() >= 24 && outputWidth() <= 100);
   assert.match(panel("Box", ["short", "a very long line that must be clipped"], 28), /…/);
   for (const style of Object.values(ui)) assert.equal(style("text"), "text");
+});
+
+test("aligns ANSI-safe report tables", () => {
+  const rendered = plainText(
+    table(
+      ["Model", "Cost"],
+      [
+        [ui.cyan("short"), "$1"],
+        ["long-model", "$20"],
+      ],
+    ),
+  );
+  const [header, rule, first, second] = rendered.split("\n");
+  assert.equal(header.indexOf("Cost"), first.indexOf("$1"));
+  assert.equal(first.indexOf("$1"), second.indexOf("$20"));
+  assert.match(rule, /─/);
 });
 
 test("renders empty and plain paragraphs in rich mode", () => {

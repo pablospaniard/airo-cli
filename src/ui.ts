@@ -72,6 +72,22 @@ export function outputWidth(): number {
   return Math.max(24, Math.min(100, process.stdout.columns || 80));
 }
 
+/** Render compact, ANSI-safe rows for terminal reports. */
+export function table(headers: readonly string[], rows: readonly (readonly string[])[]): string {
+  const columns = headers.map((header, index) =>
+    Math.max(visibleLength(header), ...rows.map((row) => visibleLength(row[index] ?? ""))),
+  );
+  const render = (row: readonly string[]) =>
+    row
+      .map((value, index) => `${value}${" ".repeat(columns[index] - visibleLength(value))}`)
+      .join("  ");
+  return [
+    ui.bold(render(headers)),
+    ui.gray(columns.map((width) => "─".repeat(width)).join("  ")),
+    ...rows.map(render),
+  ].join("\n");
+}
+
 function styleWords(value: string, style: (word: string) => string): string {
   return value
     .split(/(\s+)/)
