@@ -88,12 +88,8 @@ function loginShellEnvironment() {
 }
 function activate(context) {
     const provider = new SidebarProvider();
-    const attachmentDropProvider = new AttachmentDropProvider(provider);
     context.subscriptions.push(provider, vscode.window.registerWebviewViewProvider("airo.sidebar", provider, {
         webviewOptions: { retainContextWhenHidden: true },
-    }), vscode.window.createTreeView("airo.attachments", {
-        treeDataProvider: attachmentDropProvider,
-        dragAndDropController: attachmentDropProvider,
     }), vscode.commands.registerCommand("airo.runTask", () => provider.focus()), vscode.commands.registerCommand("airo.openHistory", () => provider.openHistory()), vscode.commands.registerCommand("airo.syncStatus", () => provider.syncStatus()), vscode.commands.registerCommand("airo.syncNow", () => provider.syncNow()), vscode.commands.registerCommand("airo.jevStatus", () => provider.jevStatus()), vscode.commands.registerCommand("airo.openSettings", () => vscode.commands.executeCommand("workbench.action.openSettings", "@ext:pablospaniard.airo-vscode")), vscode.commands.registerCommand("airo.openTerminal", () => {
         const terminal = vscode.window.createTerminal("AIRO");
         terminal.show();
@@ -1135,45 +1131,6 @@ class SidebarProvider {
         const webview = this.view?.webview;
         if (webview)
             void webview.postMessage(message);
-    }
-}
-class AttachmentDropProvider {
-    sidebar;
-    dragMimeTypes = [];
-    dropMimeTypes = ["text/uri-list"];
-    target = { id: "attachment-drop-target" };
-    constructor(sidebar) {
-        this.sidebar = sidebar;
-    }
-    getTreeItem() {
-        const item = new vscode.TreeItem("Drop files here", vscode.TreeItemCollapsibleState.None);
-        item.description = "attaches to active chat";
-        item.iconPath = new vscode.ThemeIcon("files");
-        item.tooltip = "Drop files from the VS Code Explorer to attach them to the active AIRO chat.";
-        return item;
-    }
-    getChildren(element) {
-        return element ? [] : [this.target];
-    }
-    async handleDrop(_target, dataTransfer) {
-        const item = dataTransfer.get("text/uri-list");
-        if (!item)
-            return;
-        const value = await item.asString();
-        const uris = value
-            .split(/\r?\n/)
-            .map((line) => line.trim())
-            .filter((line) => line && !line.startsWith("#"))
-            .flatMap((line) => {
-            try {
-                return [vscode.Uri.parse(line, true)];
-            }
-            catch {
-                return [];
-            }
-        });
-        if (uris.length)
-            await this.sidebar.attachDroppedUris(uris);
     }
 }
 function shortDescription(value) {

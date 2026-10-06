@@ -114,15 +114,10 @@ type RunOptions = {
 
 export function activate(context: vscode.ExtensionContext): void {
   const provider = new SidebarProvider();
-  const attachmentDropProvider = new AttachmentDropProvider(provider);
   context.subscriptions.push(
     provider,
     vscode.window.registerWebviewViewProvider("airo.sidebar", provider, {
       webviewOptions: { retainContextWhenHidden: true },
-    }),
-    vscode.window.createTreeView("airo.attachments", {
-      treeDataProvider: attachmentDropProvider,
-      dragAndDropController: attachmentDropProvider,
     }),
     vscode.commands.registerCommand("airo.runTask", () => provider.focus()),
     vscode.commands.registerCommand("airo.openHistory", () => provider.openHistory()),
@@ -1274,53 +1269,6 @@ class SidebarProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   protected post(message: Record<string, unknown>): void {
     const webview = this.view?.webview;
     if (webview) void webview.postMessage(message);
-  }
-}
-
-type AttachmentDropTarget = { readonly id: "attachment-drop-target" };
-
-class AttachmentDropProvider
-  implements
-    vscode.TreeDataProvider<AttachmentDropTarget>,
-    vscode.TreeDragAndDropController<AttachmentDropTarget>
-{
-  readonly dragMimeTypes: string[] = [];
-  readonly dropMimeTypes = ["text/uri-list"];
-  private readonly target: AttachmentDropTarget = { id: "attachment-drop-target" };
-
-  constructor(private readonly sidebar: SidebarProvider) {}
-
-  getTreeItem(): vscode.TreeItem {
-    const item = new vscode.TreeItem("Drop files here", vscode.TreeItemCollapsibleState.None);
-    item.description = "attaches to active chat";
-    item.iconPath = new vscode.ThemeIcon("files");
-    item.tooltip = "Drop files from the VS Code Explorer to attach them to the active AIRO chat.";
-    return item;
-  }
-
-  getChildren(element?: AttachmentDropTarget): AttachmentDropTarget[] {
-    return element ? [] : [this.target];
-  }
-
-  async handleDrop(
-    _target: AttachmentDropTarget | undefined,
-    dataTransfer: vscode.DataTransfer,
-  ): Promise<void> {
-    const item = dataTransfer.get("text/uri-list");
-    if (!item) return;
-    const value = await item.asString();
-    const uris = value
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith("#"))
-      .flatMap((line) => {
-        try {
-          return [vscode.Uri.parse(line, true)];
-        } catch {
-          return [];
-        }
-      });
-    if (uris.length) await this.sidebar.attachDroppedUris(uris);
   }
 }
 
