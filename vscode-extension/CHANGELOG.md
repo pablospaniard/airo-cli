@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.3 - 2026-10-06
+
+- Add inline previews in the attachment composer instead of showing only file names.
+- Pause automatic scrolling when the user scrolls up and resume it at the bottom.
+
 ## 1.0.2 - 2026-09-30
 
 - Update the extension release for compatibility with AIRO CLI 1.0.3.

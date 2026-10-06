@@ -114,15 +114,10 @@ type RunOptions = {
 
 export function activate(context: vscode.ExtensionContext): void {
   const provider = new SidebarProvider();
-  const attachmentDropProvider = new AttachmentDropProvider(provider);
   context.subscriptions.push(
     provider,
     vscode.window.registerWebviewViewProvider("airo.sidebar", provider, {
       webviewOptions: { retainContextWhenHidden: true },
-    }),
-    vscode.window.createTreeView("airo.attachments", {
-      treeDataProvider: attachmentDropProvider,
-      dragAndDropController: attachmentDropProvider,
     }),
     vscode.commands.registerCommand("airo.runTask", () => provider.focus()),
     vscode.commands.registerCommand("airo.openHistory", () => provider.openHistory()),
@@ -263,6 +258,7 @@ class SidebarProvider implements vscode.WebviewViewProvider, vscode.Disposable {
     else if (message.type === "closeTab" && message.chatId) this.closeTab(message.chatId);
     else if (message.type === "openLink" && message.url) await this.openLink(message.url);
     else if (message.type === "openFile" && message.file) await this.openFile(message.file);
+    else if (message.type === "revealFile" && message.file) await this.revealFile(message.file);
     else if (message.type === "removeAttachment" && message.file)
       this.removeAttachment(message.file, message.chatId);
     else if (message.type === "openSession" && message.sessionId)
@@ -375,6 +371,24 @@ class SidebarProvider implements vscode.WebviewViewProvider, vscode.Disposable {
       await vscode.commands.executeCommand("vscode.open", uri);
     } catch {
       this.notice("That attachment is no longer available.");
+    }
+  }
+
+  private async revealFile(value: string): Promise<void> {
+    let uri: vscode.Uri;
+    try {
+      uri = value.startsWith("file://") ? vscode.Uri.parse(value, true) : vscode.Uri.file(value);
+    } catch {
+      return;
+    }
+    if (uri.scheme !== "file" || !path.isAbsolute(uri.fsPath)) return;
+    uri = vscode.Uri.file(path.normalize(uri.fsPath));
+    try {
+      const stat = await vscode.workspace.fs.stat(uri);
+      if (stat.type & vscode.FileType.Directory) return;
+      await vscode.commands.executeCommand("revealFileInOS", uri);
+    } catch {
+      this.notice("That artifact is no longer available.");
     }
   }
 
@@ -819,14 +833,43 @@ class SidebarProvider implements vscode.WebviewViewProvider, vscode.Disposable {
     if (!chat) return;
     const attachments = chatId === this.activeChatId ? this.attachments : chat.attachments;
     const updated = [...new Set([...attachments, ...valid])];
+    for (const file of updated) {
+      if (!chat.attachmentPreviews.has(file)) {
+        const preview = await this.imagePreviewFor(file);
+        if (preview) chat.attachmentPreviews.set(file, preview);
+      }
+    }
     chat.attachments = updated;
-    if (chatId === this.activeChatId) this.attachments = updated;
+    if (chatId === this.activeChatId) {
+      this.attachments = updated;
+      this.attachmentPreviews = new Map(chat.attachmentPreviews);
+    }
     this.postAttachments(chatId);
     if (invalidCount) {
       this.notice(
         "Some dropped items could not be attached because they are not local files.",
         chatId,
       );
+    }
+  }
+
+  private async imagePreviewFor(file: string): Promise<string | undefined> {
+    const mimeTypes: Record<string, string> = {
+      ".gif": "image/gif",
+      ".jpeg": "image/jpeg",
+      ".jpg": "image/jpeg",
+      ".png": "image/png",
+      ".webp": "image/webp",
+    };
+    const mimeType = mimeTypes[path.extname(file).toLowerCase()];
+    if (!mimeType) return undefined;
+    try {
+      const stat = await vscode.workspace.fs.stat(vscode.Uri.file(file));
+      if (stat.size > 5 * 1024 * 1024) return undefined;
+      const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(file));
+      return `data:${mimeType};base64,${Buffer.from(bytes).toString("base64")}`;
+    } catch {
+      return undefined;
     }
   }
 
@@ -1274,53 +1317,6 @@ class SidebarProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   protected post(message: Record<string, unknown>): void {
     const webview = this.view?.webview;
     if (webview) void webview.postMessage(message);
-  }
-}
-
-type AttachmentDropTarget = { readonly id: "attachment-drop-target" };
-
-class AttachmentDropProvider
-  implements
-    vscode.TreeDataProvider<AttachmentDropTarget>,
-    vscode.TreeDragAndDropController<AttachmentDropTarget>
-{
-  readonly dragMimeTypes: string[] = [];
-  readonly dropMimeTypes = ["text/uri-list"];
-  private readonly target: AttachmentDropTarget = { id: "attachment-drop-target" };
-
-  constructor(private readonly sidebar: SidebarProvider) {}
-
-  getTreeItem(): vscode.TreeItem {
-    const item = new vscode.TreeItem("Drop files here", vscode.TreeItemCollapsibleState.None);
-    item.description = "attaches to active chat";
-    item.iconPath = new vscode.ThemeIcon("files");
-    item.tooltip = "Drop files from the VS Code Explorer to attach them to the active AIRO chat.";
-    return item;
-  }
-
-  getChildren(element?: AttachmentDropTarget): AttachmentDropTarget[] {
-    return element ? [] : [this.target];
-  }
-
-  async handleDrop(
-    _target: AttachmentDropTarget | undefined,
-    dataTransfer: vscode.DataTransfer,
-  ): Promise<void> {
-    const item = dataTransfer.get("text/uri-list");
-    if (!item) return;
-    const value = await item.asString();
-    const uris = value
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith("#"))
-      .flatMap((line) => {
-        try {
-          return [vscode.Uri.parse(line, true)];
-        } catch {
-          return [];
-        }
-      });
-    if (uris.length) await this.sidebar.attachDroppedUris(uris);
   }
 }
 

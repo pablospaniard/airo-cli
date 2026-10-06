@@ -88,12 +88,8 @@ function loginShellEnvironment() {
 }
 function activate(context) {
     const provider = new SidebarProvider();
-    const attachmentDropProvider = new AttachmentDropProvider(provider);
     context.subscriptions.push(provider, vscode.window.registerWebviewViewProvider("airo.sidebar", provider, {
         webviewOptions: { retainContextWhenHidden: true },
-    }), vscode.window.createTreeView("airo.attachments", {
-        treeDataProvider: attachmentDropProvider,
-        dragAndDropController: attachmentDropProvider,
     }), vscode.commands.registerCommand("airo.runTask", () => provider.focus()), vscode.commands.registerCommand("airo.openHistory", () => provider.openHistory()), vscode.commands.registerCommand("airo.syncStatus", () => provider.syncStatus()), vscode.commands.registerCommand("airo.syncNow", () => provider.syncNow()), vscode.commands.registerCommand("airo.jevStatus", () => provider.jevStatus()), vscode.commands.registerCommand("airo.openSettings", () => vscode.commands.executeCommand("workbench.action.openSettings", "@ext:pablospaniard.airo-vscode")), vscode.commands.registerCommand("airo.openTerminal", () => {
         const terminal = vscode.window.createTerminal("AIRO");
         terminal.show();
@@ -221,6 +217,8 @@ class SidebarProvider {
             await this.openLink(message.url);
         else if (message.type === "openFile" && message.file)
             await this.openFile(message.file);
+        else if (message.type === "revealFile" && message.file)
+            await this.revealFile(message.file);
         else if (message.type === "removeAttachment" && message.file)
             this.removeAttachment(message.file, message.chatId);
         else if (message.type === "openSession" && message.sessionId)
@@ -329,6 +327,27 @@ class SidebarProvider {
         }
         catch {
             this.notice("That attachment is no longer available.");
+        }
+    }
+    async revealFile(value) {
+        let uri;
+        try {
+            uri = value.startsWith("file://") ? vscode.Uri.parse(value, true) : vscode.Uri.file(value);
+        }
+        catch {
+            return;
+        }
+        if (uri.scheme !== "file" || !node_path_1.default.isAbsolute(uri.fsPath))
+            return;
+        uri = vscode.Uri.file(node_path_1.default.normalize(uri.fsPath));
+        try {
+            const stat = await vscode.workspace.fs.stat(uri);
+            if (stat.type & vscode.FileType.Directory)
+                return;
+            await vscode.commands.executeCommand("revealFileInOS", uri);
+        }
+        catch {
+            this.notice("That artifact is no longer available.");
         }
     }
     async postArtifact(chatId, event) {
@@ -699,12 +718,43 @@ class SidebarProvider {
             return;
         const attachments = chatId === this.activeChatId ? this.attachments : chat.attachments;
         const updated = [...new Set([...attachments, ...valid])];
+        for (const file of updated) {
+            if (!chat.attachmentPreviews.has(file)) {
+                const preview = await this.imagePreviewFor(file);
+                if (preview)
+                    chat.attachmentPreviews.set(file, preview);
+            }
+        }
         chat.attachments = updated;
-        if (chatId === this.activeChatId)
+        if (chatId === this.activeChatId) {
             this.attachments = updated;
+            this.attachmentPreviews = new Map(chat.attachmentPreviews);
+        }
         this.postAttachments(chatId);
         if (invalidCount) {
             this.notice("Some dropped items could not be attached because they are not local files.", chatId);
+        }
+    }
+    async imagePreviewFor(file) {
+        const mimeTypes = {
+            ".gif": "image/gif",
+            ".jpeg": "image/jpeg",
+            ".jpg": "image/jpeg",
+            ".png": "image/png",
+            ".webp": "image/webp",
+        };
+        const mimeType = mimeTypes[node_path_1.default.extname(file).toLowerCase()];
+        if (!mimeType)
+            return undefined;
+        try {
+            const stat = await vscode.workspace.fs.stat(vscode.Uri.file(file));
+            if (stat.size > 5 * 1024 * 1024)
+                return undefined;
+            const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(file));
+            return `data:${mimeType};base64,${Buffer.from(bytes).toString("base64")}`;
+        }
+        catch {
+            return undefined;
         }
     }
     async addClipboardImage(dataUrl, name = `screenshot-${Date.now()}.png`, chatId = this.activeChatId) {
@@ -1135,45 +1185,6 @@ class SidebarProvider {
         const webview = this.view?.webview;
         if (webview)
             void webview.postMessage(message);
-    }
-}
-class AttachmentDropProvider {
-    sidebar;
-    dragMimeTypes = [];
-    dropMimeTypes = ["text/uri-list"];
-    target = { id: "attachment-drop-target" };
-    constructor(sidebar) {
-        this.sidebar = sidebar;
-    }
-    getTreeItem() {
-        const item = new vscode.TreeItem("Drop files here", vscode.TreeItemCollapsibleState.None);
-        item.description = "attaches to active chat";
-        item.iconPath = new vscode.ThemeIcon("files");
-        item.tooltip = "Drop files from the VS Code Explorer to attach them to the active AIRO chat.";
-        return item;
-    }
-    getChildren(element) {
-        return element ? [] : [this.target];
-    }
-    async handleDrop(_target, dataTransfer) {
-        const item = dataTransfer.get("text/uri-list");
-        if (!item)
-            return;
-        const value = await item.asString();
-        const uris = value
-            .split(/\r?\n/)
-            .map((line) => line.trim())
-            .filter((line) => line && !line.startsWith("#"))
-            .flatMap((line) => {
-            try {
-                return [vscode.Uri.parse(line, true)];
-            }
-            catch {
-                return [];
-            }
-        });
-        if (uris.length)
-            await this.sidebar.attachDroppedUris(uris);
     }
 }
 function shortDescription(value) {

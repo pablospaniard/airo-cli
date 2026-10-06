@@ -27,7 +27,7 @@ Choose `auto`, `adaptive`, or `single` routing and optionally select a provider 
 
 ## Attachments
 
-Use the paperclip, paste a screenshot, or drag files onto the **Attach Files** view. VS Code requires holding Shift when dragging Explorer files directly onto a webview.
+Use the paperclip, paste a screenshot, or drag files onto the chat composer. VS Code requires holding Shift when dragging Explorer files directly onto a webview.
 
 Attachments remain local. The extension passes their paths to the AIRO CLI and does not store provider credentials.
 
