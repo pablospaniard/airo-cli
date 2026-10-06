@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/airo-ai-router"><img src="https://img.shields.io/npm/v/airo-ai-router?logo=npm&label=CLI" alt="AIRO CLI on npm"></a>
-  <a href="https://marketplace.visualstudio.com/items?itemName=pablospaniard.airo-vscode"><img src="https://img.shields.io/badge/VS%20Code%20Extension-1.0.3-007ACC" alt="AIRO 1.0.3 extension on the VS Code Marketplace"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=pablospaniard.airo-vscode"><img src="https://img.shields.io/badge/VS%20Code%20Extension-1.0.4-007ACC" alt="AIRO 1.0.4 extension on the VS Code Marketplace"></a>
   <a href="https://github.com/pablospaniard/airo-cli/actions/workflows/ci.yml"><img src="https://github.com/pablospaniard/airo-cli/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License"></a>
 </p>
