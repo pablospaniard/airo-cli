@@ -124,6 +124,20 @@ function wrapped(value: string, firstPrefix: string, nextPrefix: string, width: 
   return lines;
 }
 
+function markdownTableRow(line: string): string[] | undefined {
+  const trimmed = line.trim();
+  if (!trimmed.includes("|")) return undefined;
+  const cells = trimmed
+    .replace(/^\|\s*/, "")
+    .replace(/\s*\|$/, "")
+    .split("|");
+  return cells.map((cell) => cell.trim());
+}
+
+function markdownTableSeparator(row: readonly string[]): boolean {
+  return row.length > 0 && row.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
 export interface MarkdownRenderOptions {
   width?: number;
   rich?: boolean;
@@ -144,7 +158,8 @@ export function renderTerminalMarkdown(value: string, options: MarkdownRenderOpt
     paragraph = [];
   };
 
-  for (const raw of source) {
+  for (let sourceIndex = 0; sourceIndex < source.length; sourceIndex += 1) {
+    const raw = source[sourceIndex];
     const line = raw.trimEnd();
     if (/^\s*```/.test(line)) {
       flushParagraph();
@@ -160,6 +175,40 @@ export function renderTerminalMarkdown(value: string, options: MarkdownRenderOpt
     if (!line.trim()) {
       flushParagraph();
       if (output.at(-1) !== "") output.push("");
+      continue;
+    }
+
+    const tableHeader = markdownTableRow(line);
+    const tableDivider =
+      sourceIndex + 1 < source.length ? markdownTableRow(source[sourceIndex + 1]) : undefined;
+    if (tableHeader && tableDivider && markdownTableSeparator(tableDivider)) {
+      flushParagraph();
+      const rows: string[][] = [tableHeader];
+      sourceIndex += 2;
+      while (sourceIndex < source.length) {
+        const row = markdownTableRow(source[sourceIndex]);
+        if (!row) break;
+        rows.push(row);
+        sourceIndex += 1;
+      }
+      sourceIndex -= 1;
+      const headers = rows[0];
+      const body = rows.slice(1);
+      output.push(
+        ...headers
+          .map((header, index) => {
+            const values = body.map((row) => row[index] ?? "");
+            const label = `${header}:`;
+            const prefix = `  ${ui.bold(label)} `;
+            return values.length
+              ? values.flatMap((value) =>
+                  wrapped(value, prefix, " ".repeat(visibleLength(prefix)), width),
+                )
+              : wrapped("", prefix, " ".repeat(visibleLength(prefix)), width);
+          })
+          .flat(),
+      );
+      if (!body.length) output.push(...wrapped(headers.join(" · "), "  ", "  ", width));
       continue;
     }
 

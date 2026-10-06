@@ -64,7 +64,12 @@ pnpm install
 pnpm run package:extension
 ```
 
-The resulting `.vsix` can be installed with **Extensions: Install from VSIX**.
+The resulting `airo-vscode-1.0.4.vsix` can be installed with **Extensions: Install from VSIX**.
+
+For a local release check, verify the installed extension from **Extensions: Show
+Running Extensions** or reload the VS Code window after installation. The sidebar
+uses the `airo` executable configured in **AIRO: Command**; if it is not on VS
+Code's `PATH`, set that setting to the absolute executable path.
 
 ## Privacy and security
 

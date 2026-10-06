@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.4 - 2026-10-06
+
+- Improve automatic sidebar scrolling while streamed output and attachment previews change the layout.
+- Pause scrolling when the user scrolls up and resume it when the chat reaches the bottom.
+- Document the release package name and the post-install verification steps.
+
 ## 1.0.3 - 2026-10-06
 
 - Add inline previews in the attachment composer instead of showing only file names.
