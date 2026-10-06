@@ -258,6 +258,7 @@ class SidebarProvider implements vscode.WebviewViewProvider, vscode.Disposable {
     else if (message.type === "closeTab" && message.chatId) this.closeTab(message.chatId);
     else if (message.type === "openLink" && message.url) await this.openLink(message.url);
     else if (message.type === "openFile" && message.file) await this.openFile(message.file);
+    else if (message.type === "revealFile" && message.file) await this.revealFile(message.file);
     else if (message.type === "removeAttachment" && message.file)
       this.removeAttachment(message.file, message.chatId);
     else if (message.type === "openSession" && message.sessionId)
@@ -370,6 +371,24 @@ class SidebarProvider implements vscode.WebviewViewProvider, vscode.Disposable {
       await vscode.commands.executeCommand("vscode.open", uri);
     } catch {
       this.notice("That attachment is no longer available.");
+    }
+  }
+
+  private async revealFile(value: string): Promise<void> {
+    let uri: vscode.Uri;
+    try {
+      uri = value.startsWith("file://") ? vscode.Uri.parse(value, true) : vscode.Uri.file(value);
+    } catch {
+      return;
+    }
+    if (uri.scheme !== "file" || !path.isAbsolute(uri.fsPath)) return;
+    uri = vscode.Uri.file(path.normalize(uri.fsPath));
+    try {
+      const stat = await vscode.workspace.fs.stat(uri);
+      if (stat.type & vscode.FileType.Directory) return;
+      await vscode.commands.executeCommand("revealFileInOS", uri);
+    } catch {
+      this.notice("That artifact is no longer available.");
     }
   }
 
