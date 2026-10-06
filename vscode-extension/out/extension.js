@@ -718,12 +718,43 @@ class SidebarProvider {
             return;
         const attachments = chatId === this.activeChatId ? this.attachments : chat.attachments;
         const updated = [...new Set([...attachments, ...valid])];
+        for (const file of updated) {
+            if (!chat.attachmentPreviews.has(file)) {
+                const preview = await this.imagePreviewFor(file);
+                if (preview)
+                    chat.attachmentPreviews.set(file, preview);
+            }
+        }
         chat.attachments = updated;
-        if (chatId === this.activeChatId)
+        if (chatId === this.activeChatId) {
             this.attachments = updated;
+            this.attachmentPreviews = new Map(chat.attachmentPreviews);
+        }
         this.postAttachments(chatId);
         if (invalidCount) {
             this.notice("Some dropped items could not be attached because they are not local files.", chatId);
+        }
+    }
+    async imagePreviewFor(file) {
+        const mimeTypes = {
+            ".gif": "image/gif",
+            ".jpeg": "image/jpeg",
+            ".jpg": "image/jpeg",
+            ".png": "image/png",
+            ".webp": "image/webp",
+        };
+        const mimeType = mimeTypes[node_path_1.default.extname(file).toLowerCase()];
+        if (!mimeType)
+            return undefined;
+        try {
+            const stat = await vscode.workspace.fs.stat(vscode.Uri.file(file));
+            if (stat.size > 5 * 1024 * 1024)
+                return undefined;
+            const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(file));
+            return `data:${mimeType};base64,${Buffer.from(bytes).toString("base64")}`;
+        }
+        catch {
+            return undefined;
         }
     }
     async addClipboardImage(dataUrl, name = `screenshot-${Date.now()}.png`, chatId = this.activeChatId) {
