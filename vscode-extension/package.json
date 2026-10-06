@@ -1,7 +1,7 @@
 {
   "name": "airo-vscode",
   "displayName": "AIRO",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "A full AIRO chat workspace in the VS Code sidebar.",
   "categories": [
     "Other"
