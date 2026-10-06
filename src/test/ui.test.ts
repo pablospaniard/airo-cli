@@ -63,6 +63,24 @@ test("renders all supported Markdown block forms and wrapping", () => {
   assert.match(plainText(rendered), /│ const value = 1/);
 });
 
+test("renders Markdown tables as labeled rows and handles empty bodies", () => {
+  const rendered = plainText(
+    renderTerminalMarkdown(
+      ["| Model | Cost |", "| :--- | ---: |", "| codex | $1 |", "| claude | $2 |"].join("\n"),
+      { width: 40, rich: true },
+    ),
+  );
+  assert.match(rendered, /Model:/);
+  assert.match(rendered, /codex/);
+  assert.match(rendered, /Cost:/);
+  assert.match(rendered, /\$2/);
+
+  const empty = plainText(
+    renderTerminalMarkdown("| Name | Value |\n| --- | --- |", { rich: true }),
+  );
+  assert.match(empty, /Name · Value/);
+});
+
 test("renders terminal primitives, widths, and clipped panels", () => {
   assert.equal(brand(), "airo");
   assert.equal(agentColor("claude", "x"), "x");
