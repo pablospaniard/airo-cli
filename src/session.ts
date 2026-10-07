@@ -135,8 +135,15 @@ export function summarizeOutputForContext(
   if (sections.length === 0 || maxChars <= 0) return "";
 
   const lastIndex = sections.length - 1;
+  const boundaryBudget = lastIndex === 0 ? maxChars : Math.max(0, maxChars - 2);
+  const firstBudget = lastIndex === 0 ? boundaryBudget : Math.ceil(boundaryBudget / 2);
+  const lastBudget = lastIndex === 0 ? 0 : boundaryBudget - firstBudget;
+  const truncate = (section: string, budget: number) => section.slice(0, budget);
+  const boundarySections = new Map<number, string>([[0, truncate(sections[0], firstBudget)]]);
+  if (lastIndex !== 0) boundarySections.set(lastIndex, truncate(sections[lastIndex], lastBudget));
   const selected = new Set<number>([0, lastIndex]);
-  let size = sections[0].length + (lastIndex === 0 ? 0 : 2 + sections[lastIndex].length);
+  let size = [...boundarySections.values()].reduce((total, section) => total + section.length, 0);
+  if (lastIndex !== 0) size += 2;
   for (let i = 1; i < sections.length - 1; i++) {
     if (!CONTEXT_SIGNALS.test(sections[i])) continue;
     const addition = 2 + sections[i].length;
@@ -148,7 +155,7 @@ export function summarizeOutputForContext(
 
   const result: string[] = [];
   for (const index of [...selected].sort((a, b) => a - b)) {
-    const section = sections[index];
+    const section = boundarySections.get(index) ?? sections[index];
     result.push(section);
   }
   return result.join("\n\n");

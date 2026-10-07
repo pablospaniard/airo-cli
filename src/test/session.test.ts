@@ -30,6 +30,14 @@ test("summarizes output by sections without duplicating the decision or log tail
   assert.doesNotMatch(summary, /test output only\n.*test output only/);
 });
 
+test("keeps boundary sections within the summary budget", () => {
+  const summary = summarizeOutputForContext(
+    `${"first section ".repeat(500)}\n\n${"last section ".repeat(500)}`,
+    100,
+  );
+  assert.ok(summary.length <= 100);
+});
+
 test("manages the complete session lifecycle", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "airo-session-"));
   const previousHome = process.env.HOME;
