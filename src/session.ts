@@ -119,13 +119,56 @@ export function appendTurn(s: SessionState, turn: SessionTurn) {
   saveSession(s);
 }
 
+const CONTEXT_OUTPUT_BUDGET = 4000;
+const CONTEXT_SIGNALS =
+  /\b(?:decision|plan|planned|implement|implemented|change|changed|fix|fixed|result|verified|verification|blocked|blocker|unresolved|error|warning|summary|conclusion|next steps?)\b/i;
+
+/** Keep the useful shape of a run without letting verbose logs crowd out its decision. */
+export function summarizeOutputForContext(
+  output: string,
+  maxChars = CONTEXT_OUTPUT_BUDGET,
+): string {
+  const sections = output
+    .split(/\n\s*\n+/)
+    .map((section) => section.trim())
+    .filter(Boolean);
+  if (sections.length === 0 || maxChars <= 0) return "";
+
+  const lastIndex = sections.length - 1;
+  const selected = new Set<number>([0, lastIndex]);
+  let size = sections[0].length + (lastIndex === 0 ? 0 : 2 + sections[lastIndex].length);
+  for (let i = 1; i < sections.length - 1; i++) {
+    if (!CONTEXT_SIGNALS.test(sections[i])) continue;
+    const addition = 2 + sections[i].length;
+    if (size + addition <= maxChars) {
+      selected.add(i);
+      size += addition;
+    }
+  }
+
+  const result: string[] = [];
+  for (const index of [...selected].sort((a, b) => a - b)) {
+    const section = sections[index];
+    result.push(section);
+  }
+  return result.join("\n\n");
+}
+
 export function compactSessionContext(s: SessionState, maxTurns = 6): string {
-  const recent = s.turns.slice(-maxTurns);
+  let source = s;
+  try {
+    source = loadSessionTranscript(s.sessionId);
+  } catch {
+    // Transient sessions and sessions from older versions may not have logs.
+  }
+  const recent = source.turns.slice(-maxTurns);
   const lines = [`Session: ${s.sessionId}`, `Original request: ${s.originalTask}`];
   for (const t of recent) {
     lines.push(`User follow-up: ${t.userPrompt}`);
     lines.push(`Route: ${t.routeSummary}`);
-    for (const p of t.phaseSummaries.slice(-4)) lines.push(`Outcome: ${p}`);
+    const output = "finalOutput" in t ? String(t.finalOutput) : t.phaseSummaries.join("\n");
+    const summary = summarizeOutputForContext(output);
+    if (summary) lines.push(`Outcome: ${summary}`);
   }
   return lines.join("\n");
 }

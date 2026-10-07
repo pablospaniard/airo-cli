@@ -14,7 +14,21 @@ import {
   loadSessionTranscript,
   saveSession,
   setActiveSession,
+  summarizeOutputForContext,
 } from "../session.js";
+
+test("summarizes output by sections without duplicating the decision or log tail", () => {
+  const output = [
+    "Plan: update the session context picker.",
+    "Implementation details: preserve the final decision.",
+    "test output only\n".repeat(80),
+    "Decision: keep the plan and verification result.",
+  ].join("\n\n");
+  const summary = summarizeOutputForContext(output, 1200);
+  assert.equal(summary.match(/Decision: keep the plan/g)?.length, 1);
+  assert.match(summary, /Plan: update the session context picker/);
+  assert.doesNotMatch(summary, /test output only\n.*test output only/);
+});
 
 test("manages the complete session lifecycle", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "airo-session-"));
