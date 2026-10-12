@@ -1,6 +1,6 @@
 {
   "name": "airo-ai-router",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Adaptive Intelligence Routing & Orchestration for coding-agent CLIs",
   "keywords": [
     "ai",
@@ -9,6 +9,7 @@
     "codex",
     "copilot",
     "gemini",
+    "opencode",
     "orchestration",
     "router"
   ],

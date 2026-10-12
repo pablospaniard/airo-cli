@@ -66,10 +66,15 @@ jobs:
       - name: Package VS Code extension
         run: pnpm run package:extension
 
+      - name: Read VS Code extension version
+        run: |
+          extension_version=$(node -p "require('./vscode-extension/package.json').version")
+          echo "EXTENSION_VERSION=${extension_version}" >> "$GITHUB_ENV"
+
       - name: Retain VS Code extension package
         uses: actions/upload-artifact@v4
         with:
-          name: airo-vscode-${{ env.RELEASE_VERSION }}
+          name: airo-vscode-${{ env.EXTENSION_VERSION }}
           path: vscode-extension/airo-vscode-*.vsix
           if-no-files-found: error
 
