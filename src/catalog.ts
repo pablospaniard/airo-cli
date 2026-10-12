@@ -333,6 +333,30 @@ function noContextInputs(): CatalogContextInputs {
   return { files: [], environment: [] };
 }
 
+function probeOpencode(command: string): Partial<ProviderCatalog> {
+  const probe = runProviderCommand(command, ["models"]);
+  if (!probe.result || probe.result.status !== 0)
+    return {
+      note: `opencode models probe failed${probe.result?.stderr?.trim() ? `: ${probe.result.stderr.trim().slice(0, 240)}` : ""}`,
+    };
+  const models: CatalogModel[] = [];
+  const seen = new Set<string>();
+  const ansiColor = new RegExp(String.fromCharCode(27) + "\\[[0-9;]*m", "g");
+  for (const line of (probe.result.stdout || "").split(/\r?\n/)) {
+    const id = line
+      .replace(ansiColor, "")
+      .trim()
+      .replace(/^[-*]\s*/, "");
+    if (!/^[^/\s]+\/(?:[^/\s]+\/)*[^/\s]+$/.test(id) || seen.has(id)) continue;
+    seen.add(id);
+    if (seen.size > 500) break;
+    models.push({ id });
+  }
+  return models.length
+    ? { models, source: "cli", via: `${command} models` }
+    : { note: "no valid provider/model IDs discovered" };
+}
+
 function claudeGateway(): { base: string; token?: string } | undefined {
   const environment = loginShellEnvironment();
   const base = environment.ANTHROPIC_BASE_URL?.trim();
@@ -368,6 +392,7 @@ export const PROVIDER_CATALOG_ADAPTERS: Record<Agent, ProviderCatalogAdapter> = 
   },
   gemini: { probeLocal: () => ({}), contextInputs: noContextInputs },
   copilot: { probeLocal: () => ({}), contextInputs: noContextInputs },
+  opencode: { probeLocal: probeOpencode, contextInputs: noContextInputs },
 };
 
 export function providerCatalogAdapter(agent: Agent): ProviderCatalogAdapter {

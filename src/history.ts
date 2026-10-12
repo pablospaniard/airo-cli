@@ -398,7 +398,7 @@ export function learningHints(
   const maxAgentBoost = 8;
   const maxTierBoost = 6;
   const empty: LearningHint = {
-    agentBoosts: { claude: 0, codex: 0, gemini: 0, copilot: 0 },
+    agentBoosts: { claude: 0, codex: 0, gemini: 0, copilot: 0, opencode: 0 },
     tierBoosts: { fast: 0, balanced: 0, deep: 0 },
     notes: [],
     confidence: 0,
@@ -433,7 +433,13 @@ export function learningHints(
     .slice(0, 30);
 
   let totalWeight = 0;
-  const agentSamples: Record<Agent, number> = { claude: 0, codex: 0, gemini: 0, copilot: 0 };
+  const agentSamples: Record<Agent, number> = {
+    claude: 0,
+    codex: 0,
+    gemini: 0,
+    copilot: 0,
+    opencode: 0,
+  };
   const tierSamples: Record<ModelTier, number> = { fast: 0, balanced: 0, deep: 0 };
   for (const { r, sim, reward } of similar) {
     const age = Math.max(0, now - new Date(r.timestamp).getTime());

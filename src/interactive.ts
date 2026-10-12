@@ -81,7 +81,7 @@ export const INTERACTIVE_COMMANDS: readonly InteractiveCommandInfo[] = [
   { command: "/mode", usage: "/mode auto|adaptive|single", description: "set workflow mode" },
   {
     command: "/agent",
-    usage: "/agent auto|claude|codex|gemini|copilot",
+    usage: "/agent auto|claude|codex|gemini|copilot|opencode",
     description: "select provider",
   },
   {
@@ -229,10 +229,11 @@ export function parseInteractiveInput(input: string): InteractiveAction {
       first === "claude" ||
       first === "codex" ||
       first === "gemini" ||
-      first === "copilot"
+      first === "copilot" ||
+      first === "opencode"
     )
       return { kind: "set-agent", value: first };
-    return { kind: "error", message: "Usage: /agent auto|claude|codex|gemini|copilot" };
+    return { kind: "error", message: "Usage: /agent auto|claude|codex|gemini|copilot|opencode" };
   }
   if (command === "/tier") {
     if (first === "auto") return { kind: "set-tier", value: undefined };

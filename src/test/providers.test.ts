@@ -26,11 +26,11 @@ import {
 import { routeTask } from "../router.js";
 
 test("defines every supported provider exactly once", () => {
-  assert.deepEqual(AGENTS, ["claude", "codex", "gemini", "copilot"]);
+  assert.deepEqual(AGENTS, ["claude", "codex", "gemini", "copilot", "opencode"]);
   assert.equal(new Set(AGENTS).size, AGENTS.length);
   assert.deepEqual(
     PROVIDERS.map((provider) => provider.fallbackPriority),
-    [0, 1, 2, 3],
+    [0, 1, 2, 3, 4],
   );
 });
 

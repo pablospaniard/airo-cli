@@ -12,7 +12,7 @@ test("doctor distinguishes integration support from local command availability",
 
   try {
     const config = structuredClone(DEFAULT_CONFIG);
-    for (const agent of ["claude", "codex", "gemini", "copilot"] as const)
+    for (const agent of ["claude", "codex", "gemini", "copilot", "opencode"] as const)
       config[agent].command = path.join(dir, `missing-${agent}`);
     const configDir = path.join(home, ".config", "airo");
     fs.mkdirSync(configDir, { recursive: true });
@@ -28,8 +28,8 @@ test("doctor distinguishes integration support from local command availability",
 
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /Provider integration contract v1 ready/);
-    assert.equal(result.stdout.match(/integration ready/g)?.length, 4);
-    assert.equal(result.stdout.match(/not found in PATH/g)?.length, 4);
+    assert.equal(result.stdout.match(/integration ready/g)?.length, 5);
+    assert.equal(result.stdout.match(/not found in PATH/g)?.length, 5);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

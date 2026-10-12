@@ -236,6 +236,16 @@ pnpm run build:sync-worker
 
 See the [changelog](CHANGELOG.md) for release notes and the [routing platform roadmap](docs/routing-platform-roadmap.md) for completed foundations and future research work.
 
+### OpenCode
+
+OpenCode is supported as an AIRO execution provider. Select it with
+`airo --agent opencode "your prompt"`; model IDs are passed unchanged in
+OpenCode's namespaced form, such as `anthropic/claude-sonnet-4-5`. AIRO uses
+`opencode run --format json --model <provider/model> <prompt>` for headless
+runs and can discover installed models with `opencode models`. OpenCode's
+permission system is not a security sandbox, so AIRO does not claim process
+isolation for this provider and does not inspect OpenCode credentials.
+
 ## License
 
 MIT © Pavel Ivanov

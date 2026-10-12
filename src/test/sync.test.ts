@@ -56,6 +56,25 @@ test("sync settings exclude secrets and machine-specific configuration", () => {
   );
 });
 
+test("sync round-trips OpenCode models while preserving its local command", () => {
+  const local = structuredClone(DEFAULT_CONFIG);
+  local.opencode.command = "/private/bin/opencode";
+  const remote = structuredClone(DEFAULT_CONFIG);
+  remote.defaultAgent = "opencode";
+  remote.opencode.models.balanced.model = "openai/gpt-5";
+  remote.opencode.defaultModel = "openai/gpt-5";
+  const settings = safeSyncSettings(remote);
+  assert.deepEqual(
+    (settings.providers as { opencode: { models: unknown } }).opencode.models,
+    remote.opencode.models,
+  );
+  const applied = applySafeSettings(local, settings);
+  assert.equal(applied.defaultAgent, "opencode");
+  assert.deepEqual(applied.opencode.models, remote.opencode.models);
+  assert.equal(applied.opencode.defaultModel, "openai/gpt-5");
+  assert.equal(applied.opencode.command, "/private/bin/opencode");
+});
+
 test("applying pulled settings does not resurrect a field another device removed", () => {
   const local = structuredClone(DEFAULT_CONFIG);
   local.codex.defaultModel = "gpt-5.6-terra";

@@ -504,7 +504,7 @@ export function jevLearningHints(
   resolvedRepositoryId?: string,
 ): JevLearningHint {
   const empty: JevLearningHint = {
-    agentBoosts: { claude: 0, codex: 0, gemini: 0, copilot: 0 },
+    agentBoosts: { claude: 0, codex: 0, gemini: 0, copilot: 0, opencode: 0 },
     tierBoosts: { fast: 0, balanced: 0, deep: 0 },
     observations: 0,
     confidence: 0,

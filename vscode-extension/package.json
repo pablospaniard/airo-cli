@@ -12,6 +12,7 @@
     "codex",
     "copilot",
     "gemini",
+    "opencode",
     "orchestration"
   ],
   "homepage": "https://github.com/pablospaniard/airo-cli#readme",
@@ -110,7 +111,8 @@
             "claude",
             "codex",
             "gemini",
-            "copilot"
+            "copilot",
+            "opencode"
           ],
           "default": "auto",
           "description": "Provider to use for sidebar tasks."

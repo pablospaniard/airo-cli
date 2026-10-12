@@ -81,8 +81,8 @@ function answerBody(count: number, suggestion: "agree" | "correct" = "agree") {
       choice: suggestion === "agree" ? "codex" : "claude",
       probabilities:
         suggestion === "agree"
-          ? { claude: 0.03, codex: 0.91, gemini: 0.03, copilot: 0.03 }
-          : { claude: 0.91, codex: 0.03, gemini: 0.03, copilot: 0.03 },
+          ? { claude: 0.03, codex: 0.85, gemini: 0.03, copilot: 0.03, opencode: 0.06 }
+          : { claude: 0.85, codex: 0.03, gemini: 0.03, copilot: 0.03, opencode: 0.06 },
       confidence: 0.9,
     };
     answers[`tier_${index}`] = {
@@ -325,6 +325,7 @@ test("accepted Jev evidence requires samples and produces bounded local hints", 
       codex: 0,
       gemini: 0,
       copilot: 0,
+      opencode: 0,
     });
     disableJev(config);
     assert.equal(jevLearningHints("fix TypeScript parser bug", config).observations, 0);
