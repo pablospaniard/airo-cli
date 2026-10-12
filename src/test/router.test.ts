@@ -63,13 +63,13 @@ test("routes a small test implementation to Codex with a fast model", () => {
 
 test("generates and scores every registered provider and tier candidate", () => {
   const current = config();
-  const scores = { claude: 4, codex: 2, gemini: 1, copilot: 0 };
+  const scores = { claude: 4, codex: 2, gemini: 1, copilot: 0, opencode: 0 };
   const candidates = generateRouteCandidates(current, scores, 5);
 
-  assert.equal(candidates.length, 12);
+  assert.equal(candidates.length, 15);
   assert.deepEqual(
     new Set(candidates.map((candidate) => candidate.agent)),
-    new Set(["claude", "codex", "gemini", "copilot"]),
+    new Set(["claude", "codex", "gemini", "copilot", "opencode"]),
   );
   assert.equal(
     candidates.find((candidate) => candidate.agent === "claude" && candidate.modelTier === "deep")
@@ -479,7 +479,7 @@ test("combines aligned history and Jev evidence when selecting a tier", () => {
       ) as Record<T, number>,
       confidence: 1,
     });
-    const agents = ["claude", "codex", "gemini", "copilot"] as const;
+    const agents = ["claude", "codex", "gemini", "copilot", "opencode"] as const;
     const tiers = ["fast", "balanced", "deep"] as const;
     const records = (["deep", "fast"] as const).map((tier, index) => ({
       schemaVersion: 1,

@@ -333,6 +333,23 @@ function noContextInputs(): CatalogContextInputs {
   return { files: [], environment: [] };
 }
 
+function probeOpencode(command: string): Partial<ProviderCatalog> {
+  const probe = runProviderCommand(command, ["models"]);
+  if (!probe.result || probe.result.status !== 0) return { note: "opencode models probe failed" };
+  const models: CatalogModel[] = [];
+  const seen = new Set<string>();
+  for (const line of (probe.result.stdout || "").split(/\r?\n/)) {
+    const id = line.trim().replace(/^[-*]\s*/, "");
+    if (!/^[^/\s]+\/[^/\s]+$/.test(id) || seen.has(id)) continue;
+    seen.add(id);
+    if (seen.size > 500) break;
+    models.push({ id });
+  }
+  return models.length
+    ? { models, source: "cli", via: `${command} models` }
+    : { note: "no valid provider/model IDs discovered" };
+}
+
 function claudeGateway(): { base: string; token?: string } | undefined {
   const environment = loginShellEnvironment();
   const base = environment.ANTHROPIC_BASE_URL?.trim();
@@ -368,6 +385,7 @@ export const PROVIDER_CATALOG_ADAPTERS: Record<Agent, ProviderCatalogAdapter> = 
   },
   gemini: { probeLocal: () => ({}), contextInputs: noContextInputs },
   copilot: { probeLocal: () => ({}), contextInputs: noContextInputs },
+  opencode: { probeLocal: probeOpencode, contextInputs: noContextInputs },
 };
 
 export function providerCatalogAdapter(agent: Agent): ProviderCatalogAdapter {
@@ -602,14 +620,18 @@ function selectDetectedModel(
  */
 export function resolveDynamicModels(
   config: RouterConfig,
-  catalogs: Record<Agent, ProviderCatalog>,
+  catalogs: Partial<Record<Agent, ProviderCatalog>>,
 ): RouterConfig {
   if (config.modelRouting.mode === "manual") return config;
   const resolved = structuredClone(config);
   for (const agent of AGENTS) {
     for (const tier of ["fast", "balanced", "deep"] as const) {
       const fallback = DEFAULT_CONFIG[agent].models[tier];
-      const selected = selectDetectedModel(catalogs[agent], tier, fallback);
+      const selected = selectDetectedModel(
+        catalogs[agent] ?? ({ detectedModels: [], models: [] } as unknown as ProviderCatalog),
+        tier,
+        fallback,
+      );
       const effort = providerDefinition(agent).capabilities.effortControl
         ? selected
           ? tierEffort(tier, fallback.effort, selected)

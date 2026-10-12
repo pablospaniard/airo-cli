@@ -131,6 +131,7 @@ export const PROVIDER_ACCOUNT_ADAPTERS: Record<Agent, ProviderAccountAdapter> = 
   },
   gemini: unprobedAccountAdapter("gemini"),
   copilot: unprobedAccountAdapter("copilot"),
+  opencode: unprobedAccountAdapter("opencode"),
 };
 
 export function providerAccountAdapter(agent: Agent): ProviderAccountAdapter {
@@ -140,9 +141,12 @@ export function providerAccountAdapter(agent: Agent): ProviderAccountAdapter {
 export function detectDefaultModels(
   config: RouterConfig,
   cwd = process.cwd(),
-): Partial<Record<Agent, string>> {
+): Partial<Record<Agent, string | undefined>> {
   return Object.fromEntries(
-    PROVIDERS.map(({ id }) => [id, providerAccountAdapter(id).detectDefaultModel(config, cwd)]),
+    PROVIDERS.map(({ id }) => {
+      const model = providerAccountAdapter(id).detectDefaultModel(config, cwd);
+      return [id, model];
+    }),
   );
 }
 

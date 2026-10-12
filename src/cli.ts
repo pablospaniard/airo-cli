@@ -293,7 +293,7 @@ function parseArgs(argv: string[]) {
     } else taskParts.push(arg);
   }
   if (adaptive && single) throw new Error("Use either --adaptive or --single, not both");
-  if (!["auto", "claude", "codex", "gemini", "copilot"].includes(agent))
+  if (!["auto", "claude", "codex", "gemini", "copilot", "opencode"].includes(agent))
     throw new Error(`Invalid --agent: ${agent}`);
   return {
     agent,

@@ -24,12 +24,13 @@ export const ui = {
 export function brand(s = "airo"): string {
   return ui.bold(ui.cyan(s));
 }
-export function agentColor(agent: "claude" | "codex" | "gemini" | "copilot", s: string): string {
+export function agentColor(agent: string, s: string): string {
   if (agent === "claude") return ui.magenta(s);
   // Gemini uses Google's multicolor gradient; Google blue is the readable terminal accent.
   if (agent === "gemini") return ui.rgb(66, 133, 244, s);
   // GitHub's official Copilot Purple: #8534F3.
   if (agent === "copilot") return ui.rgb(133, 52, 243, s);
+  if (agent === "opencode") return ui.rgb(255, 120, 40, s);
   return ui.cyan(s);
 }
 export function tierColor(tier: string): string {

@@ -59,6 +59,12 @@ export const ROUTING_POLICY: RoutingPolicyArtifact = {
       deepComplexityBonus: 0,
       fastComplexityBonus: 1,
     },
+    opencode: {
+      categories: { implement: 2, debug: 2, research: 2, review: 1 },
+      highRiskBonus: 0,
+      deepComplexityBonus: 1,
+      fastComplexityBonus: 0,
+    },
   },
   tierSuitability: {
     exact: 2,

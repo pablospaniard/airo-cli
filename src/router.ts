@@ -71,7 +71,7 @@ function tierScore(tier: ModelTier, complexity: number): number {
 
 export function generateRouteCandidates(
   config: RouterConfig,
-  agentScores: Record<Agent, number>,
+  agentScores: Partial<Record<Agent, number>>,
   complexity: number,
 ): RouteCandidate[] {
   return AGENTS.flatMap((agent) =>
@@ -83,9 +83,9 @@ export function generateRouteCandidates(
         modelTier,
         model: profile.model,
         effort: effectiveEffort(agent, profile.effort ?? effortForTier(modelTier)),
-        providerScore: agentScores[agent],
+        providerScore: agentScores[agent] ?? 0,
         tierScore: suitability,
-        totalScore: agentScores[agent] + suitability,
+        totalScore: (agentScores[agent] ?? 0) + suitability,
       };
     }),
   );

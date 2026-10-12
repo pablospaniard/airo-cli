@@ -65,6 +65,17 @@ export const PROVIDERS = [
       structuredProgress: false,
     },
   },
+  {
+    id: "opencode",
+    displayName: "OpenCode",
+    fallbackPriority: 4,
+    capabilities: {
+      accountInspection: false,
+      effortControl: false,
+      modelDiscovery: true,
+      structuredProgress: true,
+    },
+  },
 ] as const satisfies readonly ProviderDefinition[];
 
 export const AGENTS: readonly Agent[] = PROVIDERS.map((provider) => provider.id);

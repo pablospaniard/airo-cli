@@ -170,6 +170,21 @@ function copilotInvocation(
   return { args, env: { ...process.env }, promptArgIndex: interactivePromptIndex };
 }
 
+function opencodeInvocation(
+  route: RouteResult,
+  prompt: string,
+  config: RouterConfig,
+  headless: boolean,
+  structuredProgress: boolean,
+  _elevated = false,
+): ProviderInvocation {
+  const args = [...(config.opencode.args ?? []), "run"];
+  if (structuredProgress && headless) args.push("--format", "json");
+  args.push("--model", route.model);
+  const promptArgIndex = args.push(prompt) - 1;
+  return { args, env: { ...process.env }, promptArgIndex };
+}
+
 function compactJson(value: unknown, max = 140): string {
   let s: string;
   try {
@@ -524,6 +539,40 @@ export function geminiProgress(event: any): ParsedProviderEvent {
   };
 }
 
+export function opencodeProgress(event: any): ParsedProviderEvent {
+  const messages: Array<{ category: string; text: string }> = [];
+  if (typeof event === "string") return { messages, finalOutput: event, candidateOutput: event };
+  if (!event || typeof event !== "object") return { messages };
+  const type = String(event.type ?? event.event ?? "").toLowerCase();
+  const text = event.text ?? event.content ?? event.message?.content ?? event.message;
+  if (type.includes("error") || event.error)
+    messages.push({
+      category: "error",
+      text: String(event.error?.message ?? event.error ?? text ?? "OpenCode error"),
+    });
+  else if (type.includes("tool") || type.includes("step"))
+    messages.push({ category: "tool", text: String(text ?? event.tool ?? type) });
+  else if (text) messages.push({ category: "message", text: String(text) });
+  const usage = event.usage ?? event.tokens;
+  return {
+    messages,
+    candidateOutput: text ? String(text) : undefined,
+    finalOutput:
+      type.includes("finish") || type.includes("complete") || type === "result"
+        ? String(text ?? event.output ?? "")
+        : undefined,
+    usage: usage
+      ? {
+          uncachedInputTokens: number(usage.input_tokens ?? usage.input),
+          cachedInputTokens: number(usage.cached_input_tokens ?? usage.cached),
+          cacheWriteInputTokens: number(usage.cache_write_input_tokens),
+          outputTokens: number(usage.output_tokens ?? usage.output),
+          reasoningOutputTokens: number(usage.reasoning_tokens),
+        }
+      : undefined,
+  };
+}
+
 export const PROVIDER_RUNTIME_ADAPTERS = {
   claude: {
     buildInvocation: claudeInvocation,
@@ -543,6 +592,11 @@ export const PROVIDER_RUNTIME_ADAPTERS = {
   copilot: {
     buildInvocation: copilotInvocation,
     parseProgress: genericProgress,
+    classifyFailure: classifyCommonProviderFailure,
+  },
+  opencode: {
+    buildInvocation: opencodeInvocation,
+    parseProgress: opencodeProgress,
     classifyFailure: classifyCommonProviderFailure,
   },
 } satisfies Record<Agent, ProviderRuntimeAdapter>;

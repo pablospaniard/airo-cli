@@ -18,6 +18,7 @@ test("explicit AIRO default-model overrides are deterministic", () => {
     codex: "gpt-default",
     gemini: "gemini-default",
     copilot: "copilot-default",
+    opencode: undefined,
   });
 });
 
@@ -62,6 +63,7 @@ test("detects layered provider defaults and authenticated accounts", () => {
       codex: "codex-model",
       gemini: undefined,
       copilot: undefined,
+      opencode: undefined,
     });
     const accounts = inspectAccounts(config, repo);
     assert.deepEqual(
@@ -70,7 +72,7 @@ test("detects layered provider defaults and authenticated accounts", () => {
     );
     assert.deepEqual(
       accounts.slice(2).map((account) => account.authenticated),
-      [undefined, undefined],
+      [undefined, undefined, undefined],
     );
     assert.match(accounts[2].status, /authentication not inspected|not found in PATH/);
     assert.equal(accounts[0].identity, "user@example.com");

@@ -64,6 +64,10 @@ export const PROVIDER_SUPPORT_EVIDENCE = {
     tests: ["src/test/providers.test.ts", "src/test/runner.test.ts"],
     documentation: ["README.md", "docs/routing-and-learning.md"],
   },
+  opencode: {
+    tests: ["src/test/providers.test.ts", "src/test/runner.test.ts"],
+    documentation: ["README.md", "docs/routing-and-learning.md"],
+  },
 } as const satisfies Record<Agent, ProviderSupportEvidence>;
 
 function check(id: ProviderSupportCheckId, ready: boolean, detail: string): ProviderSupportCheck {

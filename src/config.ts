@@ -50,6 +50,15 @@ export const DEFAULT_CONFIG: RouterConfig = {
       deep: { model: "gpt-5.3-codex", effort: "auto" },
     },
   },
+  opencode: {
+    command: "opencode",
+    args: [],
+    models: {
+      fast: { model: "openai/gpt-5-mini", effort: "auto" },
+      balanced: { model: "anthropic/claude-sonnet-4-5", effort: "auto" },
+      deep: { model: "anthropic/claude-opus-4-1", effort: "auto" },
+    },
+  },
   permissions: { mode: "prompt", networkAccess: true },
   history: {
     enabled: true,
@@ -73,7 +82,7 @@ export const DEFAULT_CONFIG: RouterConfig = {
 };
 
 const POLICIES = new Set<Policy>(["balanced", "claude-heavy", "codex-heavy"]);
-const AGENT_IDS = new Set<Agent>(["claude", "codex", "gemini", "copilot"]);
+const AGENT_IDS = new Set<Agent>(["claude", "codex", "gemini", "copilot", "opencode"]);
 const MODEL_TIERS = new Set<ModelTier>(["fast", "balanced", "deep"]);
 const EFFORTS = new Set<Effort>([
   "auto",
@@ -158,6 +167,7 @@ function mergeConfig(parsed: any, sourceFile?: string): RouterConfig {
     codex: mergeProvider(DEFAULT_CONFIG.codex, parsed.codex),
     gemini: mergeProvider(DEFAULT_CONFIG.gemini, parsed.gemini),
     copilot: mergeProvider(DEFAULT_CONFIG.copilot, parsed.copilot),
+    opencode: mergeProvider(DEFAULT_CONFIG.opencode, parsed.opencode),
     // Configurations written before model routing was introduced contain
     // deliberate model selections. Preserve those selections on upgrade.
     modelRouting: {
@@ -184,7 +194,7 @@ export function loadConfig(cwd = process.cwd()): { config: RouterConfig; path?: 
       // executable paths, raw CLI arguments, and privilege policy must come
       // from account-wide configuration (or the reviewed built-in defaults).
       const trusted = loadGlobalConfig().config;
-      for (const agent of ["claude", "codex", "gemini", "copilot"] as const) {
+      for (const agent of ["claude", "codex", "gemini", "copilot", "opencode"] as const) {
         config[agent].command = trusted[agent].command;
         config[agent].args = trusted[agent].args;
         config[agent].permissionMode = trusted[agent].permissionMode;
