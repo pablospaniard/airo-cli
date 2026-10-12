@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.5 - 2026-10-12
+
+- Show message timestamps in the sidebar and retain original times in restored chats.
+- Recognize OpenCode as the execution provider in live routes and saved conversations, including models hosted by Claude or Codex.
+- Add OpenCode route and activity colors and provider settings.
+- Include the latest parallel-chat and scrolling fixes.
+
 ## 1.0.4 - 2026-10-06
 
 - Improve automatic sidebar scrolling while streamed output and attachment previews change the layout.

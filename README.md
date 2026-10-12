@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/airo-ai-router"><img src="https://img.shields.io/npm/v/airo-ai-router?logo=npm&label=CLI" alt="AIRO CLI on npm"></a>
-  <a href="https://marketplace.visualstudio.com/items?itemName=pablospaniard.airo-vscode"><img src="https://img.shields.io/badge/VS%20Code%20Extension-1.0.4-007ACC" alt="AIRO 1.0.4 extension on the VS Code Marketplace"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=pablospaniard.airo-vscode"><img src="https://img.shields.io/badge/VS%20Code%20Extension-1.0.5-007ACC" alt="AIRO 1.0.5 extension on the VS Code Marketplace"></a>
   <a href="https://github.com/pablospaniard/airo-cli/actions/workflows/ci.yml"><img src="https://github.com/pablospaniard/airo-cli/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License"></a>
 </p>
@@ -241,7 +241,7 @@ See the [changelog](CHANGELOG.md) for release notes and the [routing platform ro
 OpenCode is supported as an AIRO execution provider. Select it with
 `airo --agent opencode "your prompt"`; model IDs are passed unchanged in
 OpenCode's namespaced form, such as `anthropic/claude-sonnet-4-5`. AIRO uses
-`opencode run --format json --model <provider/model> <prompt>` for headless
+`opencode run --format json --model <provider/model> -- <prompt>` for headless
 runs and can discover installed models with `opencode models`. OpenCode's
 permission system is not a security sandbox, so AIRO does not claim process
 isolation for this provider and does not inspect OpenCode credentials.

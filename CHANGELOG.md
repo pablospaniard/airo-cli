@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.4 - 2026-10-12
+
+### Added
+
+- Add OpenCode as an execution provider with model discovery, structured progress, routing, diagnostics, and interactive provider selection.
+- Show timestamps for messages in the VS Code chat and preserve them when restoring saved sessions.
+
+### Fixed
+
+- Keep prompts beginning with a hyphen from being parsed as OpenCode flags, and fail captured OpenCode runs that return no answer.
+- Accept nested OpenCode model IDs and ANSI-colored model lists; avoid noisy step events and duplicate usage accounting.
+- Preserve session context without repeating decision summaries.
+
 ## 1.0.3 - 2026-09-30
 
 ### Added

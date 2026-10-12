@@ -6,8 +6,8 @@ AIRO brings the local AIRO router into a stateful VS Code sidebar. It supports s
 
 - VS Code 1.106 or newer
 - Node.js 22 or newer
-- The `airo-ai-router` npm package (version 1.0.3 or newer) installed globally
-- At least one installed and signed-in provider CLI: Claude Code, Codex CLI, Gemini CLI, or GitHub Copilot CLI
+- The `airo-ai-router` npm package (version 1.0.4 or newer) installed globally
+- At least one installed and signed-in provider CLI: Claude Code, Codex CLI, Gemini CLI, GitHub Copilot CLI, or OpenCode
 
 ```bash
 npm install --global airo-ai-router
@@ -64,7 +64,7 @@ pnpm install
 pnpm run package:extension
 ```
 
-The resulting `airo-vscode-1.0.4.vsix` can be installed with **Extensions: Install from VSIX**.
+The resulting `airo-vscode-1.0.5.vsix` can be installed with **Extensions: Install from VSIX**.
 
 For a local release check, verify the installed extension from **Extensions: Show
 Running Extensions** or reload the VS Code window after installation. The sidebar
