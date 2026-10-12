@@ -22,6 +22,7 @@ import {
   type SyncDeletion,
 } from "./sync-deletions.js";
 import type { RouterConfig } from "./types.js";
+import { AGENTS } from "./providers.js";
 import {
   createAccountKey,
   decryptSyncPayload,
@@ -377,7 +378,7 @@ function digest(value: unknown): string {
 
 export function safeSyncSettings(config: RouterConfig): Record<string, unknown> {
   const providerModels = Object.fromEntries(
-    (["claude", "codex", "gemini", "copilot", "opencode"] as const).map((provider) => [
+    AGENTS.map((provider) => [
       provider,
       { models: config[provider].models, defaultModel: config[provider].defaultModel },
     ]),
@@ -409,8 +410,20 @@ export function applySafeSettings(
     | undefined;
   const history = (value.history ?? {}) as Partial<RouterConfig["history"]>;
   const orchestration = (value.orchestration ?? {}) as Partial<RouterConfig["orchestration"]>;
+  const syncedProviders = Object.fromEntries(
+    AGENTS.map((agent) => [
+      agent,
+      {
+        ...config[agent],
+        ...providers?.[agent],
+        models: providers?.[agent]?.models ?? DEFAULT_CONFIG[agent].models,
+        defaultModel: providers?.[agent]?.defaultModel,
+      },
+    ]),
+  ) as Pick<RouterConfig, (typeof AGENTS)[number]>;
   return {
     ...config,
+    ...syncedProviders,
     policy: validPolicy(value.policy) ? value.policy : DEFAULT_CONFIG.policy,
     defaultAgent: validAgent(value.defaultAgent) ? value.defaultAgent : DEFAULT_CONFIG.defaultAgent,
     modelRouting: ["dynamic", "manual"].includes(
@@ -434,36 +447,6 @@ export function applySafeSettings(
     },
     orchestration: { ...DEFAULT_CONFIG.orchestration, ...orchestration },
     rules: Array.isArray(value.rules) ? (value.rules as RouterConfig["rules"]) : config.rules,
-    claude: {
-      ...config.claude,
-      ...providers?.claude,
-      models: providers?.claude?.models ?? DEFAULT_CONFIG.claude.models,
-      defaultModel: providers?.claude?.defaultModel,
-    },
-    codex: {
-      ...config.codex,
-      ...providers?.codex,
-      models: providers?.codex?.models ?? DEFAULT_CONFIG.codex.models,
-      defaultModel: providers?.codex?.defaultModel,
-    },
-    gemini: {
-      ...config.gemini,
-      ...providers?.gemini,
-      models: providers?.gemini?.models ?? DEFAULT_CONFIG.gemini.models,
-      defaultModel: providers?.gemini?.defaultModel,
-    },
-    copilot: {
-      ...config.copilot,
-      ...providers?.copilot,
-      models: providers?.copilot?.models ?? DEFAULT_CONFIG.copilot.models,
-      defaultModel: providers?.copilot?.defaultModel,
-    },
-    opencode: {
-      ...config.opencode,
-      ...providers?.opencode,
-      models: providers?.opencode?.models ?? DEFAULT_CONFIG.opencode.models,
-      defaultModel: providers?.opencode?.defaultModel,
-    },
   };
 }
 

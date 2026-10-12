@@ -182,7 +182,7 @@ function opencodeInvocation(
   if (structuredProgress && headless) args.push("--format", "json");
   if (elevated || config.permissions.mode === "fullAccess") args.push("--auto");
   args.push("--model", route.model);
-  const promptArgIndex = args.push(prompt) - 1;
+  const promptArgIndex = args.push("--", prompt) - 1;
   return { args, env: { ...process.env }, promptArgIndex };
 }
 
@@ -552,10 +552,11 @@ export function opencodeProgress(event: any): ParsedProviderEvent {
       category: "error",
       text: String(event.error?.message ?? event.error ?? text ?? "OpenCode error"),
     });
-  else if (type.includes("tool") || type.includes("step"))
+  else if (type.includes("tool"))
     messages.push({ category: "tool", text: String(text ?? part?.tool ?? event.tool ?? type) });
   else if (text) messages.push({ category: "message", text: String(text) });
-  const usage = part?.tokens ?? event.usage ?? event.tokens;
+  // OpenCode reports per-step usage on step_finish. Other events may repeat it.
+  const usage = type === "step_finish" ? (part?.tokens ?? event.usage ?? event.tokens) : undefined;
   const cached = number(usage?.cache?.read ?? usage?.cached_input_tokens ?? usage?.cached);
   const cacheWrite = number(usage?.cache?.write ?? usage?.cache_write_input_tokens);
   return {
@@ -756,14 +757,22 @@ export async function runAgent(
   });
 
   if (structuredProgress && stdoutBuffer.trim()) handleStructuredLine(stdoutBuffer);
+  const missingOpenCodeOutput =
+    route.agent === "opencode" &&
+    exitCode === 0 &&
+    !(finalOutput || candidateOutput || fallbackOutput).trim();
+  const effectiveExitCode = missingOpenCodeOutput ? 1 : exitCode;
   const output =
     `${(finalOutput || candidateOutput || fallbackOutput).trim()}${exitCode !== 0 && stderrOutput.trim() ? `\n${stderrOutput.trim()}` : ""}`.trim();
-  if (!question) question = extractQuestion(output);
+  const resultOutput = missingOpenCodeOutput
+    ? `OpenCode exited successfully without returning any text.${stderrOutput.trim() ? `\n${stderrOutput.trim()}` : ""}`
+    : output;
+  if (!question) question = extractQuestion(resultOutput);
   if (config.permissions.mode === "prompt" && !options.elevated) {
     // Prefer the normalized permission prompt even when the provider phrased
     // the denial as a question. Clients can then render Approve/Decline rather
     // than a generic Reply action, and approval triggers the elevated retry.
-    question = permissionFailureQuestion(output) ?? question;
+    question = permissionFailureQuestion(resultOutput) ?? question;
   }
-  return { exitCode, output, question, usage };
+  return { exitCode: effectiveExitCode, output: resultOutput, question, usage };
 }

@@ -405,9 +405,14 @@ test("OpenCode uses JSON output and honors approved and full-access runs", () =>
     "json",
     "--model",
     route.model,
+    "--",
     "review changes",
   ]);
-  assert.equal(regular.promptArgIndex, 5);
+  assert.equal(regular.promptArgIndex, 6);
+  assert.deepEqual(buildProviderInvocation(route, "--help", config, options).args.slice(-2), [
+    "--",
+    "--help",
+  ]);
   assert.ok(
     buildProviderInvocation(route, "task", config, { ...options, elevated: true }).args.includes(
       "--auto",
@@ -420,7 +425,7 @@ test("OpenCode uses JSON output and honors approved and full-access runs", () =>
 test("OpenCode parses nested text, usage, tools, and errors", () => {
   assert.deepEqual(opencodeProgress(null), { messages: [] });
   assert.deepEqual(opencodeProgress({ type: "step_start", part: { type: "step-start" } }), {
-    messages: [{ category: "tool", text: "step_start" }],
+    messages: [],
     candidateOutput: undefined,
     appendCandidate: false,
     finalOutput: undefined,
@@ -446,6 +451,10 @@ test("OpenCode parses nested text, usage, tools, and errors", () => {
     },
   });
   assert.equal(finish.finalOutput, undefined);
+  assert.equal(
+    opencodeProgress({ type: "text", part: { text: "Hello", tokens: { input: 100 } } }).usage,
+    undefined,
+  );
   assert.deepEqual(finish.usage, {
     uncachedInputTokens: 30,
     cachedInputTokens: 60,
@@ -492,6 +501,41 @@ process.stdout.write(JSON.stringify({type:"step_finish",part:{type:"step-finish"
     assert.equal(run.output, "Final result.");
     assert.equal(run.usage?.uncachedInputTokens, 8);
     assert.equal(run.usage?.cachedInputTokens, 4);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("OpenCode cannot report a successful run with no answer", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-runner-opencode-empty-"));
+  const command = path.join(dir, "mock-opencode");
+  fs.writeFileSync(
+    command,
+    '#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify({type:"step_start"}) + "\\n");\n',
+  );
+  fs.chmodSync(command, 0o755);
+  try {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.opencode.command = command;
+    const route = routeTask("review changes", config);
+    route.agent = "opencode";
+    const logger = new RunLogger({ runId: "opencode-empty", level: "compact", persist: false });
+    const run = await runAgent(route, "task", config, {
+      headless: true,
+      capture: true,
+      logger,
+      logMeta: {
+        phaseIndex: 1,
+        phaseTotal: 1,
+        phaseKind: "single",
+        agent: "opencode",
+        model: route.model,
+        effort: route.effort,
+        tier: route.modelTier,
+      },
+    });
+    assert.equal(run.exitCode, 1);
+    assert.match(run.output, /without returning any text/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

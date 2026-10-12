@@ -335,12 +335,19 @@ function noContextInputs(): CatalogContextInputs {
 
 function probeOpencode(command: string): Partial<ProviderCatalog> {
   const probe = runProviderCommand(command, ["models"]);
-  if (!probe.result || probe.result.status !== 0) return { note: "opencode models probe failed" };
+  if (!probe.result || probe.result.status !== 0)
+    return {
+      note: `opencode models probe failed${probe.result?.stderr?.trim() ? `: ${probe.result.stderr.trim().slice(0, 240)}` : ""}`,
+    };
   const models: CatalogModel[] = [];
   const seen = new Set<string>();
+  const ansiColor = new RegExp(String.fromCharCode(27) + "\\[[0-9;]*m", "g");
   for (const line of (probe.result.stdout || "").split(/\r?\n/)) {
-    const id = line.trim().replace(/^[-*]\s*/, "");
-    if (!/^[^/\s]+\/[^/\s]+$/.test(id) || seen.has(id)) continue;
+    const id = line
+      .replace(ansiColor, "")
+      .trim()
+      .replace(/^[-*]\s*/, "");
+    if (!/^[^/\s]+\/(?:[^/\s]+\/)*[^/\s]+$/.test(id) || seen.has(id)) continue;
     seen.add(id);
     if (seen.size > 500) break;
     models.push({ id });
@@ -620,18 +627,14 @@ function selectDetectedModel(
  */
 export function resolveDynamicModels(
   config: RouterConfig,
-  catalogs: Partial<Record<Agent, ProviderCatalog>>,
+  catalogs: Record<Agent, ProviderCatalog>,
 ): RouterConfig {
   if (config.modelRouting.mode === "manual") return config;
   const resolved = structuredClone(config);
   for (const agent of AGENTS) {
     for (const tier of ["fast", "balanced", "deep"] as const) {
       const fallback = DEFAULT_CONFIG[agent].models[tier];
-      const selected = selectDetectedModel(
-        catalogs[agent] ?? ({ detectedModels: [], models: [] } as unknown as ProviderCatalog),
-        tier,
-        fallback,
-      );
+      const selected = selectDetectedModel(catalogs[agent], tier, fallback);
       const effort = providerDefinition(agent).capabilities.effortControl
         ? selected
           ? tierEffort(tier, fallback.effort, selected)

@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   cachedCatalog,
   candidateModels,
+  providerCatalogAdapter,
   resolveDynamicModels,
   type CatalogModel,
   type ProviderCatalog,
@@ -28,6 +29,25 @@ function catalog(
     contextFingerprint: "context",
   };
 }
+
+test("OpenCode model probe accepts nested IDs and ANSI-colored output", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-opencode-models-"));
+  const command = path.join(dir, "mock-opencode");
+  fs.writeFileSync(
+    command,
+    '#!/usr/bin/env node\nprocess.stdout.write("\\u001b[32mopenrouter/anthropic/claude-sonnet\\u001b[0m\\nopenai/gpt-5\\n");\n',
+  );
+  fs.chmodSync(command, 0o755);
+  try {
+    const probe = providerCatalogAdapter("opencode").probeLocal(command, dir);
+    assert.deepEqual(
+      probe.models?.map((model) => model.id),
+      ["openrouter/anthropic/claude-sonnet", "openai/gpt-5"],
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("catalog reads tolerate invalid cache data and retain current configured models", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "airo-catalog-"));
@@ -126,6 +146,7 @@ test("maps detected provider models onto tiers without changing the saved config
     ]),
     gemini: catalog("gemini", [{ id: "gemini-3-pro" }, { id: "gemini-3-flash" }]),
     copilot: catalog("copilot", []),
+    opencode: catalog("opencode", []),
   };
 
   const resolved = resolveDynamicModels(config, catalogs);
@@ -146,6 +167,7 @@ test("does not treat one configured provider model as a complete catalog", () =>
     codex: catalog("codex", []),
     gemini: catalog("gemini", []),
     copilot: catalog("copilot", []),
+    opencode: catalog("opencode", []),
   };
 
   const resolved = resolveDynamicModels(config, catalogs);
@@ -165,6 +187,7 @@ test("maps a complete file-based provider catalog positionally", () => {
     ),
     gemini: catalog("gemini", []),
     copilot: catalog("copilot", []),
+    opencode: catalog("opencode", []),
   };
 
   const resolved = resolveDynamicModels(config, catalogs);
@@ -178,7 +201,7 @@ test("manual model routing preserves configured tier mappings", () => {
   config.modelRouting.mode = "manual";
   config.codex.models.deep.model = "pinned-model";
   const catalogs = Object.fromEntries(
-    (["claude", "codex", "gemini", "copilot"] as Agent[]).map((agent) => [
+    (["claude", "codex", "gemini", "copilot", "opencode"] as Agent[]).map((agent) => [
       agent,
       catalog(agent, [{ id: `${agent}-new-model` }]),
     ]),

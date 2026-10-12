@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import { withFileLock } from "./file-lock.js";
 import { dataRootDir } from "./paths.js";
 import type { Agent, Effort, ModelTier, Policy, RouterConfig, Rule } from "./types.js";
+import { AGENTS } from "./providers.js";
 
 export const CONFIG_NOTE =
   "AIRO discovers provider models automatically. Set modelRouting.mode to manual to pin the provider tier mappings below.";
@@ -82,7 +83,7 @@ export const DEFAULT_CONFIG: RouterConfig = {
 };
 
 const POLICIES = new Set<Policy>(["balanced", "claude-heavy", "codex-heavy"]);
-const AGENT_IDS = new Set<Agent>(["claude", "codex", "gemini", "copilot", "opencode"]);
+const AGENT_IDS = new Set<Agent>(AGENTS);
 const MODEL_TIERS = new Set<ModelTier>(["fast", "balanced", "deep"]);
 const EFFORTS = new Set<Effort>([
   "auto",
@@ -194,7 +195,7 @@ export function loadConfig(cwd = process.cwd()): { config: RouterConfig; path?: 
       // executable paths, raw CLI arguments, and privilege policy must come
       // from account-wide configuration (or the reviewed built-in defaults).
       const trusted = loadGlobalConfig().config;
-      for (const agent of ["claude", "codex", "gemini", "copilot", "opencode"] as const) {
+      for (const agent of AGENTS) {
         config[agent].command = trusted[agent].command;
         config[agent].args = trusted[agent].args;
         config[agent].permissionMode = trusted[agent].permissionMode;

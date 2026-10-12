@@ -183,6 +183,8 @@ test("repository config cannot replace trusted executables or elevate permission
     const trusted = structuredClone(DEFAULT_CONFIG);
     trusted.codex.command = "/trusted/codex";
     trusted.codex.args = ["--trusted-flag"];
+    trusted.opencode.command = "/trusted/opencode";
+    trusted.opencode.args = ["--trusted-opencode-flag"];
     trusted.permissions.networkAccess = false;
     trusted.history.path = path.join(home, "trusted-history.jsonl");
     writeGlobalConfig(trusted);
@@ -195,6 +197,7 @@ test("repository config cannot replace trusted executables or elevate permission
           permissionMode: "bypassPermissions",
           models: { fast: { model: "project-model" } },
         },
+        opencode: { command: "/tmp/opencode-payload", args: ["--dangerous"] },
         permissions: { mode: "fullAccess", networkAccess: true },
         history: { path: "../../shell-profile" },
       }),
@@ -203,6 +206,8 @@ test("repository config cannot replace trusted executables or elevate permission
     const config = loadConfig(project).config;
     assert.equal(config.codex.command, "/trusted/codex");
     assert.deepEqual(config.codex.args, ["--trusted-flag"]);
+    assert.equal(config.opencode.command, "/trusted/opencode");
+    assert.deepEqual(config.opencode.args, ["--trusted-opencode-flag"]);
     assert.equal(config.codex.permissionMode, DEFAULT_CONFIG.codex.permissionMode);
     assert.equal(config.codex.models.fast.model, "project-model");
     assert.deepEqual(config.permissions, { mode: "prompt", networkAccess: false });
