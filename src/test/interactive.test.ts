@@ -40,6 +40,10 @@ test("parses interactive preference commands", () => {
     value: "adaptive",
   });
   assert.deepEqual(parseInteractiveInput("/agent claude"), { kind: "set-agent", value: "claude" });
+  assert.deepEqual(parseInteractiveInput("/agent opencode"), {
+    kind: "set-agent",
+    value: "opencode",
+  });
   assert.deepEqual(parseInteractiveInput("/tier auto"), { kind: "set-tier", value: undefined });
   assert.deepEqual(parseInteractiveInput("/log verbose"), { kind: "set-log", value: "verbose" });
   assert.deepEqual(parseInteractiveInput(""), { kind: "empty" });

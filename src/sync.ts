@@ -377,7 +377,7 @@ function digest(value: unknown): string {
 
 export function safeSyncSettings(config: RouterConfig): Record<string, unknown> {
   const providerModels = Object.fromEntries(
-    (["claude", "codex", "gemini", "copilot"] as const).map((provider) => [
+    (["claude", "codex", "gemini", "copilot", "opencode"] as const).map((provider) => [
       provider,
       { models: config[provider].models, defaultModel: config[provider].defaultModel },
     ]),
@@ -457,6 +457,12 @@ export function applySafeSettings(
       ...providers?.copilot,
       models: providers?.copilot?.models ?? DEFAULT_CONFIG.copilot.models,
       defaultModel: providers?.copilot?.defaultModel,
+    },
+    opencode: {
+      ...config.opencode,
+      ...providers?.opencode,
+      models: providers?.opencode?.models ?? DEFAULT_CONFIG.opencode.models,
+      defaultModel: providers?.opencode?.defaultModel,
     },
   };
 }

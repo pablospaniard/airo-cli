@@ -229,7 +229,8 @@ export function parseInteractiveInput(input: string): InteractiveAction {
       first === "claude" ||
       first === "codex" ||
       first === "gemini" ||
-      first === "copilot"
+      first === "copilot" ||
+      first === "opencode"
     )
       return { kind: "set-agent", value: first };
     return { kind: "error", message: "Usage: /agent auto|claude|codex|gemini|copilot|opencode" };

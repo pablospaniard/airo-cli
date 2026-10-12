@@ -69,6 +69,7 @@ type SessionTranscript = {
   sessionId: string;
   originalTask: string;
   turns: Array<{
+    timestamp: string;
     userPrompt: string;
     routeSummary: string;
     finalOutput: string;

@@ -8,6 +8,7 @@ import { RunLogger } from "../logging.js";
 import { routeTask } from "../router.js";
 import {
   addTokenUsage,
+  buildProviderInvocation,
   classifyProviderFailure,
   claudeProgress,
   codexProgress,
@@ -20,6 +21,7 @@ import {
   isProviderAuthError,
   isProviderUnavailableError,
   isUsageLimitError,
+  opencodeProgress,
   permissionFailureQuestion,
   progressFor,
   runAgent,
@@ -388,6 +390,111 @@ test("parses Gemini stream messages, tools, errors, and token stats", () => {
     progressFor("gemini", { type: "message", role: "assistant", content: "done" }).candidateOutput,
     "done",
   );
+});
+
+test("OpenCode uses JSON output and honors approved and full-access runs", () => {
+  const config = structuredClone(DEFAULT_CONFIG);
+  const route = routeTask("review changes", config);
+  route.agent = "opencode";
+  route.model = "anthropic/claude-sonnet-4-5";
+  const options = { headless: true, structuredProgress: true };
+  const regular = buildProviderInvocation(route, "review changes", config, options);
+  assert.deepEqual(regular.args, [
+    "run",
+    "--format",
+    "json",
+    "--model",
+    route.model,
+    "review changes",
+  ]);
+  assert.equal(regular.promptArgIndex, 5);
+  assert.ok(
+    buildProviderInvocation(route, "task", config, { ...options, elevated: true }).args.includes(
+      "--auto",
+    ),
+  );
+  config.permissions.mode = "fullAccess";
+  assert.ok(buildProviderInvocation(route, "task", config, options).args.includes("--auto"));
+});
+
+test("OpenCode parses nested text, usage, tools, and errors", () => {
+  assert.deepEqual(opencodeProgress(null), { messages: [] });
+  assert.deepEqual(opencodeProgress({ type: "step_start", part: { type: "step-start" } }), {
+    messages: [{ category: "tool", text: "step_start" }],
+    candidateOutput: undefined,
+    appendCandidate: false,
+    finalOutput: undefined,
+    usage: undefined,
+  });
+  const text = opencodeProgress({ type: "text", part: { type: "text", text: "Hello" } });
+  assert.equal(text.candidateOutput, "Hello");
+  assert.equal(text.appendCandidate, true);
+  assert.equal(text.messages[0]?.text, "Hello");
+  assert.equal(
+    opencodeProgress({ type: "tool_use", part: { tool: "bash" } }).messages[0]?.text,
+    "bash",
+  );
+  assert.equal(
+    opencodeProgress({ type: "error", error: { message: "denied" } }).messages[0]?.text,
+    "denied",
+  );
+  const finish = opencodeProgress({
+    type: "step_finish",
+    part: {
+      type: "step-finish",
+      tokens: { input: 100, output: 8, reasoning: 2, cache: { read: 60, write: 10 } },
+    },
+  });
+  assert.equal(finish.finalOutput, undefined);
+  assert.deepEqual(finish.usage, {
+    uncachedInputTokens: 30,
+    cachedInputTokens: 60,
+    cacheWriteInputTokens: 10,
+    outputTokens: 8,
+    reasoningOutputTokens: 2,
+  });
+});
+
+test("OpenCode structured runs assemble text events and account for tokens", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "airo-runner-opencode-"));
+  const command = path.join(dir, "mock-opencode");
+  fs.writeFileSync(
+    command,
+    `#!/usr/bin/env node
+for (const part of [{type:"text",text:"Final "},{type:"text",text:"result."}]) {
+  process.stdout.write(JSON.stringify({type:"text",part}) + "\\n");
+}
+process.stdout.write(JSON.stringify({type:"step_finish",part:{type:"step-finish",tokens:{input:12,output:3,cache:{read:4,write:0}}}}) + "\\n");
+`,
+  );
+  fs.chmodSync(command, 0o755);
+  try {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.opencode.command = command;
+    const route = routeTask("review changes", config);
+    route.agent = "opencode";
+    route.model = config.opencode.models.balanced.model;
+    const logger = new RunLogger({ runId: "opencode", level: "compact", persist: false });
+    const run = await runAgent(route, "task", config, {
+      headless: true,
+      capture: true,
+      logger,
+      logMeta: {
+        phaseIndex: 1,
+        phaseTotal: 1,
+        phaseKind: "single",
+        agent: "opencode",
+        model: route.model,
+        effort: route.effort,
+        tier: route.modelTier,
+      },
+    });
+    assert.equal(run.output, "Final result.");
+    assert.equal(run.usage?.uncachedInputTokens, 8);
+    assert.equal(run.usage?.cachedInputTokens, 4);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("returns the complete Gemini streamed answer and usage", async () => {
